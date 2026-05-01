@@ -1,0 +1,174 @@
+"""Coordinates many ProxyState instances behind one HTTP surface.
+
+The manager is what `app.py` actually talks to. It owns a per-name registry of
+:class:`localmcp.proxy.ProxyState` objects, tracks which one is the primary
+(mirrored at ``/mcp`` instead of just ``/<name>/mcp``), and aggregates log
+subscriptions across all servers.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from localmcp.config import ServerSpec, parse_config
+from localmcp.proxy import ProxyState
+
+
+class ProxyManager:
+    """Lifecycle owner for many ProxyStates plus a primary pointer."""
+
+    def __init__(self) -> None:
+        self.servers: dict[str, ProxyState] = {}
+        self._specs: dict[str, ServerSpec] = {}
+        self._primary: str | None = None
+        self._log_subscribers: list[asyncio.Queue[str]] = []
+        self._log_pumps: dict[str, asyncio.Task] = {}
+
+    @property
+    def primary(self) -> str | None:
+        return self._primary
+
+    def primary_state(self) -> ProxyState | None:
+        if self._primary is None:
+            return None
+        return self.servers.get(self._primary)
+
+    def get(self, name: str) -> ProxyState | None:
+        return self.servers.get(name)
+
+    def names(self) -> list[str]:
+        return list(self.servers.keys())
+
+    async def start_all(self, raw_config: Any) -> dict[str, Any]:
+        """Replace the current set of servers with whatever ``raw_config`` defines.
+
+        Stops anything currently running, parses the config, then concurrently
+        starts each server. Returns a per-server result map plus the primary.
+        """
+        await self.stop_all()
+
+        specs, primary = parse_config(raw_config)
+        self._specs = {s.name: s for s in specs}
+        self._primary = primary
+
+        results: dict[str, Any] = {}
+        coros = []
+        for spec in specs:
+            state = ProxyState(name=spec.name)
+            self.servers[spec.name] = state
+            self._attach_log_pump(state)
+            coros.append(self._start_one_spec(state, spec))
+
+        outcomes = await asyncio.gather(*coros, return_exceptions=True)
+        for spec, outcome in zip(specs, outcomes):
+            if isinstance(outcome, BaseException):
+                results[spec.name] = {"ok": False, "error": str(outcome)}
+            else:
+                results[spec.name] = {"ok": True}
+
+        return {
+            "primary": self._primary,
+            "servers": results,
+        }
+
+    async def stop_all(self) -> None:
+        if not self.servers:
+            return
+        await asyncio.gather(
+            *(s.stop() for s in self.servers.values()),
+            return_exceptions=True,
+        )
+        for task in list(self._log_pumps.values()):
+            task.cancel()
+        self._log_pumps.clear()
+        self.servers.clear()
+        self._specs.clear()
+        self._primary = None
+
+    async def start_one(self, name: str) -> None:
+        spec = self._specs.get(name)
+        if spec is None:
+            raise KeyError(f"No server named '{name}'")
+        state = self.servers.get(name)
+        if state is None:
+            state = ProxyState(name=name)
+            self.servers[name] = state
+            self._attach_log_pump(state)
+        if state.running:
+            raise RuntimeError(f"Server '{name}' is already running")
+        await self._start_one_spec(state, spec)
+
+    async def stop_one(self, name: str) -> None:
+        state = self.servers.get(name)
+        if state is None:
+            raise KeyError(f"No server named '{name}'")
+        await state.stop()
+
+    def status(self) -> dict[str, Any]:
+        servers = []
+        for name, state in self.servers.items():
+            spec = self._specs.get(name)
+            entry: dict[str, Any] = {
+                "name": name,
+                "running": state.running,
+                "error": state.error,
+                "primary": name == self._primary,
+            }
+            if spec is not None:
+                entry["transport"] = spec.transport
+                entry["spec"] = spec.to_status()
+            elif state.backend_info:
+                entry["transport"] = state.backend_info.get("transport")
+                entry["spec"] = dict(state.backend_info)
+            servers.append(entry)
+        return {
+            "primary": self._primary,
+            "servers": servers,
+            "running": any(s.running for s in self.servers.values()),
+        }
+
+    def subscribe_logs(self) -> asyncio.Queue[str]:
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=512)
+        self._log_subscribers.append(q)
+        return q
+
+    def unsubscribe_logs(self, q: asyncio.Queue[str]) -> None:
+        try:
+            self._log_subscribers.remove(q)
+        except ValueError:
+            pass
+
+    def _broadcast(self, line: str) -> None:
+        for q in list(self._log_subscribers):
+            try:
+                q.put_nowait(line)
+            except asyncio.QueueFull:
+                pass
+
+    def _attach_log_pump(self, state: ProxyState) -> None:
+        """Forward a child state's logs into the manager's subscriber set."""
+        source = state.subscribe_logs()
+
+        async def pump() -> None:
+            try:
+                while True:
+                    line = await source.get()
+                    self._broadcast(line)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                state.unsubscribe_logs(source)
+
+        task = asyncio.create_task(pump())
+        self._log_pumps[state.name] = task
+
+    async def _start_one_spec(self, state: ProxyState, spec: ServerSpec) -> None:
+        await state.start(
+            transport=spec.transport,
+            command=spec.command,
+            args=spec.args if spec.transport == "stdio" else None,
+            url=spec.url,
+            env=spec.env,
+            cwd=spec.cwd,
+            headers=spec.headers,
+        )

@@ -59,24 +59,26 @@ def make_mock_session() -> AsyncMock:
 
 
 @asynccontextmanager
-async def fake_stdio_client(params):
+async def fake_stdio_client(params, **kwargs):
     read = MagicMock()
     write = MagicMock()
     yield read, write
 
 
 @asynccontextmanager
-async def fake_sse_client(url):
+async def fake_sse_client(url, *args, **kwargs):
     read = MagicMock()
     write = MagicMock()
     yield read, write
 
 
 @asynccontextmanager
-async def fake_http_client(url):
+async def fake_http_client(url, *args, **kwargs):
+    """Mirrors streamablehttp_client which yields (read, write, get_session_id)."""
     read = MagicMock()
     write = MagicMock()
-    yield read, write
+    get_session_id = MagicMock()
+    yield read, write, get_session_id
 
 
 @asynccontextmanager

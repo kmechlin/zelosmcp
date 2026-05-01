@@ -14,6 +14,7 @@ HTML_TEMPLATE = """\
     --mid: #757575;
     --accent: #FF6600;
     --error: #D13B3B;
+    --success: #2BA44E;
     --font: "Helvetica Neue", Helvetica, Arial, sans-serif;
     --mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
   }
@@ -34,7 +35,7 @@ HTML_TEMPLATE = """\
   }
 
   .container {
-    max-width: 640px;
+    max-width: 720px;
     margin: 0 auto;
     padding: 48px 24px;
   }
@@ -44,7 +45,7 @@ HTML_TEMPLATE = """\
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 40px;
+    margin-bottom: 24px;
   }
 
   .wordmark {
@@ -53,6 +54,21 @@ HTML_TEMPLATE = """\
     letter-spacing: -0.02em;
     color: var(--black);
   }
+
+  .header-spacer { flex: 1; }
+
+  .header a.docs-link {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .header a.docs-link:hover { color: var(--black); border-color: var(--black); }
 
   .badge {
     font-size: 11px;
@@ -119,7 +135,7 @@ HTML_TEMPLATE = """\
   /* ── Textarea ── */
   .config-textarea {
     width: 100%;
-    min-height: 180px;
+    min-height: 240px;
     background: var(--white);
     border: 2px solid var(--border);
     border-radius: 12px;
@@ -189,6 +205,62 @@ HTML_TEMPLATE = """\
     border-color: var(--border);
     cursor: not-allowed;
   }
+
+  .btn-mini {
+    padding: 6px 14px;
+    font-size: 11px;
+    width: auto;
+    border-radius: 999px;
+  }
+
+  /* ── Server list ── */
+  .server-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .server-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--white);
+    border-radius: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+  }
+
+  .server-name {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--black);
+  }
+
+  .server-meta {
+    font-size: 12px;
+    color: var(--mid);
+    font-family: var(--mono);
+  }
+
+  .server-row .grow { flex: 1; }
+
+  .pill {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+
+  .pill.transport { background: var(--surface); color: var(--mid); }
+  .pill.primary { background: var(--accent); color: var(--white); }
+  .pill.state-running { background: var(--success); color: var(--white); }
+  .pill.state-error { background: var(--error); color: var(--white); }
+  .pill.state-stopped { background: var(--border); color: var(--mid); }
 
   /* ── Log Viewer ── */
   .log-viewer {
@@ -275,9 +347,11 @@ HTML_TEMPLATE = """\
   <div class="header">
     <span class="wordmark">LOCALMCP</span>
     <span class="badge stopped" id="badge">STOPPED</span>
+    <span class="header-spacer"></span>
+    <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
 
-  <p class="intro">Paste the <code>mcp.json</code> configuration from your MCP server's documentation below, then click <strong>Start</strong> to proxy it on <code>localhost:8000/mcp</code>.</p>
+  <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code>; set <code>primaryMCP</code> to also mirror one of them at <code>localhost:8000/mcp</code>.</p>
 
   <!-- Config -->
   <div class="section">
@@ -288,6 +362,7 @@ HTML_TEMPLATE = """\
         id="config-input"
         spellcheck="false"
       >{
+  "primaryMCP": "code-index",
   "mcpServers": {
     "code-index": {
       "command": "uvx",
@@ -299,6 +374,14 @@ HTML_TEMPLATE = """\
       <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
         START
       </button>
+    </div>
+  </div>
+
+  <!-- Running servers -->
+  <div class="section hidden" id="servers-section">
+    <div class="section-label">Servers</div>
+    <div class="card">
+      <div class="server-list" id="server-list"></div>
     </div>
   </div>
 
@@ -336,10 +419,14 @@ HTML_TEMPLATE = """\
   const configInput = document.getElementById("config-input");
   const logViewer = document.getElementById("log-viewer");
   const mcpSnippet = document.getElementById("mcp-snippet");
+  const serversSection = document.getElementById("servers-section");
+  const serverList = document.getElementById("server-list");
 
   let running = false;
   let loading = false;
+  let currentStatus = { servers: [], primary: null, running: false };
 
+  // Loose client-side validation. Server is the source of truth.
   function parseConfig(raw) {
     let obj;
     try {
@@ -347,48 +434,131 @@ HTML_TEMPLATE = """\
     } catch (e) {
       throw new Error("Invalid JSON: " + e.message);
     }
-
-    let server = obj;
-    let serverName = "my-mcp";
-    if (obj.mcpServers) {
-      const keys = Object.keys(obj.mcpServers);
-      if (keys.length === 0) throw new Error("No server entries found in mcpServers");
-      serverName = keys[0];
-      server = obj.mcpServers[keys[0]];
+    if (!obj || typeof obj !== "object") {
+      throw new Error("Config must be a JSON object");
     }
-
-    if (server.command) {
-      const parts = [server.command];
-      if (Array.isArray(server.args)) {
-        parts.push(...server.args);
-      }
-      const result = { transport: "stdio", command: parts.join(" "), _name: serverName };
-      if (server.env && typeof server.env === "object") {
-        result.env = server.env;
-      }
-      return result;
+    if (!obj.mcpServers || typeof obj.mcpServers !== "object") {
+      throw new Error("Config must contain 'mcpServers'");
     }
-
-    if (server.type === "sse") {
-      if (!server.url) throw new Error("SSE config missing 'url'");
-      return { transport: "sse", url: server.url, _name: serverName };
+    if (Object.keys(obj.mcpServers).length === 0) {
+      throw new Error("'mcpServers' must contain at least one server");
     }
-
-    if (server.type === "streamable-http") {
-      if (!server.url) throw new Error("Streamable HTTP config missing 'url'");
-      return { transport: "http", url: server.url, _name: serverName };
-    }
-
-    throw new Error("Could not determine transport. Provide 'command' (stdio) or 'type' (sse/streamable-http).");
+    return obj;
   }
 
-  function updateSnippet(name) {
-    const snippet = JSON.stringify({
-      mcpServers: {
-        [name]: { type: "streamable-http", url: "http://localhost:8000/mcp" }
+  function makeUrl(name, isPrimary) {
+    const base = window.location.origin;
+    if (isPrimary) return base + "/mcp";
+    return base + "/" + name + "/mcp";
+  }
+
+  function buildSnippet(status) {
+    const entries = {};
+    const servers = status.servers || [];
+    for (const s of servers) {
+      entries[s.name] = {
+        type: "streamable-http",
+        url: makeUrl(s.name, false),
+      };
+    }
+    if (status.primary) {
+      entries[status.primary + "-primary"] = {
+        type: "streamable-http",
+        url: makeUrl(status.primary, true),
+      };
+    }
+    if (Object.keys(entries).length === 0) {
+      return JSON.stringify({
+        mcpServers: {
+          "my-mcp": { type: "streamable-http", url: makeUrl("my-mcp", true) }
+        }
+      }, null, 2);
+    }
+    return JSON.stringify({ mcpServers: entries }, null, 2);
+  }
+
+  function renderServers(status) {
+    const servers = status.servers || [];
+    if (servers.length === 0) {
+      serversSection.classList.add("hidden");
+      serverList.innerHTML = "";
+      return;
+    }
+    serversSection.classList.remove("hidden");
+    serverList.innerHTML = "";
+    for (const s of servers) {
+      const row = document.createElement("div");
+      row.className = "server-row";
+
+      const name = document.createElement("div");
+      name.className = "server-name";
+      name.textContent = s.name;
+      row.appendChild(name);
+
+      if (s.transport) {
+        const t = document.createElement("span");
+        t.className = "pill transport";
+        t.textContent = s.transport;
+        row.appendChild(t);
       }
-    }, null, 2);
-    mcpSnippet.textContent = snippet;
+
+      const state = document.createElement("span");
+      if (s.error) {
+        state.className = "pill state-error";
+        state.textContent = "error";
+      } else if (s.running) {
+        state.className = "pill state-running";
+        state.textContent = "running";
+      } else {
+        state.className = "pill state-stopped";
+        state.textContent = "stopped";
+      }
+      row.appendChild(state);
+
+      if (s.primary) {
+        const p = document.createElement("span");
+        p.className = "pill primary";
+        p.textContent = "primary";
+        row.appendChild(p);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "server-meta grow";
+      meta.textContent = makeUrl(s.name, false);
+      row.appendChild(meta);
+
+      const btn = document.createElement("button");
+      btn.className = "btn btn-mini " + (s.running ? "btn-outline" : "btn-primary");
+      btn.textContent = s.running ? "Stop" : "Start";
+      btn.onclick = () => toggleServer(s.name, s.running);
+      row.appendChild(btn);
+
+      serverList.appendChild(row);
+    }
+  }
+
+  async function toggleServer(name, isRunning) {
+    const action = isRunning ? "stop" : "start";
+    const res = await fetch(`/api/servers/${encodeURIComponent(name)}/${action}`, { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      addLog("ERROR: " + (data.error || "Server toggle failed"));
+    }
+    await refreshStatus();
+  }
+
+  async function refreshStatus() {
+    try {
+      const r = await fetch("/api/status");
+      const data = await r.json();
+      currentStatus = data;
+      running = !!data.running;
+      renderServers(data);
+      mcpSnippet.textContent = buildSnippet(data);
+      updateUI();
+    } catch (err) {
+      addLog("ERROR: " + err.message);
+    }
   }
 
   function setLoading(state) {
@@ -403,7 +573,7 @@ HTML_TEMPLATE = """\
     if (running) {
       badge.textContent = "RUNNING";
       badge.className = "badge running";
-      actionBtn.textContent = "STOP";
+      actionBtn.textContent = "STOP ALL";
       actionBtn.className = "btn btn-outline";
       configInput.disabled = true;
     } else {
@@ -431,8 +601,7 @@ HTML_TEMPLATE = """\
     try {
       if (running) {
         const res = await fetch("/api/stop", { method: "POST" });
-        const data = await res.json();
-        if (data.ok) running = false;
+        await res.json();
       } else {
         let body;
         try {
@@ -443,31 +612,31 @@ HTML_TEMPLATE = """\
           updateUI();
           return;
         }
-        const serverName = body._name;
-        delete body._name;
         const res = await fetch("/api/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
         const data = await res.json();
-        if (data.ok) {
-          running = true;
-          updateSnippet(serverName);
-        } else {
+        if (!data.ok) {
           addLog("ERROR: " + (data.error || "Failed to start"));
+        } else if (data.servers) {
+          for (const [name, r] of Object.entries(data.servers)) {
+            if (!r.ok) addLog(`ERROR: ${name}: ${r.error}`);
+          }
         }
       }
     } catch (err) {
       addLog("ERROR: " + err.message);
     }
 
+    await refreshStatus();
     setLoading(false);
     updateUI();
   }
 
   function copySnippet() {
-    const text = document.getElementById("mcp-snippet").textContent;
+    const text = mcpSnippet.textContent;
     const btn = document.getElementById("copy-btn");
     navigator.clipboard.writeText(text).then(() => {
       btn.textContent = "Copied";
@@ -480,10 +649,8 @@ HTML_TEMPLATE = """\
   const events = new EventSource("/api/logs");
   events.onmessage = (e) => addLog(e.data);
 
-  // Initial status check
-  fetch("/api/status")
-    .then(r => r.json())
-    .then(data => { running = data.running; updateUI(); });
+  // Initial status
+  refreshStatus();
 </script>
 </body>
 </html>
