@@ -26,12 +26,14 @@ Then open [http://localhost:8000](http://localhost:8000) in your browser. The in
 
 Two equivalent options — pick whichever you prefer.
 
+Every entry the LocalMCP UI generates for your `~/.cursor/mcp.json` is prefixed `localmcp-` so it's obvious in Cursor's UI which entries are LocalMCP-proxied (and so they don't collide with backends you may already have configured directly).
+
 **Option A — single aggregated entry** (simplest):
 
 ```json
 {
   "mcpServers": {
-    "aggregate": {
+    "localmcp-aggregate": {
       "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
@@ -46,11 +48,11 @@ Cursor sees the union of every running backend's tools, prompts, and resources. 
 ```json
 {
   "mcpServers": {
-    "filesystem": {
+    "localmcp-filesystem": {
       "type": "streamable-http",
       "url": "http://localhost:8000/filesystem/mcp"
     },
-    "github": {
+    "localmcp-github": {
       "type": "streamable-http",
       "url": "http://localhost:8000/github/mcp"
     }

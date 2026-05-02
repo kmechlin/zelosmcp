@@ -392,7 +392,7 @@ HTML_TEMPLATE = """\
         <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
         <pre id="mcp-snippet">{
   "mcpServers": {
-    "my-mcp": {
+    "localmcp-aggregate": {
       "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
@@ -451,18 +451,24 @@ HTML_TEMPLATE = """\
     return base + "/" + name + "/mcp";
   }
 
+  // Cursor's `mcpServers` keys are display labels, not routing identifiers.
+  // Prefix them with `localmcp-` so it's obvious in Cursor's UI which entries
+  // come from this proxy and so they don't collide with backend names a user
+  // already has configured directly in their `mcp.json`.
+  const SNIPPET_PREFIX = "localmcp-";
+
   function buildSnippet(status) {
     const entries = {};
     const servers = status.servers || [];
     const anyRunning = servers.some(s => s.running);
     for (const s of servers) {
-      entries[s.name] = {
+      entries[SNIPPET_PREFIX + s.name] = {
         type: "streamable-http",
         url: makeUrl(s.name, false),
       };
     }
     if (anyRunning) {
-      entries["aggregate"] = {
+      entries[SNIPPET_PREFIX + "aggregate"] = {
         type: "streamable-http",
         url: makeUrl(null, true),
       };
@@ -470,7 +476,7 @@ HTML_TEMPLATE = """\
     if (Object.keys(entries).length === 0) {
       return JSON.stringify({
         mcpServers: {
-          "aggregate": { type: "streamable-http", url: makeUrl(null, true) }
+          [SNIPPET_PREFIX + "aggregate"]: { type: "streamable-http", url: makeUrl(null, true) }
         }
       }, null, 2);
     }
