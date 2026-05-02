@@ -53,7 +53,6 @@ def _apply_patches():
 
 
 _STDIO_CONFIG = {
-    "primaryMCP": "alpha",
     "mcpServers": {
         "alpha": {"command": "echo", "args": ["alpha"]},
         "beta":  {"command": "echo", "args": ["beta"]},
@@ -172,11 +171,11 @@ class TestStatusAPI:
                 r = await c.get("/api/status")
             data = r.json()
             assert data["running"] is True
-            assert data["primary"] == "alpha"
+            assert data["primary"] is None
             names = [s["name"] for s in data["servers"]]
             assert names == ["alpha", "beta"]
-            primary_flags = {s["name"]: s["primary"] for s in data["servers"]}
-            assert primary_flags == {"alpha": True, "beta": False}
+            for s in data["servers"]:
+                assert s["primary"] is False
             await manager.stop_all()
 
 
@@ -193,11 +192,12 @@ class TestStartAPI:
             assert r.status_code == 200
             data = r.json()
             assert data["ok"] is True
-            assert data["primary"] == "alpha"
+            assert data["primary"] is None
             assert set(data["servers"].keys()) == {"alpha", "beta"}
             assert all(s["ok"] for s in data["servers"].values())
             assert manager.get("alpha") is not None
             assert manager.get("beta") is not None
+            assert manager.aggregator.running is True
             await manager.stop_all()
 
     @pytest.mark.asyncio
@@ -217,15 +217,20 @@ class TestStartAPI:
         assert "mcpServers" in r.json()["error"]
 
     @pytest.mark.asyncio
-    async def test_start_unknown_primary(self):
-        app, _ = _fresh()
-        async with _client(app) as c:
-            r = await c.post("/api/start", json={
-                "primaryMCP": "ghost",
-                "mcpServers": {"alpha": {"command": "echo", "args": ["a"]}},
-            })
-        assert r.status_code == 400
-        assert "primaryMCP" in r.json()["error"]
+    async def test_start_with_deprecated_primary_is_accepted(self):
+        # primaryMCP is deprecated — accepted for back-compat, ignored at runtime.
+        _, *patches = _apply_patches()
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            app, manager = _fresh()
+            async with _client(app) as c:
+                r = await c.post("/api/start", json={
+                    "primaryMCP": "ghost",
+                    "mcpServers": {"alpha": {"command": "echo", "args": ["a"]}},
+                })
+            assert r.status_code == 200
+            assert r.json()["ok"] is True
+            assert manager.primary is None
+            await manager.stop_all()
 
     @pytest.mark.asyncio
     async def test_start_reserved_name_rejected(self):
@@ -292,7 +297,7 @@ class TestPerServerEndpoints:
             assert r.status_code == 200
             data = r.json()
             assert data["name"] == "alpha"
-            assert data["primary"] is True
+            assert data["primary"] is False
             await manager.stop_all()
 
     @pytest.mark.asyncio
@@ -345,11 +350,12 @@ class TestStopAPI:
 
 class TestMCPRouting:
     @pytest.mark.asyncio
-    async def test_root_mcp_503_when_no_primary(self):
+    async def test_root_mcp_503_when_no_servers(self):
         app, _ = _fresh()
         async with _client(app) as c:
             r = await c.post("/mcp")
         assert r.status_code == 503
+        assert "No MCP servers" in r.json()["error"]
 
     @pytest.mark.asyncio
     async def test_named_mcp_503_when_unknown(self):
@@ -389,12 +395,16 @@ class TestMCPRouting:
             await manager.stop_all()
 
     @pytest.mark.asyncio
-    async def test_root_mcp_dispatches_to_primary(self):
+    async def test_root_mcp_dispatches_to_aggregator(self):
         _, *patches = _apply_patches()
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             app, manager = _fresh()
             async with _client(app) as c:
                 await c.post("/api/start", json=_STDIO_CONFIG)
+                # Spy on every session_manager: only the aggregator's should fire.
+                manager.aggregator.session_manager.handle_request = AsyncMock(
+                    return_value=None
+                )
                 manager.get("alpha").session_manager.handle_request = AsyncMock(
                     return_value=None
                 )
@@ -414,7 +424,8 @@ class TestMCPRouting:
                     "headers": [],
                 }
                 await app(scope, _recv, _send)
-                manager.get("alpha").session_manager.handle_request.assert_awaited_once()
+                manager.aggregator.session_manager.handle_request.assert_awaited_once()
+                manager.get("alpha").session_manager.handle_request.assert_not_called()
                 manager.get("beta").session_manager.handle_request.assert_not_called()
             await manager.stop_all()
 
@@ -472,7 +483,7 @@ class TestFullLifecycle:
                 r = await c.get("/api/status")
                 data = r.json()
                 assert data["running"] is True
-                assert data["primary"] == "alpha"
+                assert data["primary"] is None
 
                 r = await c.post("/api/stop")
                 assert r.json()["ok"] is True

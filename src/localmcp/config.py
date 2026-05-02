@@ -186,12 +186,10 @@ def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None]:
         specs.append(_parse_server(name, entry))
 
     primary = raw.get("primaryMCP")
-    if primary is not None:
-        if not isinstance(primary, str):
-            raise ConfigError("'primaryMCP' must be a string")
-        if primary not in {s.name for s in specs}:
-            raise ConfigError(
-                f"'primaryMCP' references unknown server '{primary}'"
-            )
+    if primary is not None and not isinstance(primary, str):
+        raise ConfigError("'primaryMCP' must be a string")
+    # NOTE: primaryMCP is deprecated as of v0.3 — `/mcp` always aggregates every
+    # running server. We still parse the field so old pasted configs keep working;
+    # ProxyManager.start_all logs a deprecation warning when it sees a value.
 
     return specs, primary

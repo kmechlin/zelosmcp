@@ -351,7 +351,7 @@ HTML_TEMPLATE = """\
     <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
 
-  <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code>; set <code>primaryMCP</code> to also mirror one of them at <code>localhost:8000/mcp</code>.</p>
+  <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough). The root <code>localhost:8000/mcp</code> is an aggregator: tools, prompts, and resources from every running server appear there. Tool and prompt names are namespaced as <code>&lt;server&gt;__&lt;name&gt;</code>; resource URIs keep their original form.</p>
 
   <!-- Config -->
   <div class="section">
@@ -362,7 +362,6 @@ HTML_TEMPLATE = """\
         id="config-input"
         spellcheck="false"
       >{
-  "primaryMCP": "code-index",
   "mcpServers": {
     "code-index": {
       "command": "uvx",
@@ -455,22 +454,23 @@ HTML_TEMPLATE = """\
   function buildSnippet(status) {
     const entries = {};
     const servers = status.servers || [];
+    const anyRunning = servers.some(s => s.running);
     for (const s of servers) {
       entries[s.name] = {
         type: "streamable-http",
         url: makeUrl(s.name, false),
       };
     }
-    if (status.primary) {
-      entries[status.primary + "-primary"] = {
+    if (anyRunning) {
+      entries["aggregate"] = {
         type: "streamable-http",
-        url: makeUrl(status.primary, true),
+        url: makeUrl(null, true),
       };
     }
     if (Object.keys(entries).length === 0) {
       return JSON.stringify({
         mcpServers: {
-          "my-mcp": { type: "streamable-http", url: makeUrl("my-mcp", true) }
+          "aggregate": { type: "streamable-http", url: makeUrl(null, true) }
         }
       }, null, 2);
     }
@@ -514,13 +514,6 @@ HTML_TEMPLATE = """\
         state.textContent = "stopped";
       }
       row.appendChild(state);
-
-      if (s.primary) {
-        const p = document.createElement("span");
-        p.className = "pill primary";
-        p.textContent = "primary";
-        row.appendChild(p);
-      }
 
       const meta = document.createElement("div");
       meta.className = "server-meta grow";

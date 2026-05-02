@@ -137,12 +137,16 @@ class TestPrimary:
         assert primary == "b"
         assert [s.name for s in specs] == ["a", "b"]
 
-    def test_unknown_primary(self):
-        with pytest.raises(ConfigError, match="unknown server"):
-            parse_config({
-                "primaryMCP": "ghost",
-                "mcpServers": {"a": {"command": "echo"}},
-            })
+    def test_unknown_primary_accepted(self):
+        # primaryMCP is deprecated — unknown values no longer raise (the field
+        # is informational only; ProxyManager.start_all logs a deprecation
+        # warning when it sees a value).
+        specs, primary = parse_config({
+            "primaryMCP": "ghost",
+            "mcpServers": {"a": {"command": "echo"}},
+        })
+        assert [s.name for s in specs] == ["a"]
+        assert primary == "ghost"
 
     def test_primary_must_be_string(self):
         with pytest.raises(ConfigError, match="primaryMCP"):

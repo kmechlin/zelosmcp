@@ -37,7 +37,6 @@ def _patches():
 
 
 _CONFIG = {
-    "primaryMCP": "alpha",
     "mcpServers": {
         "alpha": {"command": "echo", "args": ["a"]},
         "beta":  {"type": "sse", "url": "http://x/sse"},
@@ -52,14 +51,35 @@ class TestStartAll:
         with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
             m = ProxyManager()
             result = await m.start_all(_CONFIG)
-            assert result["primary"] == "alpha"
+            assert result["primary"] is None
             assert set(result["servers"].keys()) == {"alpha", "beta", "gamma"}
             assert all(r["ok"] for r in result["servers"].values())
-            assert m.primary == "alpha"
-            assert m.primary_state() is m.get("alpha")
+            assert m.primary is None
+            assert m.aggregator.running is True
             for name in ("alpha", "beta", "gamma"):
                 assert m.get(name).running is True
             await m.stop_all()
+            assert m.aggregator.running is False
+
+    @pytest.mark.asyncio
+    async def test_primarymcp_is_deprecated_but_accepted(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            q = m.subscribe_logs()
+            await m.start_all({
+                "primaryMCP": "alpha",
+                "mcpServers": {"alpha": {"command": "echo"}},
+            })
+            assert m.primary is None
+            seen = []
+            try:
+                while True:
+                    seen.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                pass
+            assert any("primaryMCP is deprecated" in line for line in seen)
+            await m.stop_all()
+            m.unsubscribe_logs(q)
 
     @pytest.mark.asyncio
     async def test_replaces_existing_servers(self):
@@ -152,11 +172,11 @@ class TestStatus:
             m = ProxyManager()
             await m.start_all(_CONFIG)
             s = m.status()
-            assert s["primary"] == "alpha"
+            assert s["primary"] is None
             assert s["running"] is True
             by_name = {srv["name"]: srv for srv in s["servers"]}
-            assert by_name["alpha"]["primary"] is True
-            assert by_name["beta"]["primary"] is False
+            for name in ("alpha", "beta", "gamma"):
+                assert by_name[name]["primary"] is False
             assert by_name["alpha"]["transport"] == "stdio"
             assert by_name["beta"]["transport"] == "sse"
             assert by_name["gamma"]["transport"] == "http"

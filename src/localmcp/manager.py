@@ -10,12 +10,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from localmcp.aggregator import Aggregator
 from localmcp.config import ServerSpec, parse_config
 from localmcp.proxy import ProxyState
 
 
 class ProxyManager:
-    """Lifecycle owner for many ProxyStates plus a primary pointer."""
+    """Lifecycle owner for many ProxyStates plus the /mcp aggregator."""
 
     def __init__(self) -> None:
         self.servers: dict[str, ProxyState] = {}
@@ -23,6 +24,7 @@ class ProxyManager:
         self._primary: str | None = None
         self._log_subscribers: list[asyncio.Queue[str]] = []
         self._log_pumps: dict[str, asyncio.Task] = {}
+        self.aggregator = Aggregator(self)
 
     @property
     def primary(self) -> str | None:
@@ -42,14 +44,21 @@ class ProxyManager:
     async def start_all(self, raw_config: Any) -> dict[str, Any]:
         """Replace the current set of servers with whatever ``raw_config`` defines.
 
-        Stops anything currently running, parses the config, then concurrently
-        starts each server. Returns a per-server result map plus the primary.
+        Stops anything currently running, parses the config, concurrently starts
+        each backend, then brings up the aggregator at ``/mcp``. Returns a
+        per-server result map.
         """
         await self.stop_all()
 
         specs, primary = parse_config(raw_config)
         self._specs = {s.name: s for s in specs}
-        self._primary = primary
+
+        if primary is not None:
+            self._broadcast(
+                "[aggregator] primaryMCP is deprecated and ignored — "
+                "/mcp now aggregates all servers"
+            )
+        self._primary = None
 
         results: dict[str, Any] = {}
         coros = []
@@ -66,13 +75,22 @@ class ProxyManager:
             else:
                 results[spec.name] = {"ok": True}
 
+        if any(s.running for s in self.servers.values()):
+            try:
+                await self.aggregator.start()
+            except Exception as exc:
+                self._broadcast(f"[aggregator] failed to start: {exc}")
+
         return {
-            "primary": self._primary,
+            "primary": None,
             "servers": results,
         }
 
     async def stop_all(self) -> None:
+        await self.aggregator.stop()
         if not self.servers:
+            self._specs.clear()
+            self._primary = None
             return
         await asyncio.gather(
             *(s.stop() for s in self.servers.values()),

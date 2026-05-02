@@ -23,11 +23,17 @@ SCHEMA = SchemaGenerator(
         "openapi": "3.0.3",
         "info": {
             "title": "LocalMCP",
-            "version": "0.2.0",
+            "version": "0.3.0",
             "description": (
-                "Wrap one or more MCP servers and re-expose them on stable local URLs. "
-                "Each configured server is mounted at `/<name>/mcp`; the optional "
-                "`primaryMCP` is also mirrored at `/mcp`."
+                "Wrap one or more MCP servers and re-expose them on stable local URLs.\n\n"
+                "- Each configured server is mounted at `/<name>/mcp` (raw passthrough — "
+                "tools, resources, and prompts unchanged).\n"
+                "- `/mcp` is an aggregator that fans tools, prompts, and resources "
+                "across every running backend. Tool and prompt names are surfaced as "
+                "`<server>__<original>` (double underscore). Resource URIs are kept "
+                "verbatim; reads are routed to the originating backend via a "
+                "URI->backend cache populated from `resources/list`, with a fan-out "
+                "fallback for URIs not previously listed."
             ),
         },
         "servers": [{"url": "http://localhost:8000"}],
@@ -158,7 +164,11 @@ def create_app(manager: ProxyManager | None = None):
                 properties:
                   primaryMCP:
                     type: string
-                    description: Optional name from `mcpServers`. That server is also mounted at `/mcp`.
+                    deprecated: true
+                    description: |
+                      Deprecated. `/mcp` always aggregates every running server
+                      under the `<server>__<tool>` namespace. The field is still
+                      accepted for backward compatibility but is ignored at runtime.
                   mcpServers:
                     type: object
                     additionalProperties:
@@ -345,8 +355,8 @@ def create_app(manager: ProxyManager | None = None):
             target_label = None
 
             if normalized == "/mcp":
-                target = manager.primary_state()
-                target_label = "primary"
+                target = manager.aggregator
+                target_label = "aggregate"
             elif normalized.endswith("/mcp"):
                 # /<name>/mcp — exactly two slashes after stripping trailing.
                 segments = [s for s in normalized.split("/") if s]
@@ -359,7 +369,7 @@ def create_app(manager: ProxyManager | None = None):
                     target_label = None
 
             if target_label is not None:
-                if target is not None and target.session_manager is not None:
+                if target is not None and getattr(target, "session_manager", None) is not None:
                     # Strip the routing prefix so the session manager sees a
                     # path it expects (e.g. "/mcp" or "").
                     forwarded = dict(scope)
@@ -368,8 +378,8 @@ def create_app(manager: ProxyManager | None = None):
                     return await target.session_manager.handle_request(
                         forwarded, receive, send
                     )
-                if target_label == "primary":
-                    msg = "No primary MCP server is running"
+                if target_label == "aggregate":
+                    msg = "No MCP servers are running"
                 else:
                     msg = f"No MCP server '{target_label}' is running"
                 resp = JSONResponse({"error": msg}, status_code=503)
