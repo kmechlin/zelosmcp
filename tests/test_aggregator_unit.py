@@ -298,6 +298,38 @@ class TestCallTool:
         result = await handler(req)
         assert result.root.isError is True
 
+    @pytest.mark.asyncio
+    async def test_passes_through_structured_content(self):
+        """Backend-provided structuredContent must reach the client unchanged.
+
+        Regression: previously, the aggregator returned only ``r.content``,
+        dropping ``structuredContent``. The MCP SDK then replaced the
+        response with a validation error for any tool that declared an
+        ``outputSchema`` (filesystem, code-index, anything FastMCP-based).
+        """
+        m, sess_alpha, _ = _make_manager_with_two_running_backends()
+        sess_alpha.call_tool = AsyncMock(return_value=FakeResult(
+            content=[TextContent(type="text", text='{"foo":"bar"}')],
+            structuredContent={"foo": "bar"},
+            isError=False,
+        ))
+        agg = Aggregator(m)
+        server = _register_for_test(agg)
+        handler = _find_handler(server, "CallToolRequest")
+
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__search", arguments={},
+            ),
+        )
+        result = await handler(req)
+
+        # structuredContent must be populated (not dropped), isError False.
+        assert result.root.structuredContent == {"foo": "bar"}
+        assert result.root.isError is False
+
 
 # ── Prompts aggregation ────────────────────────────────────────────────
 
