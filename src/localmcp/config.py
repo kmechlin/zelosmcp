@@ -23,6 +23,9 @@ RESERVED_NAMES: frozenset[str] = frozenset({
     "openapi.json",
     "openapi",
     "static",
+    # `localmcp` is the always-on built-in backend (BuiltinServer in
+    # localmcp.builtin); reserved so user configs can't shadow it.
+    "localmcp",
 })
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]*$")

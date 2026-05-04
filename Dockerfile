@@ -2,7 +2,7 @@
 #
 # This image bundles the runtimes that stdio MCP servers most commonly need:
 #   - Python 3.12 (host runtime + pip + uv/uvx + pipx)
-#   - Node.js 20  (provides `npx` for `@modelcontextprotocol/...` packages)
+#   - Node.js 22  (provides `npx` for `@modelcontextprotocol/...` packages)
 #   - git, curl, build tools (some npm packages compile native deps)
 #
 # Build:    docker build -t localmcp .
@@ -18,12 +18,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PORT=8000 \
     HOST=0.0.0.0
 
-# System packages + Node 20 (for npx-launched MCP servers)
+# System packages + Node 22 (for npx-launched MCP servers)
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential gnupg; \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*

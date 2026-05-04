@@ -36,10 +36,10 @@ FROM base-os AS extra-os
 # `extra-os` so apt/pip/npm/uvx can clear the corporate proxy when
 # downloading runtimes and MCP backends at build time.
 FROM extra-os AS localmcp
-  # Node 20 (for npx-launched MCP backends like kubernetes-mcp-server,
+  # Node 22 (for npx-launched MCP backends like kubernetes-mcp-server,
   # @modelcontextprotocol/server-filesystem). Some npm packages compile
   # native deps - build-essential is already in base-os.
-  RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+  RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         nodejs && \
       apt-get clean && \

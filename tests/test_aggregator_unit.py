@@ -7,9 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mcp.shared.exceptions import McpError
 from mcp.types import (
     CallToolResult,
+    ErrorData,
     GetPromptResult,
+    METHOD_NOT_FOUND,
     Prompt,
     PromptMessage,
     Resource,
@@ -423,6 +426,35 @@ class TestListResources:
         except asyncio.QueueEmpty:
             pass
         assert any("[aggregator] beta list_resources failed" in line for line in seen)
+
+    @pytest.mark.asyncio
+    async def test_method_not_found_is_silently_skipped(self):
+        """Backends like @modelcontextprotocol/server-filesystem don't
+        implement list_resources at all; they return JSON-RPC -32601. The
+        aggregator must silently skip those (no log noise) and still merge
+        results from backends that do implement the method."""
+        m, _, sess_beta = _make_manager_with_two_running_backends()
+        sess_beta.list_resources = AsyncMock(
+            side_effect=McpError(ErrorData(code=METHOD_NOT_FOUND, message="Method not found"))
+        )
+        agg = Aggregator(m)
+        q = m.subscribe_logs()
+        server = _register_for_test(agg)
+        handler = _find_handler(server, "ListResourcesRequest")
+        result = await handler(None)
+        uris = sorted(str(r.uri) for r in result.root.resources)
+        # alpha's resources still come through; beta is silently skipped.
+        assert uris == ["alpha://one", "alpha://two"]
+        # Drain the log queue and assert no "list_resources failed" line.
+        seen = []
+        try:
+            while True:
+                seen.append(q.get_nowait())
+        except asyncio.QueueEmpty:
+            pass
+        assert not any("list_resources failed" in line for line in seen), (
+            f"Method-not-found should be silent; got log lines: {seen}"
+        )
 
     @pytest.mark.asyncio
     async def test_empty_when_no_backends_running(self):

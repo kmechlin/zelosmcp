@@ -1,0 +1,568 @@
+"""Unit tests for the BuiltinServer's pure generator + helper functions.
+
+Lifecycle (start/stop, in-memory streams, session manager) is covered by the
+end-to-end app integration tests; here we focus on the rule-text rendering
+and tool-handler dispatch logic that's easy to exercise without spawning a
+session manager."""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from localmcp.builtin import (
+    NAME,
+    _HANDLERS,
+    _TOOLS,
+    _classify_tool,
+    _format_args,
+    render_comprehensive_rule,
+)
+
+
+# Helpers used by several test classes.
+def _tool(
+    name: str,
+    *,
+    description: str = "desc",
+    input_schema: dict | None = None,
+    annotations: dict | None = None,
+) -> dict:
+    """Build a dict-shape Tool entry as `collect_backend_full_catalog`
+    would emit it (post `model_dump(mode='json')`)."""
+    out: dict = {"name": name, "description": description}
+    if input_schema is not None:
+        out["inputSchema"] = input_schema
+    if annotations is not None:
+        out["annotations"] = annotations
+    return out
+
+
+def _backend(tools: list[dict], **extra) -> dict:
+    return {
+        "transport": extra.get("transport", "stdio"),
+        "running": True,
+        "tools": tools,
+        "prompts": extra.get("prompts", []),
+        "resources": extra.get("resources", []),
+        "resourceTemplates": extra.get("resourceTemplates", []),
+    }
+
+
+class TestFormatArgs:
+    def test_no_schema(self):
+        assert _format_args(None) == "()"
+
+    def test_empty_dict(self):
+        assert _format_args({}) == "()"
+
+    def test_object_no_properties(self):
+        # Object schema declared but with no `properties` field still
+        # accepts an arbitrary object; flag with `(...)`.
+        assert _format_args({"type": "object"}) == "(...)"
+
+    def test_required_only(self):
+        out = _format_args(
+            {"type": "object", "properties": {"path": {}}, "required": ["path"]}
+        )
+        assert out == "(path)"
+
+    def test_optional_only(self):
+        out = _format_args({"type": "object", "properties": {"a": {}, "b": {}}})
+        assert out == "(a?, b?)"
+
+    def test_required_then_optional(self):
+        out = _format_args(
+            {
+                "type": "object",
+                "properties": {"path": {}, "head": {}, "tail": {}},
+                "required": ["path"],
+            }
+        )
+        assert out == "(path, head?, tail?)"
+
+    def test_required_order_preserved(self):
+        # `required` declared in non-properties order; required comes
+        # first in the order declared, then any leftover properties.
+        out = _format_args(
+            {
+                "type": "object",
+                "properties": {"a": {}, "b": {}, "c": {}, "d": {}},
+                "required": ["c", "a"],
+            }
+        )
+        assert out == "(c, a, b?, d?)"
+
+    def test_required_key_without_properties_entry(self):
+        # Server declared a `required` name not in `properties`; we still
+        # render it (don't drop it on the floor).
+        out = _format_args(
+            {"type": "object", "properties": {"b": {}}, "required": ["a"]}
+        )
+        assert out == "(a, b?)"
+
+    def test_non_object_type(self):
+        # Some schemas (rare) declare a top-level non-object type.
+        out = _format_args({"type": "string"})
+        assert out == "(string)"
+
+
+class TestClassifyTool:
+    def test_readonly_hint_wins_over_name(self):
+        marker = _classify_tool(
+            _tool(
+                "create_thing",  # would be `mutates` by name
+                annotations={"readOnlyHint": True},
+            )
+        )
+        assert marker == "readonly"
+
+    def test_destructive_hint_overrides_readonly(self):
+        marker = _classify_tool(
+            _tool(
+                "list_things",
+                annotations={"readOnlyHint": True, "destructiveHint": True},
+            )
+        )
+        assert marker == "destructive"
+
+    def test_destructive_hint_overrides_name(self):
+        marker = _classify_tool(
+            _tool("delete_pod", annotations={"destructiveHint": True})
+        )
+        assert marker == "destructive"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "create_container",
+            "update_resource",
+            "delete_pod",
+            "remove_volume",
+            "start_server",
+            "stop_server",
+            "restart_app",
+            "run_pod",
+            "push_image",
+            "pull_image",
+            "build_image",
+            "write_file",
+            "edit_file",
+            "move_file",
+            "configure_file_watcher",
+            "reload_config",
+            "set_project_path",
+        ],
+    )
+    def test_mutating_name_prefix_without_annotations(self, name):
+        assert _classify_tool(_tool(name)) == "mutates"
+
+    def test_unknown_name_no_annotations(self):
+        # No readOnlyHint, no destructive hint, no mutation prefix.
+        assert _classify_tool(_tool("do_something")) == "?"
+
+    def test_no_annotations_attr(self):
+        # The annotations key is missing entirely.
+        assert _classify_tool({"name": "list_things"}) == "?"
+
+
+class TestRenderComprehensiveRule:
+    def test_empty_catalog(self):
+        out = render_comprehensive_rule({})
+        assert "alwaysApply: true" in out
+        assert "No user backends are currently loaded" in out
+        assert "READ-ONLY" in out  # default access mode in the directive
+
+    def test_only_builtin_in_catalog_treated_as_empty(self):
+        # The renderer skips the builtin row by design — including its
+        # own tools in the rule would tell the agent how to regenerate
+        # itself (noisy and not useful).
+        out = render_comprehensive_rule(
+            {NAME: _backend([_tool("generate_cursor_rule")])}
+        )
+        assert "No user backends are currently loaded" in out
+
+    def test_always_apply_frontmatter(self):
+        out = render_comprehensive_rule(
+            {"filesystem": _backend([_tool("read_text_file")])}
+        )
+        head = out.split("---\n", 2)[1]
+        assert "alwaysApply: true" in head
+        assert "globs:" not in head
+
+    def test_scoped_frontmatter_with_globs(self):
+        out = render_comprehensive_rule(
+            {"filesystem": _backend([_tool("read_text_file")])},
+            style="scoped",
+            globs="**/*.py",
+        )
+        head = out.split("---\n", 2)[1]
+        assert "alwaysApply: false" in head
+        assert "globs: **/*.py" in head
+
+    def test_scoped_defaults_globs(self):
+        out = render_comprehensive_rule(
+            {"filesystem": _backend([_tool("read_text_file")])},
+            style="scoped",
+        )
+        assert "globs: **/*" in out
+
+    def test_read_only_directive(self):
+        out = render_comprehensive_rule(
+            {"filesystem": _backend([_tool("read_text_file")])},
+            access="read-only",
+        )
+        assert "Access mode: READ-ONLY" in out
+        assert "Do not call" in out
+        assert "Access mode: READ-WRITE" not in out
+
+    def test_read_write_directive(self):
+        out = render_comprehensive_rule(
+            {"filesystem": _backend([_tool("read_text_file")])},
+            access="read-write",
+        )
+        assert "Access mode: READ-WRITE" in out
+        assert "Confirm with the user" in out
+        assert "Access mode: READ-ONLY" not in out
+
+    def test_unknown_access_raises(self):
+        with pytest.raises(ValueError, match="Unknown access"):
+            render_comprehensive_rule({}, access="bogus")
+
+    def test_per_tool_entry_shape(self):
+        out = render_comprehensive_rule(
+            {
+                "filesystem": _backend(
+                    [
+                        _tool(
+                            "read_text_file",
+                            description="Read complete contents.",
+                            input_schema={
+                                "type": "object",
+                                "properties": {
+                                    "path": {},
+                                    "head": {},
+                                    "tail": {},
+                                },
+                                "required": ["path"],
+                            },
+                            annotations={"readOnlyHint": True},
+                        )
+                    ]
+                )
+            }
+        )
+        # Qualified name + arg summary + marker, then description on next line.
+        assert (
+            "- `filesystem__read_text_file` `(path, head?, tail?)` [readonly]"
+            in out
+        )
+        assert "Read complete contents." in out
+
+    def test_marker_taxonomy_renders(self):
+        catalog = {
+            "weirdly-named": _backend(
+                [
+                    _tool("get_status", annotations={"readOnlyHint": True}),
+                    _tool("create_widget"),  # mutates by prefix
+                    _tool(
+                        "delete_widget", annotations={"destructiveHint": True}
+                    ),
+                    _tool("opaque_thing"),  # ?
+                ]
+            )
+        }
+        out = render_comprehensive_rule(catalog)
+        assert "[readonly]" in out
+        assert "[mutates]" in out
+        assert "[destructive]" in out
+        assert "[?]" in out
+
+    def test_backend_with_no_tools(self):
+        out = render_comprehensive_rule({"empty": _backend([])})
+        assert "## `empty`" in out
+        assert "_(no tools advertised)_" in out
+
+    def test_tool_with_missing_description(self):
+        out = render_comprehensive_rule(
+            {"x": _backend([_tool("foo", description="")])}
+        )
+        assert "_(no description)_" in out
+
+    def test_directive_present_even_when_backend_empty(self):
+        # Empty user-backend catalog still gets the directive block
+        # (so the agent knows access policy even before backends start).
+        out = render_comprehensive_rule({}, access="read-only")
+        # Empty body branch goes back early — verify directive appears
+        # somewhere. We pick the description-suffix marker.
+        assert "(read-only mode)" in out
+
+    def test_full_default_set_renders_cleanly(self):
+        """Smoke test: a default-localmcp.json-shaped catalog renders
+        every backend as its own section with per-tool entries."""
+        catalog = {
+            "filesystem": _backend(
+                [
+                    _tool(
+                        "read_text_file",
+                        annotations={"readOnlyHint": True},
+                        input_schema={
+                            "type": "object",
+                            "properties": {"path": {}},
+                            "required": ["path"],
+                        },
+                    ),
+                    _tool(
+                        "edit_file",
+                        annotations={"destructiveHint": True},
+                        input_schema={
+                            "type": "object",
+                            "properties": {"path": {}, "edits": {}},
+                            "required": ["path", "edits"],
+                        },
+                    ),
+                ]
+            ),
+            "code-index": _backend(
+                [
+                    _tool("find_files", annotations={"readOnlyHint": True}),
+                    _tool("set_project_path"),  # mutates by prefix
+                ]
+            ),
+            "docker": _backend(
+                [
+                    _tool("list_containers", annotations={"readOnlyHint": True}),
+                    _tool("pull_image"),  # mutates by prefix
+                ]
+            ),
+            "rancher-k3s": _backend(
+                [
+                    _tool("pods_list", annotations={"readOnlyHint": True}),
+                    _tool("pods_delete", annotations={"destructiveHint": True}),
+                ]
+            ),
+        }
+        out = render_comprehensive_rule(catalog)
+        for header in (
+            "## `filesystem`",
+            "## `code-index`",
+            "## `docker`",
+            "## `rancher-k3s`",
+        ):
+            assert header in out
+        assert "## Mutability markers" in out
+        assert "## Tool naming convention" in out
+        assert "## Don't do this" in out
+        # Pick one entry from each backend to spot-check qualification.
+        assert "`filesystem__read_text_file`" in out
+        assert "`rancher-k3s__pods_delete`" in out
+
+
+class TestToolRegistry:
+    def test_seven_tools_registered(self):
+        # Was 8 — `list_supported_backends` removed in the comprehensive
+        # rule rewrite (the renderer treats every backend equally).
+        assert len(_TOOLS) == 7
+
+    def test_handler_per_tool(self):
+        names = [t.name for t in _TOOLS]
+        for n in names:
+            assert n in _HANDLERS, f"missing handler for {n}"
+
+    def test_list_supported_backends_removed(self):
+        names = {t.name for t in _TOOLS}
+        assert "list_supported_backends" not in names
+        assert "list_supported_backends" not in _HANDLERS
+
+    def test_generate_cursor_rule_schema_includes_access(self):
+        gen = next(t for t in _TOOLS if t.name == "generate_cursor_rule")
+        props = gen.inputSchema["properties"]
+        assert "access" in props
+        assert props["access"]["enum"] == ["read-only", "read-write"]
+        assert props["access"]["default"] == "read-only"
+
+
+class TestToolHandlers:
+    """The handlers operate on a real ProxyManager, but we can still exercise
+    the pure-data paths (rule generation, mcp.json, full catalog snapshot)
+    against a freshly constructed manager whose builtin hasn't been started."""
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_handler_default_read_only(self):
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        # builtin not started: catalog is empty -> rule reports no backends.
+        result = await _HANDLERS["generate_cursor_rule"](m.builtin, {})
+        assert len(result) == 1
+        assert result[0].type == "text"
+        body = result[0].text
+        assert "alwaysApply: true" in body
+        # Default access is read-only — both the directive and the
+        # frontmatter description should reflect that.
+        assert "(read-only mode)" in body
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_access_read_write(self):
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        result = await _HANDLERS["generate_cursor_rule"](
+            m.builtin, {"access": "read-write"}
+        )
+        body = result[0].text
+        assert "(read-write mode)" in body
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_rejects_bad_access(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        with pytest.raises(McpError, match="Unknown access"):
+            await _HANDLERS["generate_cursor_rule"](
+                m.builtin, {"access": "bogus"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_rejects_bad_style(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        with pytest.raises(McpError, match="Unknown style"):
+            await _HANDLERS["generate_cursor_rule"](
+                m.builtin, {"style": "bogus"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_aggregated_tool_catalog_returns_full_payload(self):
+        """`localmcp__get_aggregated_tool_catalog` must return rich
+        Tool/Prompt/Resource payloads (with inputSchema for tools), not
+        just names. The HTTP `/api/catalog` shares the same helper, so
+        this also locks in that endpoint's shape."""
+        from localmcp.builtin import collect_backend_full_catalog
+        from localmcp.manager import ProxyManager
+
+        # Synthesize a manager whose only "running" backend is a stub
+        # client_session that mimics filesystem's tool surface.
+        from unittest.mock import AsyncMock
+
+        m = ProxyManager()
+
+        class _Stub:
+            name = "filesystem"
+            running = True
+            backend_info = {"transport": "stdio"}
+            client_session = AsyncMock()
+
+        stub = _Stub()
+        from mcp.types import Tool
+
+        stub.client_session.list_tools = AsyncMock(
+            return_value=type("R", (), {"tools": [
+                Tool(name="read_text_file", description="Read a file", inputSchema={"type": "object"}),
+            ]})()
+        )
+        stub.client_session.list_prompts = AsyncMock(
+            return_value=type("R", (), {"prompts": []})()
+        )
+        stub.client_session.list_resources = AsyncMock(
+            return_value=type("R", (), {"resources": []})()
+        )
+        stub.client_session.list_resource_templates = AsyncMock(
+            return_value=type("R", (), {"resourceTemplates": []})()
+        )
+        m.servers["filesystem"] = stub
+
+        catalog = await collect_backend_full_catalog(m, skip_self=True)
+        assert "filesystem" in catalog
+        fs = catalog["filesystem"]
+        assert fs["transport"] == "stdio"
+        assert fs["running"] is True
+        assert isinstance(fs["tools"], list) and len(fs["tools"]) == 1
+        # Tool entry shape — what the UI renders.
+        tool = fs["tools"][0]
+        assert tool["name"] == "read_text_file"
+        assert tool["description"] == "Read a file"
+        assert "inputSchema" in tool
+        # Empty capabilities are [] (no error).
+        assert fs["prompts"] == []
+        assert fs["resources"] == []
+        assert fs["resourceTemplates"] == []
+
+    @pytest.mark.asyncio
+    async def test_full_catalog_silent_skips_method_not_found(self):
+        """A backend that doesn't implement prompts/resources (returns
+        -32601) is coerced to an empty list, mirroring the aggregator's
+        existing behavior."""
+        from unittest.mock import AsyncMock
+
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData, METHOD_NOT_FOUND, Tool
+
+        from localmcp.builtin import collect_backend_full_catalog
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+
+        class _Stub:
+            name = "filesystem"
+            running = True
+            backend_info = {"transport": "stdio"}
+            client_session = AsyncMock()
+
+        stub = _Stub()
+        stub.client_session.list_tools = AsyncMock(
+            return_value=type("R", (), {"tools": [
+                Tool(name="read_text_file", description="x", inputSchema={"type": "object"}),
+            ]})()
+        )
+        nf = McpError(ErrorData(code=METHOD_NOT_FOUND, message="Method not found"))
+        stub.client_session.list_prompts = AsyncMock(side_effect=nf)
+        stub.client_session.list_resources = AsyncMock(side_effect=nf)
+        stub.client_session.list_resource_templates = AsyncMock(side_effect=nf)
+        m.servers["filesystem"] = stub
+
+        catalog = await collect_backend_full_catalog(m, skip_self=True)
+        assert catalog["filesystem"]["prompts"] == []
+        assert catalog["filesystem"]["resources"] == []
+        assert catalog["filesystem"]["resourceTemplates"] == []
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_mcp_json_aggregate(self):
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        result = await _HANDLERS["generate_cursor_mcp_json"](
+            m.builtin, {"shape": "aggregate", "host": "127.0.0.1:9000"}
+        )
+        snippet = json.loads(result[0].text)
+        assert "localmcp-aggregate" in snippet["mcpServers"]
+        assert snippet["mcpServers"]["localmcp-aggregate"]["url"] == (
+            "http://127.0.0.1:9000/mcp"
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_server_refuses_self_targeting(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        with pytest.raises(McpError, match="builtin"):
+            await _HANDLERS["start_server"](m.builtin, {"name": NAME})
+        with pytest.raises(McpError, match="builtin"):
+            await _HANDLERS["stop_server"](m.builtin, {"name": NAME})
+
+    @pytest.mark.asyncio
+    async def test_start_server_requires_name(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        with pytest.raises(McpError, match="`name` is required"):
+            await _HANDLERS["start_server"](m.builtin, {})

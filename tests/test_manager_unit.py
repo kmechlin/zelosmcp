@@ -87,7 +87,10 @@ class TestStartAll:
             m = ProxyManager()
             await m.start_all(_CONFIG)
             await m.start_all({"mcpServers": {"only": {"command": "echo"}}})
-            assert m.names() == ["only"]
+            # `localmcp` is the always-on builtin; it lives alongside any
+            # user-configured backends and survives start_all/stop_all.
+            user_names = [n for n in m.names() if n != "localmcp"]
+            assert user_names == ["only"]
             assert m.primary is None
             await m.stop_all()
 
@@ -164,7 +167,14 @@ class TestStatus:
     async def test_status_when_empty(self):
         m = ProxyManager()
         s = m.status()
-        assert s == {"primary": None, "servers": [], "running": False}
+        # `localmcp` is the always-on builtin; until its lifespan-managed
+        # `start_builtin()` has run, `state.running` is still False, but the
+        # row exists so the UI can render the slot.
+        assert s["primary"] is None
+        assert s["running"] is False
+        assert [row["name"] for row in s["servers"]] == ["localmcp"]
+        assert s["servers"][0]["builtin"] is True
+        assert s["servers"][0]["running"] is False
 
     @pytest.mark.asyncio
     async def test_status_running(self):

@@ -159,7 +159,9 @@ class TestStatusAPI:
         data = r.json()
         assert data["running"] is False
         assert data["primary"] is None
-        assert data["servers"] == []
+        # `localmcp` is the always-on builtin row; only user backends matter here.
+        user_servers = [s for s in data["servers"] if not s.get("builtin")]
+        assert user_servers == []
 
     @pytest.mark.asyncio
     async def test_status_when_running(self):
@@ -172,8 +174,8 @@ class TestStatusAPI:
             data = r.json()
             assert data["running"] is True
             assert data["primary"] is None
-            names = [s["name"] for s in data["servers"]]
-            assert names == ["alpha", "beta"]
+            user_names = [s["name"] for s in data["servers"] if not s.get("builtin")]
+            assert user_names == ["alpha", "beta"]
             for s in data["servers"]:
                 assert s["primary"] is False
             await manager.stop_all()
@@ -249,11 +251,13 @@ class TestStartAPI:
             app, manager = _fresh()
             async with _client(app) as c:
                 await c.post("/api/start", json=_STDIO_CONFIG)
-                assert set(manager.names()) == {"alpha", "beta"}
+                user = {n for n in manager.names() if n != "localmcp"}
+                assert user == {"alpha", "beta"}
                 await c.post("/api/start", json={
                     "mcpServers": {"gamma": {"command": "echo", "args": ["g"]}},
                 })
-                assert set(manager.names()) == {"gamma"}
+                user = {n for n in manager.names() if n != "localmcp"}
+                assert user == {"gamma"}
             await manager.stop_all()
 
     @pytest.mark.asyncio
@@ -343,7 +347,8 @@ class TestStopAPI:
                 await c.post("/api/start", json=_STDIO_CONFIG)
                 r = await c.post("/api/stop")
             assert r.status_code == 200
-            assert manager.names() == []
+            user = [n for n in manager.names() if n != "localmcp"]
+            assert user == []
 
 
 # ── MCP routing ─────────────────────────────────────────────────────────
@@ -490,4 +495,301 @@ class TestFullLifecycle:
 
                 r = await c.get("/api/status")
                 assert r.json()["running"] is False
-                assert r.json()["servers"] == []
+                user = [s for s in r.json()["servers"] if not s.get("builtin")]
+                assert user == []
+
+
+# ── Built-in MCP (/localmcp/mcp + /api/cursor-rule + aggregate) ─────────
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """Drive Starlette's ASGI lifespan protocol manually so the built-in
+    actually starts (httpx.ASGITransport doesn't drive lifespan on its own).
+    Yields once startup completes; cleanly shuts down on exit."""
+    queue: asyncio.Queue = asyncio.Queue()
+    sent: list = []
+
+    async def receive():
+        return await queue.get()
+
+    async def send(msg):
+        sent.append(msg)
+
+    task = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await queue.put({"type": "lifespan.startup"})
+    # Wait for the startup.complete event before yielding to the test body.
+    for _ in range(100):
+        if any(m.get("type") == "lifespan.startup.complete" for m in sent):
+            break
+        await asyncio.sleep(0.02)
+    else:
+        raise RuntimeError("lifespan startup did not complete in 2s")
+    try:
+        yield
+    finally:
+        await queue.put({"type": "lifespan.shutdown"})
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            task.cancel()
+
+
+class TestCursorRuleEndpoint:
+    @pytest.mark.asyncio
+    async def test_returns_markdown_with_no_user_backends(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/api/cursor-rule")
+            assert r.status_code == 200
+            assert r.headers["content-type"].startswith("text/markdown")
+            assert "alwaysApply: true" in r.text
+            assert "# LocalMCP backends" in r.text
+            # No user backends -> generator emits the "no backends loaded" body.
+            assert "No user backends are currently loaded" in r.text
+            # Default access is read-only -> directive is present.
+            assert "Access mode: READ-ONLY" in r.text
+
+    @pytest.mark.asyncio
+    async def test_scoped_style_includes_globs(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get(
+                    "/api/cursor-rule",
+                    params={"style": "scoped", "globs": "**/*.py"},
+                )
+            assert r.status_code == 200
+            assert "alwaysApply: false" in r.text
+            assert "globs: **/*.py" in r.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_style_400(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/api/cursor-rule", params={"style": "bogus"})
+            assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_access_param_read_write_changes_directive(self):
+        """`?access=read-write` swaps the directive block from the
+        forbid-mutations text to the confirm-with-user text."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                ro = await c.get("/api/cursor-rule")
+                rw = await c.get(
+                    "/api/cursor-rule", params={"access": "read-write"}
+                )
+            assert ro.status_code == 200
+            assert rw.status_code == 200
+            assert "Access mode: READ-ONLY" in ro.text
+            assert "Access mode: READ-ONLY" not in rw.text
+            assert "Access mode: READ-WRITE" in rw.text
+            assert "(read-write mode)" in rw.text
+            assert "(read-only mode)" in ro.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_access_400(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/api/cursor-rule", params={"access": "bogus"})
+            assert r.status_code == 400
+            assert "Unknown access" in r.json()["error"]
+
+
+class TestBuiltinMcp:
+    @pytest.mark.asyncio
+    async def test_aggregate_exposes_localmcp_tools(self):
+        """With no user backends configured, /mcp still serves the eight
+        `localmcp__*` tools provided by the built-in."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                init = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"},
+                    },
+                }
+                headers = {"Accept": "application/json, text/event-stream"}
+                await c.post("/mcp", json=init, headers=headers)
+                r = await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                    headers=headers,
+                )
+            data = r.json()
+            names = {t["name"] for t in data["result"]["tools"]}
+            expected = {
+                f"localmcp__{n}"
+                for n in (
+                    "generate_cursor_rule",
+                    "list_loaded_servers",
+                    "get_aggregated_tool_catalog",
+                    "generate_cursor_mcp_json",
+                    "start_server",
+                    "stop_server",
+                    "reload_config",
+                )
+            }
+            assert expected <= names
+
+    @pytest.mark.asyncio
+    async def test_localmcp_mcp_direct_route_unprefixed(self):
+        """At /localmcp/mcp the same tools appear without the `localmcp__`
+        namespace prefix (raw passthrough)."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                init = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"},
+                    },
+                }
+                headers = {"Accept": "application/json, text/event-stream"}
+                await c.post("/localmcp/mcp", json=init, headers=headers)
+                r = await c.post(
+                    "/localmcp/mcp",
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                    headers=headers,
+                )
+            data = r.json()
+            names = {t["name"] for t in data["result"]["tools"]}
+            assert "generate_cursor_rule" in names
+            # No prefix at the direct route.
+            assert not any(n.startswith("localmcp__") for n in names)
+
+    @pytest.mark.asyncio
+    async def test_aggregate_call_tool_round_trip(self):
+        """Round-trip a `tools/call` of `localmcp__generate_cursor_rule`
+        at /mcp and assert the body is the same shape /api/cursor-rule
+        returns."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                init = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"},
+                    },
+                }
+                headers = {"Accept": "application/json, text/event-stream"}
+                await c.post("/mcp", json=init, headers=headers)
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "localmcp__generate_cursor_rule",
+                            "arguments": {},
+                        },
+                    },
+                    headers=headers,
+                )
+                http_r = await c.get("/api/cursor-rule")
+            data = r.json()
+            content = data["result"]["content"]
+            assert content
+            assert content[0]["type"] == "text"
+            mcp_body = content[0]["text"]
+            # Same generator under both transports -> identical output.
+            assert mcp_body == http_r.text
+
+
+class TestCatalogEndpoint:
+    @pytest.mark.asyncio
+    async def test_api_catalog_includes_builtin_with_seven_tools(self):
+        """/api/catalog must include the always-on builtin row with all
+        7 tools and well-formed inputSchemas, even when no user backend
+        is configured. (Was 8 prior to the comprehensive-rule rewrite,
+        which dropped `list_supported_backends`.)"""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/api/catalog")
+            assert r.status_code == 200
+            assert r.headers["content-type"].startswith("application/json")
+            data = r.json()
+            assert "localmcp" in data
+            row = data["localmcp"]
+            assert row["transport"] == "builtin"
+            assert row["running"] is True
+            tools = row["tools"]
+            assert isinstance(tools, list) and len(tools) == 7
+            # Each tool entry has the keys the UI consumes.
+            for t in tools:
+                assert "name" in t
+                assert "description" in t
+                assert "inputSchema" in t
+                assert isinstance(t["inputSchema"], dict)
+            # Empty capabilities are coerced to []
+            assert row["prompts"] == []
+            assert row["resources"] == []
+            assert row["resourceTemplates"] == []
+
+    @pytest.mark.asyncio
+    async def test_catalog_html_page(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/catalog")
+            assert r.status_code == 200
+            assert r.headers["content-type"].startswith("text/html")
+            # Sanity: the page references the JSON endpoint and renders the title.
+            assert "Tool catalog" in r.text
+            assert "/api/catalog" in r.text
+
+    @pytest.mark.asyncio
+    async def test_api_catalog_matches_mcp_tool(self):
+        """`/api/catalog` and `localmcp__get_aggregated_tool_catalog` use
+        the same helper, so the JSON they emit must be identical."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                # HTTP catalog
+                http_r = await c.get("/api/catalog")
+                http_payload = http_r.json()
+
+                # MCP tool round-trip via /mcp
+                init = {
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "t", "version": "1"},
+                    },
+                }
+                headers = {"Accept": "application/json, text/event-stream"}
+                await c.post("/mcp", json=init, headers=headers)
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {
+                            "name": "localmcp__get_aggregated_tool_catalog",
+                            "arguments": {},
+                        },
+                    },
+                    headers=headers,
+                )
+            mcp_text = r.json()["result"]["content"][0]["text"]
+            assert json.loads(mcp_text) == http_payload

@@ -8,8 +8,17 @@ GIT_BRANCH_NAME := $(shell git rev-parse --abbrev-ref HEAD | awk '{print A[split
 BUILDX_BUILDER_NAME ?= localmcp-builder
 BUILDX_IMAGE_NAME ?= localmcp-buildx
 PLATFORM ?= linux/arm64
-SSH_KEY_FILE ?= ~/.ssh/id_rsa
-KUBERNETES_CONFIG_FILE ?= ~/.kube/config
+SSH_KEY_FILE ?= $(HOME)/.ssh/id_rsa
+KUBERNETES_CONFIG_FILE ?= $(HOME)/.kube/config
+# Host docker socket bind-mounted into the container so mcp-server-docker can
+# drive whichever daemon `docker run` is going through. /var/run/docker.sock is
+# the path natively exposed inside the Docker-Desktop and Rancher-Desktop VMs
+# on macOS, so it works with both as long as `docker run` reaches the same
+# daemon (i.e. the active `docker context` matches the daemon you want
+# mcp-server-docker to talk to). For Rancher Desktop in its no-admin mode,
+# first run `docker context use rancher-desktop` and then override the path:
+#   make localmcp-up DOCKER_SOCK_FILE=$(HOME)/.rd/docker.sock
+DOCKER_SOCK_FILE ?= /var/run/docker.sock
 
 # when using local registry, host.docker.internal is how you reach
 # the host from inside the buildx container
@@ -31,6 +40,11 @@ LOCALMCP_CONTAINER  ?= rancher-localmcp
 # Default config file pushed into localmcp via `make localmcp-load`.
 # Override with: make localmcp-load LOCALMCP_CONFIG=path/to/other.json
 LOCALMCP_CONFIG     ?= $(shell pwd)/configs/default-localmcp.json
+# Persistent volume mount list applied at `make localmcp-up`. One docker `-v`
+# spec per line, with `$HOME` / `$WORKSPACE_DIR` / `$KUBERNETES_CONFIG_FILE`
+# expanded. See the file header for the full format.
+# Override with: make localmcp-up LOCALMCP_VOLUMES_FILE=path/to/your-volumes.conf
+LOCALMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
 
 # .env file is a good place to define ssh and token vars
 -include .env
@@ -73,12 +87,14 @@ test-vars:
 	$(info DOCKER_REGISTRY=$(DOCKER_REGISTRY))
 	$(info SSH_KEY_FILE=$(SSH_KEY_FILE))
 	$(info KUBERNETES_CONFIG_FILE=$(KUBERNETES_CONFIG_FILE))
+	$(info DOCKER_SOCK_FILE=$(DOCKER_SOCK_FILE))
 	$(info CORP_ROOT_AUTHORITY_CERT_NAME=$(CORP_ROOT_AUTHORITY_CERT_NAME))
 	$(info WORKSPACE_DIR=$(WORKSPACE_DIR))
 	$(info LOCALMCP_PORT=$(LOCALMCP_PORT))
 	$(info LOCALMCP_IMAGE_TAG=$(LOCALMCP_IMAGE_TAG))
 	$(info LOCALMCP_CONTAINER=$(LOCALMCP_CONTAINER))
 	$(info LOCALMCP_CONFIG=$(LOCALMCP_CONFIG))
+	$(info LOCALMCP_VOLUMES_FILE=$(LOCALMCP_VOLUMES_FILE))
 
 # Export the corporate root authority certificate from the macOS keychain.
 # Required for builds behind a TLS-intercepting corporate proxy (Palo Alto).
@@ -167,25 +183,47 @@ localmcp-image-rebuild: get-corp-root-authority-cert setup-buildx
 
 # Run the localmcp container detached. Rebuilds the image first only if it
 # doesn't already exist locally; use localmcp-image-rebuild to force.
-# Mounts:
-#   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config (read-only)
-#   - $(WORKSPACE_DIR)           -> /workspace (filesystem MCP, code-index)
-# Named volumes survive `docker rm` so npx/uv/code-index caches persist.
+#
+# Volume mounts come from $(LOCALMCP_VOLUMES_FILE) (see
+# configs/default-volumes.conf for the format). Defaults wire up:
+#   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config    (read-only)
+#   - $(WORKSPACE_DIR)           -> /workspace            (filesystem + code-index)
+#   - $(DOCKER_SOCK_FILE)        -> /var/run/docker.sock  (mcp-server-docker)
+#   - localmcp-npm               -> /root/.npm            (npx cache)
+#   - localmcp-cache             -> /root/.cache          (uv/pip cache)
+#   - localmcp-code-index        -> /tmp/code_indexer     (code-index DB)
+# Named volumes survive `docker rm` so caches/indexes persist across restarts.
+# Edit the conf file (or point LOCALMCP_VOLUMES_FILE at your own) to change.
 localmcp-up:
+	@if [ ! -f "$(LOCALMCP_VOLUMES_FILE)" ]; then \
+		echo "ERROR: volumes file not found: $(LOCALMCP_VOLUMES_FILE)"; \
+		echo "       Override with LOCALMCP_VOLUMES_FILE=path/to/your.conf"; \
+		exit 2; \
+	fi
 	@if ! docker image inspect $(LOCALMCP_IMAGE_TAG) >/dev/null 2>&1; then \
 		echo "==> image $(LOCALMCP_IMAGE_TAG) not found locally; building it"; \
 		$(MAKE) localmcp-image-build; \
 	fi
 	-docker rm -f $(LOCALMCP_CONTAINER) 2>/dev/null
+	@echo "==> mounting volumes from $(LOCALMCP_VOLUMES_FILE)"
+	@export HOME='$(HOME)' \
+	        WORKSPACE_DIR='$(WORKSPACE_DIR)' \
+	        KUBERNETES_CONFIG_FILE='$(KUBERNETES_CONFIG_FILE)' \
+	        DOCKER_SOCK_FILE='$(DOCKER_SOCK_FILE)' ; \
+	VOLUME_ARGS="" ; \
+	while IFS= read -r line; do \
+		eval "spec=\"$$line\"" ; \
+		case "$$spec" in "~/"*) spec="$$HOME/$${spec#\~/}" ;; esac ; \
+		echo "    -v $$spec" ; \
+		VOLUME_ARGS="$$VOLUME_ARGS -v $$spec" ; \
+	done < <(sed -e 's/[[:space:]]*\#.*$$//' -e '/^[[:space:]]*$$/d' \
+		"$(LOCALMCP_VOLUMES_FILE)") ; \
 	docker run -d \
 		--name $(LOCALMCP_CONTAINER) \
 		--restart unless-stopped \
 		--network host \
 		--add-host host.docker.internal=$(shell ipconfig getifaddr en0) \
-		-v $(KUBERNETES_CONFIG_FILE):/root/.kube/config:ro \
-		-v $(WORKSPACE_DIR):/workspace \
-		-v localmcp-npm:/root/.npm \
-		-v localmcp-cache:/root/.cache \
+		$$VOLUME_ARGS \
 		$(LOCALMCP_IMAGE_TAG)
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
 		if curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \

@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.shared.exceptions import McpError
+from mcp.types import METHOD_NOT_FOUND
 
 if TYPE_CHECKING:
     from localmcp.manager import ProxyManager
@@ -122,7 +124,8 @@ class Aggregator:
             tools: list = []
             for state, r in zip(states, results):
                 if isinstance(r, BaseException):
-                    self._log(f"{state.name} list_tools failed: {r}")
+                    if not _is_method_not_found(r):
+                        self._log(f"{state.name} list_tools failed: {r}")
                     continue
                 for t in getattr(r, "tools", []) or []:
                     tools.append(_qualified_copy(t, state.name))
@@ -165,7 +168,8 @@ class Aggregator:
             prompts: list = []
             for state, r in zip(states, results):
                 if isinstance(r, BaseException):
-                    self._log(f"{state.name} list_prompts failed: {r}")
+                    if not _is_method_not_found(r):
+                        self._log(f"{state.name} list_prompts failed: {r}")
                     continue
                 for p in getattr(r, "prompts", []) or []:
                     prompts.append(_qualified_copy(p, state.name))
@@ -204,7 +208,8 @@ class Aggregator:
             out: list = []
             for state, r in zip(states, results):
                 if isinstance(r, BaseException):
-                    self._log(f"{state.name} list_resources failed: {r}")
+                    if not _is_method_not_found(r):
+                        self._log(f"{state.name} list_resources failed: {r}")
                     continue
                 for res in getattr(r, "resources", []) or []:
                     self._resource_origin[str(res.uri)] = state.name
@@ -223,7 +228,8 @@ class Aggregator:
             out: list = []
             for state, r in zip(states, results):
                 if isinstance(r, BaseException):
-                    self._log(f"{state.name} list_resource_templates failed: {r}")
+                    if not _is_method_not_found(r):
+                        self._log(f"{state.name} list_resource_templates failed: {r}")
                     continue
                 for tmpl in getattr(r, "resourceTemplates", []) or []:
                     out.append(tmpl)
@@ -272,6 +278,16 @@ class Aggregator:
             if last_error is not None:
                 raise last_error
             raise RuntimeError(f"No backend available to serve '{uri_str}'")
+
+
+def _is_method_not_found(exc: BaseException) -> bool:
+    """True if ``exc`` is the JSON-RPC ``-32601`` response from a backend that
+    simply doesn't advertise this capability (e.g. ``@modelcontextprotocol/
+    server-filesystem`` doesn't implement ``prompts/list`` or
+    ``resources/list``). Aggregator fans out list calls to every running
+    backend in parallel and treats those replies as "skip this backend";
+    they're protocol-level *expected* and shouldn't pollute the log."""
+    return isinstance(exc, McpError) and exc.error.code == METHOD_NOT_FOUND
 
 
 def _qualified_copy(item: Any, server_name: str):

@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 
+from localmcp.builtin import (
+    collect_backend_full_catalog,
+    render_comprehensive_rule,
+)
 from localmcp.config import ConfigError
 from localmcp.manager import ProxyManager
-from localmcp.ui import HTML_TEMPLATE
+from localmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -33,7 +44,10 @@ SCHEMA = SchemaGenerator(
                 "`<server>__<original>` (double underscore). Resource URIs are kept "
                 "verbatim; reads are routed to the originating backend via a "
                 "URI->backend cache populated from `resources/list`, with a fan-out "
-                "fallback for URIs not previously listed."
+                "fallback for URIs not previously listed.\n"
+                "- `/localmcp/mcp` is the always-on built-in MCP that exposes "
+                "self-introspection and Cursor-rule-generation tools "
+                "(`localmcp__*` at /mcp). It survives configuration reloads."
             ),
         },
         "servers": [{"url": "http://localhost:8000"}],
@@ -305,6 +319,102 @@ def create_app(manager: ProxyManager | None = None):
         except Exception as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
+    async def api_catalog(request: Request) -> JSONResponse:
+        """
+        summary: Read-only documentation snapshot of every running backend.
+        tags: [introspection]
+        responses:
+          200:
+            description: |
+              Per-backend tool / prompt / resource / resource-template
+              catalog. Each entry includes its full payload (name,
+              description, inputSchema where applicable). Capabilities
+              the backend doesn't implement (`-32601`) are returned as
+              empty lists. Both this endpoint and the
+              `localmcp__get_aggregated_tool_catalog` MCP tool return
+              the same shape.
+            content:
+              application/json:
+                schema:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    properties:
+                      transport: { type: string, nullable: true }
+                      running:   { type: boolean }
+                      tools: { type: array, items: { type: object } }
+                      prompts: { type: array, items: { type: object } }
+                      resources: { type: array, items: { type: object } }
+                      resourceTemplates: { type: array, items: { type: object } }
+        """
+        catalog = await collect_backend_full_catalog(manager, skip_self=False)
+        return JSONResponse(catalog)
+
+    async def catalog_page(request: Request) -> HTMLResponse:
+        """
+        summary: Standalone, searchable documentation page for every running backend.
+        tags: [introspection]
+        responses:
+          200:
+            description: HTML page that fetches /api/catalog and renders it fully expanded.
+        """
+        return HTMLResponse(CATALOG_HTML_TEMPLATE)
+
+    async def api_cursor_rule(request: Request) -> Response:
+        """
+        summary: Generate a comprehensive Cursor `.mdc` rule from the loaded backends.
+        tags: [introspection]
+        parameters:
+          - in: query
+            name: access
+            required: false
+            schema:
+              type: string
+              enum: [read-only, read-write]
+              default: read-only
+            description: |
+              read-only (default): rule body forbids the agent from
+              calling tools tagged `[mutates]`, `[destructive]`, or
+              `[?]`. read-write: tools are still tagged but the agent
+              is allowed to call them with user confirmation for
+              destructive ones.
+          - in: query
+            name: style
+            required: false
+            schema:
+              type: string
+              enum: [always-apply, scoped]
+              default: always-apply
+          - in: query
+            name: globs
+            required: false
+            schema: { type: string }
+            description: Glob pattern when style=scoped (e.g. `**/*.py`).
+        responses:
+          200:
+            description: Markdown body of the generated rule (frontmatter + body).
+            content:
+              text/markdown: {}
+          400:
+            description: Unknown `access` or `style` value.
+        """
+        access = request.query_params.get("access", "read-only")
+        if access not in ("read-only", "read-write"):
+            return JSONResponse(
+                {"error": f"Unknown access: {access!r}"}, status_code=400
+            )
+        style = request.query_params.get("style", "always-apply")
+        if style not in ("always-apply", "scoped"):
+            return JSONResponse(
+                {"error": f"Unknown style: {style!r}"}, status_code=400
+            )
+        globs = request.query_params.get("globs")
+        catalog = await collect_backend_full_catalog(manager, skip_self=True)
+        body = render_comprehensive_rule(
+            catalog, access=access, style=style, globs=globs
+        )
+        return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
+
     async def api_logs(request: Request) -> StreamingResponse:
         """
         summary: Server-Sent-Events stream of activity logs across all proxies.
@@ -329,7 +439,27 @@ def create_app(manager: ProxyManager | None = None):
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        # Start the always-on builtin MCP before serving any traffic so
+        # /localmcp/mcp answers immediately and the aggregator can already
+        # fan tools/list out to the builtin's in-memory client session.
+        try:
+            await manager.start_builtin()
+        except Exception as exc:  # never fail the whole app on builtin startup
+            logging.getLogger("localmcp").error(
+                "builtin failed to start: %s", exc, exc_info=True
+            )
+        try:
+            yield
+        finally:
+            with contextlib.suppress(Exception):
+                await manager.stop_builtin()
+            with contextlib.suppress(Exception):
+                await manager.stop_all()
+
     _starlette = Starlette(
+        lifespan=lifespan,
         routes=[
             Route("/", index),
             Route("/docs", docs),
@@ -338,6 +468,9 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/status", api_status),
             Route("/api/start", api_start, methods=["POST"]),
             Route("/api/stop", api_stop, methods=["POST"]),
+            Route("/api/cursor-rule", api_cursor_rule),
+            Route("/api/catalog", api_catalog),
+            Route("/catalog", catalog_page),
             Route("/api/logs", api_logs),
             Route("/api/servers/{name}", api_server_get),
             Route("/api/servers/{name}/start", api_server_start, methods=["POST"]),

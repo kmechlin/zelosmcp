@@ -107,7 +107,10 @@ class TestRemote:
 
 
 class TestNames:
-    @pytest.mark.parametrize("name", ["api", "mcp", "docs", "redoc", "openapi.json"])
+    @pytest.mark.parametrize(
+        "name",
+        ["api", "mcp", "docs", "redoc", "openapi.json", "localmcp"],
+    )
     def test_reserved_names_rejected(self, name):
         with pytest.raises(ConfigError, match="reserved"):
             parse_config({"mcpServers": {name: {"command": "echo"}}})

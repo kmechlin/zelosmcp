@@ -14,6 +14,23 @@
         "@modelcontextprotocol/server-filesystem",
         "/workspace"
       ]
+    },
+    "code-index": {
+      "command": "uvx",
+      "args": [
+        "code-index-mcp",
+        "--project-path",
+        "/workspace"
+      ]
+    },
+    "docker": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-docker"
+      ],
+      "env": {
+        "DOCKER_HOST": "unix:///var/run/docker.sock"
+      }
     }
   }
 }
