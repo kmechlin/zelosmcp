@@ -160,7 +160,14 @@ A `ProxyManager` owns one `ProxyState` per configured backend (handling its own 
 
 ```
 pyproject.toml              # Package definition
-Dockerfile                  # Container image with npx, uvx, git, build tools
+Dockerfile                  # Upstream community-friendly image (no corp cert handling)
+Makefile                    # Nike enterprise build + lifecycle helpers
+configs/
+  default-localmcp.json     # Project-agnostic default backend set
+docker-tools/               # Nike enterprise build infrastructure (cert-aware)
+  Dockerfile                # Multi-stage: base-os -> extra-os -> localmcp
+  buildx.Dockerfile         # Cert-aware buildkit builder image
+  README.md                 # Build flow + Makefile target pointers
 src/localmcp/
   __init__.py
   __main__.py               # python -m localmcp
@@ -177,3 +184,40 @@ tests/
   test_manager_unit.py
   test_proxy_unit.py
 ```
+
+## Nike enterprise deploy
+
+If you're behind Nike's TLS-intercepting proxy (Palo Alto), the upstream build instructions above need an extra step to install the corporate root CA before `apt`/`pip`/`npm`/`uvx` can clear the proxy. The [`docker-tools/`](docker-tools/) directory holds a cert-aware multi-stage build for exactly that, and the [`Makefile`](Makefile) wires up the full lifecycle.
+
+Quickstart:
+
+```bash
+make get-corp-root-authority-cert    # exports docker-tools/cert.pem from macOS keychain
+make localmcp-image-build            # builds the cert-aware image (localmcp:dev)
+make localmcp-up                     # runs the container with kubeconfig + workspace mounted
+make localmcp-load                   # POSTs configs/default-localmcp.json to /api/start
+```
+
+Verify it's working:
+
+```bash
+make localmcp-status                 # container running? + curl probes
+make localmcp-list-tools             # tools exposed by each backend
+```
+
+Day-to-day:
+
+| Target | What it does |
+|---|---|
+| `make localmcp-up` | Start the container (auto-builds the image if missing). |
+| `make localmcp-load LOCALMCP_CONFIG=path/to/config.json` | Push a custom backend config (consumer projects supply their own). |
+| `make localmcp-warm-index` | Pre-populate code-index's file index for first-call latency. |
+| `make localmcp-shell` | Bash inside the running container. |
+| `make localmcp-logs` | Tail container logs. |
+| `make localmcp-restart` | Bounce the container. |
+| `make localmcp-down` | Stop + remove the container. |
+| `make clean` | Tear down container, builder, and the cert-aware buildx image. |
+
+The default `LOCALMCP_CONFIG` is [`configs/default-localmcp.json`](configs/default-localmcp.json) (rancher-k3s + filesystem). Consumer projects (e.g. `nike.automation_abstraction_infra`) ship their own `localmcp.json` with backends pre-configured for their workspace and load it via `make localmcp-load LOCALMCP_CONFIG=/path/to/their/config.json`.
+
+See [`docker-tools/README.md`](docker-tools/README.md) for the build flow and the rationale for keeping the upstream `Dockerfile` and the cert-aware build separate.

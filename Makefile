@@ -1,0 +1,333 @@
+PROJECT_NAME ?= $(shell basename $$(git rev-parse --show-toplevel))
+PROJECT_BASE_IMAGE ?= python:3.12-slim-bookworm
+PYTHON_VERSION ?= 3.12
+SHELL := /bin/bash
+DOCKER_TOOLS_PATH ?= docker-tools
+DOCKERFILE ?= ${DOCKER_TOOLS_PATH}/Dockerfile
+GIT_BRANCH_NAME := $(shell git rev-parse --abbrev-ref HEAD | awk '{print A[split($$0,A,"/")]}')
+BUILDX_BUILDER_NAME ?= localmcp-builder
+BUILDX_IMAGE_NAME ?= localmcp-buildx
+PLATFORM ?= linux/arm64
+SSH_KEY_FILE ?= ~/.ssh/id_rsa
+KUBERNETES_CONFIG_FILE ?= ~/.kube/config
+
+# when using local registry, host.docker.internal is how you reach
+# the host from inside the buildx container
+DOCKER_REGISTRY ?= host.docker.internal:5001
+
+# Common Name (CN) of the corporate root CA certificate to export from the
+# macOS keychain. Override if the corporate cert ever changes (e.g. via
+# `.env` or a one-off `make ... CORP_ROOT_AUTHORITY_CERT_NAME='New CA Name'`).
+CORP_ROOT_AUTHORITY_CERT_NAME ?= Nike Root Authority NG
+
+# LocalMCP runtime variables. The Cursor-blessed Streamable HTTP proxy listens
+# on $(LOCALMCP_PORT) and exposes its aggregator at /mcp; consumer projects
+# (AAL, etc.) load their own backend configs into the running container via
+# `make localmcp-load LOCALMCP_CONFIG=...`.
+WORKSPACE_DIR       ?= $(HOME)/workspace
+LOCALMCP_PORT       ?= 8000
+LOCALMCP_IMAGE_TAG  ?= localmcp:dev
+LOCALMCP_CONTAINER  ?= rancher-localmcp
+# Default config file pushed into localmcp via `make localmcp-load`.
+# Override with: make localmcp-load LOCALMCP_CONFIG=path/to/other.json
+LOCALMCP_CONFIG     ?= $(shell pwd)/configs/default-localmcp.json
+
+# .env file is a good place to define ssh and token vars
+-include .env
+
+# Define all recipes as PHONY so they always run
+# https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html
+.PHONY: test-vars \
+	get-corp-root-authority-cert \
+	build-buildx-image \
+	setup-buildx \
+	localmcp-image-build \
+	localmcp-image-rebuild \
+	localmcp-up \
+	localmcp-down \
+	localmcp-restart \
+	localmcp-logs \
+	localmcp-shell \
+	localmcp-status \
+	localmcp-ui \
+	localmcp-load \
+	localmcp-stop-all \
+	localmcp-warm-index \
+	localmcp-list-tools \
+	clean
+
+# Print variable values, @: is a no-op and prevents this warning message:
+# "make: Nothing to be done for `test-vars'."
+test-vars:
+	@:
+	$(info PROJECT_NAME=$(PROJECT_NAME))
+	$(info PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE))
+	$(info PYTHON_VERSION=$(PYTHON_VERSION))
+	$(info SHELL=$(SHELL))
+	$(info DOCKER_TOOLS_PATH=$(DOCKER_TOOLS_PATH))
+	$(info DOCKERFILE=$(DOCKERFILE))
+	$(info GIT_BRANCH_NAME=$(GIT_BRANCH_NAME))
+	$(info BUILDX_BUILDER_NAME=$(BUILDX_BUILDER_NAME))
+	$(info BUILDX_IMAGE_NAME=$(BUILDX_IMAGE_NAME))
+	$(info PLATFORM=$(PLATFORM))
+	$(info DOCKER_REGISTRY=$(DOCKER_REGISTRY))
+	$(info SSH_KEY_FILE=$(SSH_KEY_FILE))
+	$(info KUBERNETES_CONFIG_FILE=$(KUBERNETES_CONFIG_FILE))
+	$(info CORP_ROOT_AUTHORITY_CERT_NAME=$(CORP_ROOT_AUTHORITY_CERT_NAME))
+	$(info WORKSPACE_DIR=$(WORKSPACE_DIR))
+	$(info LOCALMCP_PORT=$(LOCALMCP_PORT))
+	$(info LOCALMCP_IMAGE_TAG=$(LOCALMCP_IMAGE_TAG))
+	$(info LOCALMCP_CONTAINER=$(LOCALMCP_CONTAINER))
+	$(info LOCALMCP_CONFIG=$(LOCALMCP_CONFIG))
+
+# Export the corporate root authority certificate from the macOS keychain.
+# Required for builds behind a TLS-intercepting corporate proxy (Palo Alto).
+# The Common Name is parameterized via CORP_ROOT_AUTHORITY_CERT_NAME so it
+# can be overridden if the corporate cert ever changes.
+get-corp-root-authority-cert:
+	security find-certificate -c "$(CORP_ROOT_AUTHORITY_CERT_NAME)" -p > ${DOCKER_TOOLS_PATH}/cert.pem
+
+# build custom buildx image with corporate root authority cert
+build-buildx-image: get-corp-root-authority-cert
+	docker build \
+		--build-arg CERT=${DOCKER_TOOLS_PATH}/cert.pem \
+		--build-arg PROJECT_BASE_IMAGE=${PROJECT_BASE_IMAGE} \
+		--build-arg PYTHON_VERSION=${PYTHON_VERSION} \
+		--target buildx \
+		-t ${BUILDX_IMAGE_NAME} \
+		-f ${DOCKER_TOOLS_PATH}/buildx.Dockerfile \
+		.
+
+# create buildx builder using custom buildx image
+setup-buildx: get-corp-root-authority-cert build-buildx-image
+	if ! docker buildx inspect ${BUILDX_BUILDER_NAME} ; then \
+		echo '[registry."$(DOCKER_REGISTRY)"]' > buildkitd.toml; \
+		echo '  http = true' >> buildkitd.toml; \
+		echo '  insecure = true' >> buildkitd.toml; \
+		docker buildx create \
+			--name ${BUILDX_BUILDER_NAME}  \
+			--config buildkitd.toml \
+			--driver docker-container \
+			--driver-opt image=${BUILDX_IMAGE_NAME}:latest \
+			--bootstrap --use; \
+	fi
+
+# ============================================================================
+# LocalMCP image build + lifecycle
+#
+# The container talks to whatever cluster is in $(KUBERNETES_CONFIG_FILE),
+# mounts $(WORKSPACE_DIR) at /workspace so spawned MCP backends (filesystem,
+# code-index, etc.) can see your code, and exposes the aggregator on
+# $(LOCALMCP_PORT). Networking is host-mode so backends like
+# kubernetes-mcp-server can reach Rancher Desktop's K8s API on 127.0.0.1:6443.
+#
+# Typical usage:
+#   make localmcp-image-build  # one-time per dep change: build the image
+#   make localmcp-up           # start the container (per machine boot)
+#   make localmcp-load         # POST configs/default-localmcp.json (or override)
+#   make localmcp-status       # confirm container is up + status of all backends
+#   make localmcp-shell        # bash inside the running container
+#   make localmcp-logs         # tail container logs
+#   make localmcp-restart      # bounce the container
+#   make localmcp-down         # stop and remove the container
+#   make localmcp-image-rebuild # force fresh build (--no-cache)
+#
+# `make clean` also calls `localmcp-down`.
+# ============================================================================
+
+# Build the localmcp image from the `localmcp` target of $(DOCKERFILE).
+# COPYs the localmcp source from this repo's working tree (build context = .).
+# Loads the result into the local Docker daemon (`--load`) — no registry
+# push, since this is a developer-machine image.
+localmcp-image-build: get-corp-root-authority-cert setup-buildx
+	docker buildx build --load \
+		--builder $(BUILDX_BUILDER_NAME) \
+		--progress plain \
+		--target localmcp \
+		--platform $(PLATFORM) \
+		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
+		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
+		--tag $(LOCALMCP_IMAGE_TAG) \
+		-f $(DOCKERFILE) \
+		.
+
+# Force a fresh rebuild (e.g. after a `pip` dependency change in pyproject.toml
+# or to pick up a new commit). Equivalent to `--no-cache` build.
+localmcp-image-rebuild: get-corp-root-authority-cert setup-buildx
+	docker buildx build --load --no-cache \
+		--builder $(BUILDX_BUILDER_NAME) \
+		--progress plain \
+		--target localmcp \
+		--platform $(PLATFORM) \
+		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
+		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
+		--tag $(LOCALMCP_IMAGE_TAG) \
+		-f $(DOCKERFILE) \
+		.
+
+# Run the localmcp container detached. Rebuilds the image first only if it
+# doesn't already exist locally; use localmcp-image-rebuild to force.
+# Mounts:
+#   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config (read-only)
+#   - $(WORKSPACE_DIR)           -> /workspace (filesystem MCP, code-index)
+# Named volumes survive `docker rm` so npx/uv/code-index caches persist.
+localmcp-up:
+	@if ! docker image inspect $(LOCALMCP_IMAGE_TAG) >/dev/null 2>&1; then \
+		echo "==> image $(LOCALMCP_IMAGE_TAG) not found locally; building it"; \
+		$(MAKE) localmcp-image-build; \
+	fi
+	-docker rm -f $(LOCALMCP_CONTAINER) 2>/dev/null
+	docker run -d \
+		--name $(LOCALMCP_CONTAINER) \
+		--restart unless-stopped \
+		--network host \
+		--add-host host.docker.internal=$(shell ipconfig getifaddr en0) \
+		-v $(KUBERNETES_CONFIG_FILE):/root/.kube/config:ro \
+		-v $(WORKSPACE_DIR):/workspace \
+		-v localmcp-npm:/root/.npm \
+		-v localmcp-cache:/root/.cache \
+		$(LOCALMCP_IMAGE_TAG)
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+			echo ""; \
+			echo "localmcp is up on http://localhost:$(LOCALMCP_PORT)"; \
+			echo "Cursor connects via:     http://localhost:$(LOCALMCP_PORT)/mcp"; \
+			echo "Configure backends:      make localmcp-load   (POSTs $(LOCALMCP_CONFIG))"; \
+			echo "Web UI:                  make localmcp-ui"; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "localmcp did not become ready within 15s; check 'make localmcp-logs'"; \
+	exit 1
+
+localmcp-down:
+	-docker rm -f $(LOCALMCP_CONTAINER)
+
+localmcp-restart:
+	$(MAKE) localmcp-down
+	$(MAKE) localmcp-up
+
+localmcp-logs:
+	@docker logs -f --tail=200 $(LOCALMCP_CONTAINER)
+
+# Drop into a shell inside the running container (useful for debugging
+# spawned MCP backends — checking npx/uvx output, paths, kubeconfig, etc.).
+localmcp-shell:
+	@if ! docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
+		echo "Container $(LOCALMCP_CONTAINER) is not running."; \
+		echo "Start it first with: make localmcp-up"; \
+		exit 1; \
+	fi
+	docker exec -ti $(LOCALMCP_CONTAINER) bash
+
+localmcp-status:
+	@if docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
+		docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ \
+			--format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'; \
+	else \
+		echo "Container $(LOCALMCP_CONTAINER) is NOT running."; \
+		exit 1; \
+	fi
+	@printf "ui:          " && curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
+		http://localhost:$(LOCALMCP_PORT)/ || echo "(unreachable)"
+	@printf "api/status:  " && curl -sS http://localhost:$(LOCALMCP_PORT)/api/status \
+		| python3 -m json.tool 2>/dev/null || echo "(unreachable)"
+	@printf "/mcp:        " && curl -sS -o /dev/null -w "HTTP %{http_code} (503 no backend / 406 backend running on GET / 200 valid POST)\n" \
+		http://localhost:$(LOCALMCP_PORT)/mcp || echo "(unreachable)"
+
+# Open the localmcp web UI in the default browser.
+localmcp-ui:
+	@open http://localhost:$(LOCALMCP_PORT) 2>/dev/null \
+		|| echo "Open this URL manually:  http://localhost:$(LOCALMCP_PORT)"
+
+# Push $(LOCALMCP_CONFIG) into localmcp via its /api/start endpoint.
+# Replaces any currently running server set with the contents of the file.
+# Usage:
+#   make localmcp-load                              # uses configs/default-localmcp.json
+#   make localmcp-load LOCALMCP_CONFIG=other.json   # uses a different file
+localmcp-load:
+	@if [ ! -f "$(LOCALMCP_CONFIG)" ]; then \
+		echo "ERROR: config file not found: $(LOCALMCP_CONFIG)"; \
+		exit 2; \
+	fi
+	@echo "==> validating $(LOCALMCP_CONFIG)"
+	@python3 -m json.tool "$(LOCALMCP_CONFIG)" > /dev/null
+	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status; then \
+		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+		echo "       Run 'make localmcp-up' first."; \
+		exit 1; \
+	fi
+	@echo "==> POSTing config to http://localhost:$(LOCALMCP_PORT)/api/start"
+	@RESP=$$(curl -sS -X POST -H "Content-Type: application/json" \
+		--data-binary @"$(LOCALMCP_CONFIG)" \
+		http://localhost:$(LOCALMCP_PORT)/api/start); \
+	echo "$$RESP" | python3 -m json.tool 2>/dev/null || echo "$$RESP"
+	@echo ""
+	@echo "==> resulting status"
+	@curl -sS http://localhost:$(LOCALMCP_PORT)/api/status | python3 -m json.tool
+
+# Stop all backend servers in localmcp (without stopping localmcp itself).
+localmcp-stop-all:
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/api/stop \
+		| python3 -m json.tool 2>/dev/null \
+		|| echo "(localmcp not reachable on port $(LOCALMCP_PORT))"
+
+# Populate code-index's in-memory file index plus the deep symbol index so
+# tools like find_files / get_file_summary / get_symbol_body work from the
+# first agent interaction. Idempotent and cheap to re-run. No-op if no
+# code-index backend is running.
+localmcp-warm-index:
+	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+		echo "       Run 'make localmcp-up' first."; \
+		exit 1; \
+	fi
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
+		>/dev/null
+	@echo "==> code-index__refresh_index (shallow file list)"
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"code-index__refresh_index","arguments":{}}}' \
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"]) if c else print("(no content)")' 2>/dev/null \
+		|| echo "(call failed — code-index backend may not be running)"
+	@echo "==> code-index__build_deep_index (symbol metadata; may take a while)"
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"code-index__build_deep_index","arguments":{}}}' \
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:300]) if c else print("(no content)")' 2>/dev/null \
+		|| echo "(call failed — code-index backend may not be running)"
+
+# Print the names of every tool currently exposed by the localmcp aggregator,
+# grouped by backend prefix. Handy after `localmcp-load` to confirm what's available.
+localmcp-list-tools:
+	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+		echo "       Run 'make localmcp-up' first."; \
+		exit 1; \
+	fi
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
+		>/dev/null
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); names=[t["name"] for t in d["result"]["tools"]]; \
+from collections import defaultdict; groups=defaultdict(list); \
+[groups[(n.split("__",1)+[""])[0] if "__" in n else "(unprefixed)"].append((n.split("__",1)+[""])[1]) for n in names]; \
+[print(f"\n[{k}] ({len(v)} tools)") or [print(f"  {t}") for t in v] for k,v in sorted(groups.items())]'
+
+# clean everything: container, image, builder, registry config helper
+clean: localmcp-down
+	-docker buildx rm ${BUILDX_BUILDER_NAME}
+	-docker image rm ${BUILDX_IMAGE_NAME}
+	-docker image rm ${LOCALMCP_IMAGE_TAG}
+	-rm -f buildkitd.toml
