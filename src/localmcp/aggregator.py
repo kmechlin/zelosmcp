@@ -138,10 +138,20 @@ class Aggregator:
                 )
             self._log(f"call_tool: {qualified_name}")
             r = await state.client_session.call_tool(original, arguments)
-            if r.isError:
-                from mcp.types import CallToolResult
-                return CallToolResult(content=r.content, isError=True)
-            return r.content
+            # Pass through both content and structuredContent unchanged. The
+            # MCP SDK's lowlevel server validates: if the advertised tool has
+            # an outputSchema and the response's structuredContent is None,
+            # it replaces the response with a validation error. Returning
+            # only `r.content` would drop the backend's structuredContent
+            # (when set) and trip that validation for any tool with a
+            # declared outputSchema (e.g. filesystem, code-index, anything
+            # using FastMCP/SDK >=1.13 with auto-generated schemas).
+            from mcp.types import CallToolResult
+            return CallToolResult(
+                content=r.content,
+                structuredContent=getattr(r, "structuredContent", None),
+                isError=bool(r.isError),
+            )
 
         @server.list_prompts()
         async def list_prompts() -> list:

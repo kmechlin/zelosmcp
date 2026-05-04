@@ -226,14 +226,24 @@ class ProxyState:
             return r.tools
 
         @server.call_tool(validate_input=False)
-        async def call_tool(name: str, arguments: dict[str, Any]) -> list:
+        async def call_tool(name: str, arguments: dict[str, Any]):
             self._emit_log(f"call_tool: {name}")
             r = await session.call_tool(name, arguments)
-            if r.isError:
-                from mcp.types import CallToolResult
+            # Pass through both content and structuredContent unchanged. The
+            # MCP SDK's lowlevel server validates: if the advertised tool has
+            # an outputSchema and the response's structuredContent is None,
+            # it replaces the response with a validation error. Returning
+            # only `r.content` would drop the backend's structuredContent
+            # (when set) and trip that validation for any tool with a
+            # declared outputSchema (e.g. filesystem, code-index, anything
+            # using FastMCP/SDK >=1.13 with auto-generated schemas).
+            from mcp.types import CallToolResult
 
-                return CallToolResult(content=r.content, isError=True)
-            return r.content
+            return CallToolResult(
+                content=r.content,
+                structuredContent=getattr(r, "structuredContent", None),
+                isError=bool(r.isError),
+            )
 
         @server.list_resources()
         async def list_resources() -> list:
