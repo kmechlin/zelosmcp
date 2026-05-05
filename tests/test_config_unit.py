@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from localmcp.config import ConfigError, ServerSpec, parse_config
+from localmcp.config import (
+    ConfigError,
+    ReverseProxySpec,
+    ServerSpec,
+    parse_config,
+)
 
 
 class TestParseStructure:
@@ -181,3 +186,228 @@ class TestServerSpecToStatus:
         d = s.to_status()
         assert d["url"] == "https://x"
         assert d["headers"] == {"Authorization": "Bearer t"}
+
+
+def _stdio_with_proxy(rp: dict) -> dict:
+    """Build a single-server config wrapping ``rp`` as the reverseProxy block."""
+    return {
+        "mcpServers": {
+            "alpha": {"command": "echo", "args": ["a"], "reverseProxy": rp},
+        }
+    }
+
+
+class TestReverseProxy:
+    def test_minimal_block_parses(self):
+        specs, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "http://127.0.0.1:8080",
+        }))
+        rp = specs[0].reverse_proxy
+        assert rp is not None
+        assert rp.mount == "/alpha"
+        assert rp.upstream == "http://127.0.0.1:8080"
+        assert rp.strip_prefix is False
+        assert rp.headers == {}
+        assert rp.auth_bearer is None
+
+    def test_full_block_parses(self):
+        specs, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "https://upstream.example.com:9443",
+            "stripPrefix": True,
+            "headers": {"X-Custom": "yes"},
+            "auth": {"bearer": "literal-token"},
+        }))
+        rp = specs[0].reverse_proxy
+        assert rp is not None
+        assert rp.strip_prefix is True
+        assert rp.headers == {"X-Custom": "yes"}
+        assert rp.auth_bearer == "literal-token"
+
+    def test_remote_backend_can_have_proxy(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "alpha": {
+                    "type": "streamable-http",
+                    "url": "http://x/mcp",
+                    "reverseProxy": {
+                        "mount": "/alpha",
+                        "upstream": "http://127.0.0.1:8080",
+                    },
+                },
+            }
+        })
+        assert specs[0].reverse_proxy is not None
+
+    def test_missing_proxy_field_is_optional(self):
+        specs, _ = parse_config({
+            "mcpServers": {"alpha": {"command": "echo"}},
+        })
+        assert specs[0].reverse_proxy is None
+
+    @pytest.mark.parametrize(
+        "mount, message",
+        [
+            ("alpha", "must start with"),       # no leading slash
+            ("/alpha/", "must not end with"),   # trailing slash
+            ("/foo/../bar", "must not contain '..'"),
+            ("/al pha", "whitespace"),
+            ("/api", "reserved"),
+            ("/mcp", "reserved"),
+            ("/", "reserved"),
+            ("/docs", "reserved"),
+        ],
+    )
+    def test_bad_mounts_rejected(self, mount, message):
+        with pytest.raises(ConfigError, match=message):
+            parse_config(_stdio_with_proxy({
+                "mount": mount,
+                "upstream": "http://127.0.0.1:8080",
+            }))
+
+    def test_missing_mount_rejected(self):
+        with pytest.raises(ConfigError, match="mount"):
+            parse_config(_stdio_with_proxy({"upstream": "http://x:8080"}))
+
+    def test_missing_upstream_rejected(self):
+        with pytest.raises(ConfigError, match="upstream"):
+            parse_config(_stdio_with_proxy({"mount": "/alpha"}))
+
+    @pytest.mark.parametrize(
+        "upstream",
+        ["", "ftp://upstream", "not a url", "http://"],
+    )
+    def test_bad_upstream_rejected(self, upstream):
+        with pytest.raises(ConfigError, match="upstream"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": upstream,
+            }))
+
+    def test_strip_prefix_must_be_bool(self):
+        with pytest.raises(ConfigError, match="stripPrefix"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "stripPrefix": "yes",
+            }))
+
+    def test_headers_must_be_string_map(self):
+        with pytest.raises(ConfigError, match="reverseProxy.headers"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "headers": {"X": 1},
+            }))
+
+    def test_auth_must_be_object(self):
+        with pytest.raises(ConfigError, match="auth must be an object"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "auth": "Bearer xyz",
+            }))
+
+    def test_auth_bearer_env_interpolation(self, monkeypatch):
+        monkeypatch.setenv("PINCHER_HTTP_KEY", "s3cret")
+        specs, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "http://x:8080",
+            "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
+        }))
+        assert specs[0].reverse_proxy.auth_bearer == "s3cret"
+
+    def test_auth_bearer_missing_env_var_raises(self, monkeypatch):
+        monkeypatch.delenv("PINCHER_HTTP_KEY", raising=False)
+        with pytest.raises(ConfigError, match="not set"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
+            }))
+
+    def test_overlapping_mounts_rejected_exact(self):
+        with pytest.raises(ConfigError, match="claimed by both"):
+            parse_config({
+                "mcpServers": {
+                    "a": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/dup", "upstream": "http://a:1"},
+                    },
+                    "b": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/dup", "upstream": "http://b:1"},
+                    },
+                }
+            })
+
+    def test_overlapping_mounts_rejected_prefix(self):
+        with pytest.raises(ConfigError, match="overlap"):
+            parse_config({
+                "mcpServers": {
+                    "a": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/foo", "upstream": "http://a:1"},
+                    },
+                    "b": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/foo/bar", "upstream": "http://b:1"},
+                    },
+                }
+            })
+
+    def test_sibling_mounts_allowed(self):
+        # `/foo` and `/foobar` look prefix-y but split on segment boundaries.
+        specs, _ = parse_config({
+            "mcpServers": {
+                "a": {
+                    "command": "echo",
+                    "reverseProxy": {"mount": "/foo", "upstream": "http://a:1"},
+                },
+                "b": {
+                    "command": "echo",
+                    "reverseProxy": {"mount": "/foobar", "upstream": "http://b:1"},
+                },
+            }
+        })
+        assert {s.name for s in specs} == {"a", "b"}
+
+    def test_to_status_round_trip(self):
+        rp = ReverseProxySpec(
+            mount="/alpha",
+            upstream="http://x:8080",
+            strip_prefix=True,
+            headers={"X-Custom": "v"},
+            auth_bearer="s3cret",
+        )
+        out = rp.to_status()
+        assert out["mount"] == "/alpha"
+        assert out["upstream"] == "http://x:8080"
+        assert out["stripPrefix"] is True
+        assert out["headers"] == {"X-Custom": "v"}
+        # Bearer is masked so /api/status doesn't leak the secret.
+        assert out["auth"] == {"bearer": "***"}
+
+    def test_to_status_omits_optional_fields_when_default(self):
+        rp = ReverseProxySpec(mount="/alpha", upstream="http://x:8080")
+        out = rp.to_status()
+        assert "stripPrefix" not in out
+        assert "headers" not in out
+        assert "auth" not in out
+
+    def test_server_spec_to_status_includes_proxy(self):
+        s = ServerSpec(
+            name="alpha",
+            transport="stdio",
+            command="echo",
+            reverse_proxy=ReverseProxySpec(
+                mount="/alpha",
+                upstream="http://x:8080",
+            ),
+        )
+        d = s.to_status()
+        assert d["reverseProxy"] == {
+            "mount": "/alpha",
+            "upstream": "http://x:8080",
+        }

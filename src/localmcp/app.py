@@ -362,7 +362,7 @@ def create_app(manager: ProxyManager | None = None):
 
     async def api_cursor_rule(request: Request) -> Response:
         """
-        summary: Generate a comprehensive Cursor `.mdc` rule from the loaded backends.
+        summary: Generate a comprehensive agent-instructions document from the loaded backends.
         tags: [introspection]
         parameters:
           - in: query
@@ -379,6 +379,21 @@ def create_app(manager: ProxyManager | None = None):
               is allowed to call them with user confirmation for
               destructive ones.
           - in: query
+            name: format
+            required: false
+            schema:
+              type: string
+              enum: [cursor-mdc, copilot-instructions]
+              default: cursor-mdc
+            description: |
+              cursor-mdc (default): YAML frontmatter wrapper for
+              `.cursor/rules/*.mdc` (Cursor IDE).
+              copilot-instructions: plain markdown body for
+              `.github/copilot-instructions.md` (VSCode + GitHub
+              Copilot). When `format=copilot-instructions`, `style`
+              and `globs` are silently ignored (Copilot uses a
+              different scoping mechanism).
+          - in: query
             name: style
             required: false
             schema:
@@ -392,16 +407,21 @@ def create_app(manager: ProxyManager | None = None):
             description: Glob pattern when style=scoped (e.g. `**/*.py`).
         responses:
           200:
-            description: Markdown body of the generated rule (frontmatter + body).
+            description: Markdown body of the generated rule (frontmatter + body, or body-only for copilot-instructions).
             content:
               text/markdown: {}
           400:
-            description: Unknown `access` or `style` value.
+            description: Unknown `access`, `format`, or `style` value.
         """
         access = request.query_params.get("access", "read-only")
         if access not in ("read-only", "read-write"):
             return JSONResponse(
                 {"error": f"Unknown access: {access!r}"}, status_code=400
+            )
+        fmt = request.query_params.get("format", "cursor-mdc")
+        if fmt not in ("cursor-mdc", "copilot-instructions"):
+            return JSONResponse(
+                {"error": f"Unknown format: {fmt!r}"}, status_code=400
             )
         style = request.query_params.get("style", "always-apply")
         if style not in ("always-apply", "scoped"):
@@ -411,7 +431,7 @@ def create_app(manager: ProxyManager | None = None):
         globs = request.query_params.get("globs")
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
         body = render_comprehensive_rule(
-            catalog, access=access, style=style, globs=globs
+            catalog, access=access, style=style, globs=globs, fmt=fmt
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 
@@ -450,6 +470,15 @@ def create_app(manager: ProxyManager | None = None):
             logging.getLogger("localmcp").error(
                 "builtin failed to start: %s", exc, exc_info=True
             )
+        # Bring up the reverse-proxy httpx client so the dispatcher can
+        # forward requests as soon as the first backend with a configured
+        # reverseProxy starts.
+        try:
+            await manager.start_http_client()
+        except Exception as exc:
+            logging.getLogger("localmcp").error(
+                "reverse-proxy client failed to start: %s", exc, exc_info=True
+            )
         try:
             yield
         finally:
@@ -457,6 +486,8 @@ def create_app(manager: ProxyManager | None = None):
                 await manager.stop_builtin()
             with contextlib.suppress(Exception):
                 await manager.stop_all()
+            with contextlib.suppress(Exception):
+                await manager.stop_http_client()
 
     _starlette = Starlette(
         lifespan=lifespan,
@@ -479,7 +510,8 @@ def create_app(manager: ProxyManager | None = None):
     )
 
     async def asgi_app(scope, receive, send) -> None:
-        """Dispatch /<name>/mcp and /mcp before Starlette's router."""
+        """Dispatch /<name>/mcp, /mcp, and any backend's reverseProxy mount
+        before Starlette's router."""
         if scope["type"] == "http":
             path = scope["path"]
             normalized = path.rstrip("/") or "/"
@@ -517,6 +549,27 @@ def create_app(manager: ProxyManager | None = None):
                     msg = f"No MCP server '{target_label}' is running"
                 resp = JSONResponse({"error": msg}, status_code=503)
                 return await resp(scope, receive, send)
+
+            # Reverse-proxy dispatch: a backend may declare a
+            # `reverseProxy.mount` so its HTTP sidecar is reachable
+            # under LocalMCP's port. Match on the original (un-stripped)
+            # path since mounts are absolute. /<name>/mcp wins above so
+            # a backend named `pincher` mounted at `/pincher` keeps
+            # `/pincher/mcp` for MCP and routes `/pincher/v1/...` here.
+            match = manager.find_reverse_proxy(path)
+            if match is not None:
+                spec, state = match
+                running = (
+                    state is not None
+                    and getattr(state, "running", False)
+                )
+                if not running:
+                    resp = JSONResponse(
+                        {"error": f"No MCP server '{spec.name}' is running"},
+                        status_code=503,
+                    )
+                    return await resp(scope, receive, send)
+                return await manager.proxy_request(spec, scope, receive, send)
 
         await _starlette(scope, receive, send)
 

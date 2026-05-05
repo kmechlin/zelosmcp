@@ -308,7 +308,7 @@ class TestCallTool:
         Regression: previously, the aggregator returned only ``r.content``,
         dropping ``structuredContent``. The MCP SDK then replaced the
         response with a validation error for any tool that declared an
-        ``outputSchema`` (filesystem, code-index, anything FastMCP-based).
+        ``outputSchema`` (filesystem, anything FastMCP-based).
         """
         m, sess_alpha, _ = _make_manager_with_two_running_backends()
         sess_alpha.call_tool = AsyncMock(return_value=FakeResult(

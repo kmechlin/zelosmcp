@@ -229,6 +229,60 @@ class TestRenderComprehensiveRule:
         with pytest.raises(ValueError, match="Unknown access"):
             render_comprehensive_rule({}, access="bogus")
 
+    def test_unknown_format_raises(self):
+        with pytest.raises(ValueError, match="Unknown format"):
+            render_comprehensive_rule({}, fmt="bogus")
+
+    def test_copilot_instructions_strips_frontmatter(self):
+        """`fmt=copilot-instructions` returns the same body as cursor-mdc
+        but without the YAML frontmatter wrapper. Suitable for
+        `.github/copilot-instructions.md`."""
+        catalog = {
+            "fs": _backend(
+                [
+                    _tool(
+                        "read_text_file",
+                        annotations={"readOnlyHint": True},
+                        input_schema={
+                            "type": "object",
+                            "properties": {"path": {}},
+                            "required": ["path"],
+                        },
+                    ),
+                ]
+            )
+        }
+        mdc = render_comprehensive_rule(catalog, fmt="cursor-mdc")
+        copi = render_comprehensive_rule(catalog, fmt="copilot-instructions")
+        # No frontmatter in copilot-instructions output.
+        assert not copi.startswith("---")
+        assert "alwaysApply" not in copi
+        assert "globs:" not in copi
+        # Cursor MDC: strip the frontmatter and the body should match.
+        assert mdc.startswith("---\n")
+        _, _, mdc_after = mdc.partition("---\n")  # remove first ---
+        _, _, mdc_body = mdc_after.partition("---\n")  # remove second ---
+        assert mdc_body == copi
+        # Body still carries the directive + per-tool entry.
+        assert "# LocalMCP backend tool catalog" in copi
+        assert "Access mode: READ-ONLY" in copi
+        assert "`fs__read_text_file`" in copi
+
+    def test_copilot_instructions_ignores_style_and_globs(self):
+        """style/globs only affect frontmatter, which copilot-instructions
+        omits. The body must be identical regardless of those args."""
+        catalog = {"fs": _backend([_tool("read_text_file", annotations={"readOnlyHint": True})])}
+        a = render_comprehensive_rule(
+            catalog, fmt="copilot-instructions", style="always-apply"
+        )
+        b = render_comprehensive_rule(
+            catalog,
+            fmt="copilot-instructions",
+            style="scoped",
+            globs="**/*.py",
+        )
+        assert a == b
+
     def test_per_tool_entry_shape(self):
         out = render_comprehensive_rule(
             {
@@ -323,10 +377,10 @@ class TestRenderComprehensiveRule:
                     ),
                 ]
             ),
-            "code-index": _backend(
+            "pincher": _backend(
                 [
-                    _tool("find_files", annotations={"readOnlyHint": True}),
-                    _tool("set_project_path"),  # mutates by prefix
+                    _tool("search", annotations={"readOnlyHint": True}),
+                    _tool("index"),  # ambiguous mutability
                 ]
             ),
             "docker": _backend(
@@ -335,7 +389,7 @@ class TestRenderComprehensiveRule:
                     _tool("pull_image"),  # mutates by prefix
                 ]
             ),
-            "rancher-k3s": _backend(
+            "kubernetes": _backend(
                 [
                     _tool("pods_list", annotations={"readOnlyHint": True}),
                     _tool("pods_delete", annotations={"destructiveHint": True}),
@@ -345,9 +399,9 @@ class TestRenderComprehensiveRule:
         out = render_comprehensive_rule(catalog)
         for header in (
             "## `filesystem`",
-            "## `code-index`",
+            "## `pincher`",
             "## `docker`",
-            "## `rancher-k3s`",
+            "## `kubernetes`",
         ):
             assert header in out
         assert "## Mutability markers" in out
@@ -355,7 +409,7 @@ class TestRenderComprehensiveRule:
         assert "## Don't do this" in out
         # Pick one entry from each backend to spot-check qualification.
         assert "`filesystem__read_text_file`" in out
-        assert "`rancher-k3s__pods_delete`" in out
+        assert "`kubernetes__pods_delete`" in out
 
 
 class TestToolRegistry:
@@ -380,6 +434,15 @@ class TestToolRegistry:
         assert "access" in props
         assert props["access"]["enum"] == ["read-only", "read-write"]
         assert props["access"]["default"] == "read-only"
+
+    def test_generate_cursor_rule_schema_includes_format(self):
+        gen = next(t for t in _TOOLS if t.name == "generate_cursor_rule")
+        props = gen.inputSchema["properties"]
+        assert "format" in props
+        assert props["format"]["enum"] == [
+            "cursor-mdc", "copilot-instructions",
+        ]
+        assert props["format"]["default"] == "cursor-mdc"
 
 
 class TestToolHandlers:
@@ -423,6 +486,34 @@ class TestToolHandlers:
         with pytest.raises(McpError, match="Unknown access"):
             await _HANDLERS["generate_cursor_rule"](
                 m.builtin, {"access": "bogus"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_format_copilot_instructions(self):
+        """Handler accepts `format=copilot-instructions` and returns a
+        body without the YAML frontmatter."""
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        result = await _HANDLERS["generate_cursor_rule"](
+            m.builtin, {"format": "copilot-instructions"}
+        )
+        body = result[0].text
+        assert not body.startswith("---")
+        assert "alwaysApply" not in body
+        # Directive + body content still present.
+        assert "Access mode: READ-ONLY" in body
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_rejects_bad_format(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager()
+        with pytest.raises(McpError, match="Unknown format"):
+            await _HANDLERS["generate_cursor_rule"](
+                m.builtin, {"format": "bogus"}
             )
 
     @pytest.mark.asyncio

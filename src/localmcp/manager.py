@@ -8,12 +8,37 @@ subscriptions across all servers.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
+
+import httpx
+from starlette.responses import JSONResponse
 
 from localmcp.aggregator import Aggregator
 from localmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
 from localmcp.config import ServerSpec, parse_config
 from localmcp.proxy import ProxyState
+
+
+# Hop-by-hop headers per RFC 7230 §6.1 plus a few headers httpx manages
+# itself (Host gets rewritten to the upstream's authority; Content-Length
+# is recomputed from the forwarded body). Stripped on both request and
+# response sides of the proxy.
+_HOP_BY_HOP: frozenset[str] = frozenset({
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+})
+
+
+_log = logging.getLogger("localmcp.manager")
 
 
 class ProxyManager:
@@ -37,6 +62,12 @@ class ProxyManager:
         # `_attach_log_pump` requires a running event loop.
         self.builtin = BuiltinServer(self)
         self.servers[BUILTIN_NAME] = self.builtin
+        # Shared HTTP client used by the reverse-proxy dispatcher to forward
+        # requests to backend HTTP sidecars. Lifecycle is owned by app.py's
+        # lifespan hook (start_http_client / stop_http_client) so connection
+        # pooling survives across config reloads. Tests can replace the
+        # client by setting this attribute directly.
+        self._http_client: httpx.AsyncClient | None = None
 
     @property
     def primary(self) -> str | None:
@@ -186,6 +217,232 @@ class ProxyManager:
         if task is not None:
             task.cancel()
         await self.builtin.stop()
+
+    async def start_http_client(self) -> None:
+        """Initialise the shared httpx.AsyncClient used by the reverse-proxy
+        dispatcher. Called once from the Starlette lifespan startup hook.
+        Idempotent."""
+        if self._http_client is not None:
+            return
+        # Modest connect timeout so a stopped backend fails fast; longer
+        # read window so streaming responses (dashboard HTML, slow query
+        # endpoints) don't get cut off. follow_redirects stays off — we
+        # forward the upstream's redirect response verbatim instead.
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0),
+            follow_redirects=False,
+        )
+
+    async def stop_http_client(self) -> None:
+        """Close the shared httpx.AsyncClient. Called from the lifespan
+        shutdown hook. Idempotent."""
+        client, self._http_client = self._http_client, None
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception as exc:
+                _log.warning("reverse-proxy: client close failed: %s", exc)
+
+    def find_reverse_proxy(
+        self, path: str
+    ) -> tuple[ServerSpec, Any] | None:
+        """Locate the backend whose reverseProxy.mount best matches ``path``.
+
+        Returns ``(spec, state)`` where ``state`` may be ``None`` if the
+        backend is configured but not currently running. Returns ``None``
+        when no mount matches. Longest-prefix wins so nested mounts like
+        ``/foo`` and ``/foo/bar`` would both resolve correctly (though
+        ``parse_config`` rejects overlap today, the longest-match rule
+        keeps this future-proof).
+        """
+        best: tuple[ServerSpec, Any] | None = None
+        best_len = -1
+        for name, spec in self._specs.items():
+            if spec.reverse_proxy is None:
+                continue
+            mount = spec.reverse_proxy.mount
+            # Segment-aware: '/foo' must match '/foo' or '/foo/...' but
+            # never '/foobar'. Append '/' before testing.
+            if path == mount or path.startswith(mount + "/"):
+                if len(mount) > best_len:
+                    best_len = len(mount)
+                    best = (spec, self.servers.get(name))
+        return best
+
+    async def proxy_request(
+        self,
+        spec: ServerSpec,
+        scope: dict[str, Any],
+        receive: Any,
+        send: Any,
+    ) -> None:
+        """Forward an ASGI HTTP request to ``spec.reverse_proxy.upstream``.
+
+        Reads the request body in full (non-streaming v1 — pincher's payloads
+        are tiny and this keeps the implementation simple). Streams the
+        response body back to the caller via ``Response.aiter_raw``.
+        """
+        rp = spec.reverse_proxy
+        assert rp is not None, "proxy_request called without a reverseProxy"
+        client = self._http_client
+        if client is None:
+            resp = JSONResponse(
+                {"error": "reverse-proxy client not initialised"},
+                status_code=503,
+            )
+            await resp(scope, receive, send)
+            return
+
+        # Build the forwarded URL. When stripPrefix is true we drop the mount
+        # before forwarding (so '/foo/v1/x' -> '<upstream>/v1/x'); otherwise
+        # the path is forwarded verbatim ('/foo/v1/x' -> '<upstream>/foo/v1/x'),
+        # which lets upstreams like pincher honour X-Forwarded-Prefix
+        # themselves.
+        request_path = scope.get("path", "/")
+        if rp.strip_prefix and request_path.startswith(rp.mount):
+            forwarded_path = request_path[len(rp.mount) :] or "/"
+        else:
+            forwarded_path = request_path
+
+        raw_query = scope.get("query_string", b"") or b""
+        upstream_url = httpx.URL(rp.upstream + forwarded_path)
+        if raw_query:
+            upstream_url = upstream_url.copy_with(query=raw_query)
+
+        # Read the full request body. Bounded by the client; non-streaming
+        # by design (see docstring).
+        body_chunks: list[bytes] = []
+        more = True
+        while more:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+            chunk = message.get("body", b"") or b""
+            if chunk:
+                body_chunks.append(chunk)
+            more = message.get("more_body", False)
+        body = b"".join(body_chunks)
+
+        # Build forwarded headers: drop hop-by-hop, then layer X-Forwarded-*,
+        # user-configured headers, and bearer auth in that order. Each later
+        # layer wins so users can override the canonical X-Forwarded-* set
+        # if they need to.
+        headers: list[tuple[str, str]] = []
+        for raw_name, raw_value in scope.get("headers", []):
+            hname = raw_name.decode("latin-1")
+            if hname.lower() in _HOP_BY_HOP:
+                continue
+            headers.append((hname, raw_value.decode("latin-1")))
+
+        client_host = ""
+        client_info = scope.get("client")
+        if isinstance(client_info, (list, tuple)) and client_info:
+            client_host = str(client_info[0])
+
+        scheme = scope.get("scheme", "http")
+        host_header = ""
+        for raw_name, raw_value in scope.get("headers", []):
+            if raw_name == b"host":
+                host_header = raw_value.decode("latin-1")
+                break
+
+        forwarded: dict[str, str] = {
+            "X-Forwarded-Proto": scheme,
+            "X-Forwarded-Prefix": rp.mount,
+        }
+        if host_header:
+            forwarded["X-Forwarded-Host"] = host_header
+        if client_host:
+            # Append onto any existing X-Forwarded-For chain so transparent
+            # proxies in front of LocalMCP keep their origin information.
+            existing_xff = next(
+                (v for k, v in headers if k.lower() == "x-forwarded-for"),
+                None,
+            )
+            forwarded["X-Forwarded-For"] = (
+                f"{existing_xff}, {client_host}" if existing_xff else client_host
+            )
+            # Drop the existing X-Forwarded-For so the merged value wins.
+            headers = [
+                (k, v) for k, v in headers if k.lower() != "x-forwarded-for"
+            ]
+
+        # User-configured headers take precedence over the canonical
+        # forwarded set so admins can override (e.g. set a fixed
+        # X-Forwarded-Host for clients with a known external hostname).
+        for k, v in rp.headers.items():
+            forwarded[k] = v
+
+        # Drop any forwarded-key duplicates from the original header list,
+        # then append the canonical forwarded set.
+        forwarded_lower = {k.lower() for k in forwarded}
+        headers = [(k, v) for k, v in headers if k.lower() not in forwarded_lower]
+        headers.extend(forwarded.items())
+
+        # Inject bearer token only when the caller hasn't supplied their own
+        # Authorization header. Lets clients with their own credentials pass
+        # through unchanged.
+        if rp.auth_bearer:
+            has_auth = any(k.lower() == "authorization" for k, _ in headers)
+            if not has_auth:
+                headers.append(("Authorization", f"Bearer {rp.auth_bearer}"))
+
+        method = scope.get("method", "GET")
+        try:
+            req = client.build_request(
+                method,
+                upstream_url,
+                headers=headers,
+                content=body if body else None,
+            )
+            # Non-streaming v1: read the full upstream body before relaying.
+            # Pincher's payloads (dashboard HTML, JSON tool responses) are
+            # small enough that this keeps the implementation simple. If we
+            # later proxy SSE / large downloads, switch to client.send(stream=True)
+            # and aiter_bytes().
+            upstream_resp = await client.send(req)
+        except httpx.RequestError as exc:
+            resp = JSONResponse(
+                {
+                    "error": "reverse-proxy upstream unreachable",
+                    "backend": spec.name,
+                    "upstream": rp.upstream,
+                    "detail": str(exc),
+                },
+                status_code=502,
+            )
+            await resp(scope, receive, send)
+            return
+
+        response_headers: list[tuple[bytes, bytes]] = []
+        for raw_name, raw_value in upstream_resp.headers.raw:
+            name_lower = raw_name.decode("latin-1").lower()
+            if name_lower in _HOP_BY_HOP:
+                continue
+            # httpx auto-decompresses the upstream's body (gzip / br /
+            # deflate) when we read .content, so a forwarded
+            # Content-Encoding header would mismatch the bytes we send.
+            # The browser would try to decompress already-plain HTML and
+            # render an empty page. Drop the encoding header — at the
+            # current size of these responses (dashboard ~50KB, tool
+            # JSONs much smaller) the lack of wire compression is
+            # negligible.
+            if name_lower == "content-encoding":
+                continue
+            response_headers.append((raw_name, raw_value))
+
+        await send({
+            "type": "http.response.start",
+            "status": upstream_resp.status_code,
+            "headers": response_headers,
+        })
+        await send({
+            "type": "http.response.body",
+            "body": upstream_resp.content,
+            "more_body": False,
+        })
 
     def status(self) -> dict[str, Any]:
         servers = []

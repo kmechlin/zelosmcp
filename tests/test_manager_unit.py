@@ -217,3 +217,124 @@ class TestLogAggregation:
         m = ProxyManager()
         q = asyncio.Queue()
         m.unsubscribe_logs(q)
+
+
+class TestReverseProxy:
+    """Lookup behavior of ProxyManager.find_reverse_proxy.
+
+    The httpx client and proxy_request integration is exercised via the
+    end-to-end tests in test_app_integration.py. This block only covers
+    the path-matching / longest-prefix logic.
+    """
+
+    @pytest.mark.asyncio
+    async def test_find_returns_running_state(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            await m.start_all({
+                "mcpServers": {
+                    "alpha": {
+                        "command": "echo",
+                        "reverseProxy": {
+                            "mount": "/alpha",
+                            "upstream": "http://127.0.0.1:9000",
+                        },
+                    },
+                },
+            })
+            match = m.find_reverse_proxy("/alpha/v1/health")
+            assert match is not None
+            spec, state = match
+            assert spec.name == "alpha"
+            assert state is m.get("alpha")
+            assert state.running is True
+            await m.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_find_returns_none_for_no_match(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            await m.start_all({
+                "mcpServers": {
+                    "alpha": {
+                        "command": "echo",
+                        "reverseProxy": {
+                            "mount": "/alpha",
+                            "upstream": "http://127.0.0.1:9000",
+                        },
+                    },
+                },
+            })
+            assert m.find_reverse_proxy("/beta/v1/health") is None
+            assert m.find_reverse_proxy("/api/status") is None
+            await m.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_find_skips_backends_without_proxy(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            await m.start_all({
+                "mcpServers": {
+                    "alpha": {"command": "echo"},
+                },
+            })
+            assert m.find_reverse_proxy("/alpha/x") is None
+            await m.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_segment_aware_no_false_positive(self):
+        """``/foo`` must not match ``/foobar/...``."""
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            await m.start_all({
+                "mcpServers": {
+                    "foo": {
+                        "command": "echo",
+                        "reverseProxy": {
+                            "mount": "/foo",
+                            "upstream": "http://127.0.0.1:9000",
+                        },
+                    },
+                },
+            })
+            assert m.find_reverse_proxy("/foobar/v1") is None
+            assert m.find_reverse_proxy("/foo") is not None
+            assert m.find_reverse_proxy("/foo/anything") is not None
+            await m.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_status_includes_reverse_proxy(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager()
+            await m.start_all({
+                "mcpServers": {
+                    "alpha": {
+                        "command": "echo",
+                        "reverseProxy": {
+                            "mount": "/alpha",
+                            "upstream": "http://127.0.0.1:9000",
+                        },
+                    },
+                },
+            })
+            status = m.status()
+            row = next(s for s in status["servers"] if s["name"] == "alpha")
+            assert row["spec"]["reverseProxy"] == {
+                "mount": "/alpha",
+                "upstream": "http://127.0.0.1:9000",
+            }
+            await m.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_http_client_lifecycle_idempotent(self):
+        m = ProxyManager()
+        # Idempotent: calling start twice doesn't reinitialise.
+        await m.start_http_client()
+        first = m._http_client
+        await m.start_http_client()
+        assert m._http_client is first
+        # Idempotent: calling stop twice is fine.
+        await m.stop_http_client()
+        assert m._http_client is None
+        await m.stop_http_client()
+        assert m._http_client is None

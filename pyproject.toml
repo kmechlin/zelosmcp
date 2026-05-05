@@ -12,6 +12,7 @@ dependencies = [
     "starlette",
     "uvicorn",
     "pyyaml",
+    "httpx>=0.25",
 ]
 
 [project.scripts]

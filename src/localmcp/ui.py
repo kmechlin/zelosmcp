@@ -510,9 +510,9 @@ HTML_TEMPLATE = """\
         spellcheck="false"
       >{
   "mcpServers": {
-    "code-index": {
-      "command": "uvx",
-      "args": ["code-index-mcp"]
+    "pincher": {
+      "command": "pincher",
+      "args": ["--data-dir", "/tmp/pincher"]
     }
   }
 }</textarea>
@@ -774,6 +774,26 @@ HTML_TEMPLATE = """\
       const meta = document.createElement("div");
       meta.className = "server-meta grow";
       meta.textContent = makeUrl(s.name, false);
+      // Reverse-proxy mount (when configured) on the same line as the
+      // MCP URL. Linkified to the live mount when the backend is up.
+      const rp = s.spec && s.spec.reverseProxy;
+      if (rp && rp.mount && rp.upstream) {
+        meta.appendChild(document.createTextNode(" \\u00B7 Proxy: "));
+        const mountLabel = rp.mount + "/*";
+        if (s.running) {
+          const link = document.createElement("a");
+          link.href = rp.mount + "/";
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = mountLabel;
+          // Don't trigger row expansion when the user clicks the link.
+          link.onclick = (ev) => ev.stopPropagation();
+          meta.appendChild(link);
+        } else {
+          meta.appendChild(document.createTextNode(mountLabel));
+        }
+        meta.appendChild(document.createTextNode(" \\u2192 " + rp.upstream));
+      }
       row.appendChild(meta);
 
       // The always-on builtin can't be started/stopped from the UI; show a

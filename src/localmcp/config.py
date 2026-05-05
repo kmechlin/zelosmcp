@@ -10,9 +10,11 @@ rejected up front so configs cannot collide with the app's own routes.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 
 RESERVED_NAMES: frozenset[str] = frozenset({
@@ -28,11 +30,59 @@ RESERVED_NAMES: frozenset[str] = frozenset({
     "localmcp",
 })
 
+# Path prefixes a backend's reverseProxy.mount cannot claim. These either
+# host LocalMCP's own surface (/api/*, /docs, /redoc, /openapi.json,
+# /catalog) or are reserved by the MCP dispatcher (/, /mcp). Anything not
+# in this set is fair game.
+RESERVED_MOUNTS: frozenset[str] = frozenset({
+    "/",
+    "/api",
+    "/mcp",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/catalog",
+})
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]*$")
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class ConfigError(ValueError):
     """Raised when a config payload cannot be parsed into ServerSpecs."""
+
+
+@dataclass
+class ReverseProxySpec:
+    """HTTP reverse-proxy configuration for one backend.
+
+    When set, LocalMCP forwards HTTP requests on ``mount`` to ``upstream``,
+    injecting a canonical ``X-Forwarded-*`` header set so the upstream knows
+    its public-facing path. Lets you expose a backend's HTTP sidecar (e.g.
+    pincher's dashboard) through LocalMCP's port without leaking the
+    backend's own port.
+    """
+
+    mount: str
+    upstream: str
+    strip_prefix: bool = False
+    headers: dict[str, str] = field(default_factory=dict)
+    auth_bearer: str | None = None
+
+    def to_status(self) -> dict[str, Any]:
+        """JSON-serializable view round-tripping the input config shape.
+
+        ``auth.bearer`` is intentionally omitted from the status payload so
+        secrets don't leak through ``/api/status``.
+        """
+        info: dict[str, Any] = {"mount": self.mount, "upstream": self.upstream}
+        if self.strip_prefix:
+            info["stripPrefix"] = True
+        if self.headers:
+            info["headers"] = dict(self.headers)
+        if self.auth_bearer:
+            info["auth"] = {"bearer": "***"}
+        return info
 
 
 @dataclass
@@ -47,6 +97,7 @@ class ServerSpec:
     cwd: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
+    reverse_proxy: ReverseProxySpec | None = None
 
     def to_status(self) -> dict[str, Any]:
         """Compact JSON-serializable view used by status endpoints."""
@@ -63,6 +114,8 @@ class ServerSpec:
             info["url"] = self.url
             if self.headers:
                 info["headers"] = dict(self.headers)
+        if self.reverse_proxy is not None:
+            info["reverseProxy"] = self.reverse_proxy.to_status()
         return info
 
 
@@ -94,11 +147,126 @@ def _coerce_str_dict(value: Any, field_name: str, server_name: str) -> dict[str,
     return out
 
 
+def _validate_mount(server_name: str, mount: Any) -> str:
+    """Normalize and validate a reverse-proxy mount path.
+
+    Returns the canonical form (leading slash, no trailing slash). Rejects
+    values that would shadow LocalMCP's own routes or the MCP dispatcher.
+    """
+    if not isinstance(mount, str) or not mount:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount must be a non-empty string"
+        )
+    if not mount.startswith("/"):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount must start with '/' (got {mount!r})"
+        )
+    if any(ch.isspace() for ch in mount):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount must not contain whitespace"
+        )
+    if ".." in mount:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount must not contain '..'"
+        )
+    if mount != "/" and mount.endswith("/"):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount must not end with '/' (got {mount!r})"
+        )
+    if mount in RESERVED_MOUNTS:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.mount '{mount}' is reserved "
+            "(collides with a built-in route)"
+        )
+    return mount
+
+
+def _interpolate_env(value: str, server_name: str, field_name: str) -> str:
+    """Replace ``${VAR}`` substrings with values from ``os.environ``.
+
+    Raises :class:`ConfigError` when a referenced variable is not set, so
+    misconfigured deployments fail loudly at parse time instead of silently
+    forwarding ``Authorization: Bearer ${PINCHER_HTTP_KEY}`` literally.
+    """
+    def _replace(match: re.Match[str]) -> str:
+        var = match.group(1)
+        env_val = os.environ.get(var)
+        if env_val is None:
+            raise ConfigError(
+                f"Server '{server_name}': {field_name} references "
+                f"${{{var}}} but the environment variable is not set"
+            )
+        return env_val
+
+    return _ENV_VAR_RE.sub(_replace, value)
+
+
+def _parse_reverse_proxy(server_name: str, raw: Any) -> ReverseProxySpec:
+    """Validate and normalize one ``reverseProxy`` block."""
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Server '{server_name}': 'reverseProxy' must be an object"
+        )
+
+    mount = _validate_mount(server_name, raw.get("mount"))
+
+    upstream = raw.get("upstream")
+    if not isinstance(upstream, str) or not upstream:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.upstream must be a non-empty string"
+        )
+    parsed = urlparse(upstream)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.upstream must be an "
+            f"http:// or https:// URL with a host (got {upstream!r})"
+        )
+
+    strip_prefix_raw = raw.get("stripPrefix", False)
+    if not isinstance(strip_prefix_raw, bool):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.stripPrefix must be a boolean"
+        )
+
+    headers: dict[str, str] = {}
+    if "headers" in raw and raw["headers"] is not None:
+        headers = _coerce_str_dict(raw["headers"], "reverseProxy.headers", server_name)
+
+    auth_bearer: str | None = None
+    auth_raw = raw.get("auth")
+    if auth_raw is not None:
+        if not isinstance(auth_raw, dict):
+            raise ConfigError(
+                f"Server '{server_name}': reverseProxy.auth must be an object"
+            )
+        bearer_raw = auth_raw.get("bearer")
+        if bearer_raw is not None:
+            if not isinstance(bearer_raw, str):
+                raise ConfigError(
+                    f"Server '{server_name}': reverseProxy.auth.bearer must be a string"
+                )
+            auth_bearer = _interpolate_env(
+                bearer_raw, server_name, "reverseProxy.auth.bearer"
+            )
+
+    return ReverseProxySpec(
+        mount=mount.rstrip("/") if mount != "/" else mount,
+        upstream=upstream.rstrip("/"),
+        strip_prefix=strip_prefix_raw,
+        headers=headers,
+        auth_bearer=auth_bearer,
+    )
+
+
 def _parse_server(name: str, raw: Any) -> ServerSpec:
     if not isinstance(raw, dict):
         raise ConfigError(f"Server '{name}': entry must be an object")
 
     declared_type = raw.get("type")
+
+    reverse_proxy: ReverseProxySpec | None = None
+    if "reverseProxy" in raw and raw["reverseProxy"] is not None:
+        reverse_proxy = _parse_reverse_proxy(name, raw["reverseProxy"])
 
     # Stdio: presence of `command` (matches Cursor's discrimination rule).
     if "command" in raw:
@@ -125,6 +293,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             args=list(args_raw),
             env=env,
             cwd=cwd,
+            reverse_proxy=reverse_proxy,
         )
 
     # Remote transports: discriminated by `type`.
@@ -145,12 +314,43 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             transport=transport,
             url=url.strip(),
             headers=headers,
+            reverse_proxy=reverse_proxy,
         )
 
     raise ConfigError(
         f"Server '{name}': could not determine transport. "
         "Provide 'command' (stdio) or 'type' set to 'sse' or 'streamable-http'."
     )
+
+
+def _check_mount_overlap(specs: list[ServerSpec]) -> None:
+    """Reject configs where two backends' mounts overlap.
+
+    A mount ``a`` overlaps ``b`` if either is a prefix of the other (treating
+    them as path segments, so ``/foo`` overlaps ``/foo/bar`` but not
+    ``/foobar``). The first conflicting pair raises :class:`ConfigError`.
+    """
+    mounts: list[tuple[str, str]] = [
+        (s.name, s.reverse_proxy.mount) for s in specs if s.reverse_proxy is not None
+    ]
+    for i, (name_a, mount_a) in enumerate(mounts):
+        for name_b, mount_b in mounts[i + 1 :]:
+            if mount_a == mount_b:
+                raise ConfigError(
+                    f"reverseProxy mount '{mount_a}' is claimed by both "
+                    f"'{name_a}' and '{name_b}'"
+                )
+            # Segment-aware prefix check: '/foo' overlaps '/foo/bar' but
+            # NOT '/foobar'. Append '/' so 'startswith' tests segment
+            # boundaries correctly.
+            longer, shorter = (
+                (mount_a, mount_b) if len(mount_a) > len(mount_b) else (mount_b, mount_a)
+            )
+            if longer.startswith(shorter + "/"):
+                raise ConfigError(
+                    f"reverseProxy mounts '{mount_a}' ('{name_a}') and "
+                    f"'{mount_b}' ('{name_b}') overlap"
+                )
 
 
 def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None]:
@@ -187,6 +387,8 @@ def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None]:
             raise ConfigError(f"Duplicate server name (case-insensitive): '{name}'")
         seen.add(lower)
         specs.append(_parse_server(name, entry))
+
+    _check_mount_overlap(specs)
 
     primary = raw.get("primaryMCP")
     if primary is not None and not isinstance(primary, str):

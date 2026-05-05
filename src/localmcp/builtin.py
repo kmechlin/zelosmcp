@@ -67,13 +67,16 @@ _TOOLS: list[Tool] = [
     Tool(
         name="generate_cursor_rule",
         description=(
-            "Generate a comprehensive Cursor `.mdc` rule body listing "
+            "Generate a comprehensive agent-instructions body listing "
             "every tool from every currently-loaded backend, with "
             "per-tool description, arg summary, and a "
             "[readonly]/[mutates]/[destructive]/[?] mutability marker. "
             "`access=read-only` (default) appends a directive forbidding "
             "the agent from calling mutating tools; `access=read-write` "
-            "still calls them out but allows them with confirmation."
+            "still calls them out but allows them with confirmation. "
+            "`format=cursor-mdc` (default) wraps with YAML frontmatter "
+            "for `.cursor/rules/*.mdc`; `format=copilot-instructions` "
+            "returns the plain body for `.github/copilot-instructions.md`."
         ),
         inputSchema={
             "type": "object",
@@ -90,13 +93,27 @@ _TOOLS: list[Tool] = [
                     ),
                     "default": "read-only",
                 },
+                "format": {
+                    "type": "string",
+                    "enum": ["cursor-mdc", "copilot-instructions"],
+                    "description": (
+                        "cursor-mdc: YAML frontmatter wrapper for "
+                        "`.cursor/rules/*.mdc` (Cursor IDE). "
+                        "copilot-instructions: plain markdown body for "
+                        "`.github/copilot-instructions.md` (VSCode + "
+                        "GitHub Copilot). `style` and `globs` are "
+                        "ignored when `format=copilot-instructions`."
+                    ),
+                    "default": "cursor-mdc",
+                },
                 "style": {
                     "type": "string",
                     "enum": ["always-apply", "scoped"],
                     "description": (
                         "always-apply: rule applies to every Cursor "
                         "session (`alwaysApply: true`). scoped: applies "
-                        "only when files matching `globs` are open."
+                        "only when files matching `globs` are open. "
+                        "Only meaningful for `format=cursor-mdc`."
                     ),
                     "default": "always-apply",
                 },
@@ -105,7 +122,8 @@ _TOOLS: list[Tool] = [
                     "description": (
                         "Glob pattern(s) for `style=scoped` (e.g. "
                         "`**/*.py` or `src/**/*.{ts,tsx}`). Ignored when "
-                        "style is always-apply."
+                        "style is always-apply or format is "
+                        "copilot-instructions."
                     ),
                 },
             },
@@ -348,25 +366,43 @@ def render_comprehensive_rule(
     access: str = "read-only",
     style: str = "always-apply",
     globs: str | None = None,
+    fmt: str = "cursor-mdc",
 ) -> str:
-    """Render a comprehensive Cursor ``.mdc`` rule from the output of
-    :func:`collect_backend_full_catalog`. Lists every tool from every
+    """Render a comprehensive agent-instructions document from the output
+    of :func:`collect_backend_full_catalog`. Lists every tool from every
     backend with a description, arg summary, and mutability marker,
     plus an access-mode directive at the top.
 
     ``access`` controls the directive: ``"read-only"`` (default) tells
     the agent not to call any tool that may mutate state; ``"read-write"``
     flags mutators but allows them with user confirmation.
+
+    ``fmt`` selects the wrapper format:
+      - ``"cursor-mdc"`` (default): YAML frontmatter (``alwaysApply``,
+        ``globs``) suitable for ``.cursor/rules/*.mdc``.
+      - ``"copilot-instructions"``: plain markdown, no frontmatter,
+        suitable for ``.github/copilot-instructions.md``. ``style`` and
+        ``globs`` are ignored in this format because Copilot uses a
+        different scoping mechanism (``.github/instructions/*.instructions.md``
+        with an ``applyTo:`` frontmatter — out of scope here).
     """
     if access not in ("read-only", "read-write"):
         raise ValueError(f"Unknown access mode: {access!r}")
+    if fmt not in ("cursor-mdc", "copilot-instructions"):
+        raise ValueError(f"Unknown format: {fmt!r}")
 
-    fm = _frontmatter(style=style, globs=globs, access=access)
+    if fmt == "copilot-instructions":
+        # Copilot consumes plain markdown — no YAML frontmatter. We keep
+        # the body identical so the agent gets the same directive +
+        # tool catalog regardless of which IDE is loading it.
+        fm = ""
+    else:
+        fm = _frontmatter(style=style, globs=globs, access=access)
     directive = _DIRECTIVE_READ_ONLY if access == "read-only" else _DIRECTIVE_READ_WRITE
 
     # Skip the builtin in the rule — including it would tell the agent
     # how to call tools that re-generate the rule itself, which is noisy
-    # and not what users want pinned in their Cursor sessions.
+    # and not what users want pinned in their IDE sessions.
     user_backends = {
         name: data
         for name, data in (catalog or {}).items()
@@ -557,6 +593,11 @@ async def _h_generate_cursor_rule(
         raise McpError(
             ErrorData(code=INVALID_PARAMS, message=f"Unknown access: {access!r}")
         )
+    fmt = args.get("format", "cursor-mdc")
+    if fmt not in ("cursor-mdc", "copilot-instructions"):
+        raise McpError(
+            ErrorData(code=INVALID_PARAMS, message=f"Unknown format: {fmt!r}")
+        )
     style = args.get("style", "always-apply")
     if style not in ("always-apply", "scoped"):
         raise McpError(
@@ -566,7 +607,7 @@ async def _h_generate_cursor_rule(
     catalog = await collect_backend_full_catalog(self_.manager, skip_self=True)
     return _text(
         render_comprehensive_rule(
-            catalog, access=access, style=style, globs=globs
+            catalog, access=access, style=style, globs=globs, fmt=fmt
         )
     )
 

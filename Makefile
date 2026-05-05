@@ -35,6 +35,13 @@ CORP_ROOT_AUTHORITY_CERT_NAME ?= Nike Root Authority NG
 # `make localmcp-load LOCALMCP_CONFIG=...`.
 WORKSPACE_DIR       ?= $(HOME)/workspace
 LOCALMCP_PORT       ?= 8000
+# Host bind address for the published $(LOCALMCP_PORT). 127.0.0.1 means
+# only the Mac itself can reach :8000 (tightest, matches the network-
+# isolation goal of [docs/reverse-proxy.md](docs/reverse-proxy.md));
+# 0.0.0.0 exposes :8000 on every interface so peer devices on the LAN
+# can hit it. Override per-invocation:
+#   make localmcp-up LOCALMCP_BIND_ADDR=0.0.0.0
+LOCALMCP_BIND_ADDR  ?= 127.0.0.1
 LOCALMCP_IMAGE_TAG  ?= localmcp:dev
 LOCALMCP_CONTAINER  ?= rancher-localmcp
 # Default config file pushed into localmcp via `make localmcp-load`.
@@ -45,6 +52,16 @@ LOCALMCP_CONFIG     ?= $(shell pwd)/configs/default-localmcp.json
 # expanded. See the file header for the full format.
 # Override with: make localmcp-up LOCALMCP_VOLUMES_FILE=path/to/your-volumes.conf
 LOCALMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
+
+# pincherMCP source baked into the localmcp image at build time.
+# Defaults to kmechlin's fork branch which adds --basepath / --trust-proxy
+# (used by configs/default-localmcp.json's reverseProxy entry). Once the
+# upstream PR merges, override at the command line to pin a release:
+#   make localmcp-image-rebuild \
+#     PINCHER_REPO=https://github.com/kwad77/pincherMCP.git \
+#     PINCHER_REF=v0.3.0
+PINCHER_REPO ?= https://github.com/kmechlin/pincherMCP.git
+PINCHER_REF  ?= feat/reverse-proxy-basepath
 
 # .env file is a good place to define ssh and token vars
 -include .env
@@ -57,6 +74,8 @@ LOCALMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
 	setup-buildx \
 	localmcp-image-build \
 	localmcp-image-rebuild \
+	localmcp-kubeconfig \
+	localmcp-clean-kubeconfig \
 	localmcp-up \
 	localmcp-down \
 	localmcp-restart \
@@ -91,6 +110,7 @@ test-vars:
 	$(info CORP_ROOT_AUTHORITY_CERT_NAME=$(CORP_ROOT_AUTHORITY_CERT_NAME))
 	$(info WORKSPACE_DIR=$(WORKSPACE_DIR))
 	$(info LOCALMCP_PORT=$(LOCALMCP_PORT))
+	$(info LOCALMCP_BIND_ADDR=$(LOCALMCP_BIND_ADDR))
 	$(info LOCALMCP_IMAGE_TAG=$(LOCALMCP_IMAGE_TAG))
 	$(info LOCALMCP_CONTAINER=$(LOCALMCP_CONTAINER))
 	$(info LOCALMCP_CONFIG=$(LOCALMCP_CONFIG))
@@ -133,9 +153,16 @@ setup-buildx: get-corp-root-authority-cert build-buildx-image
 #
 # The container talks to whatever cluster is in $(KUBERNETES_CONFIG_FILE),
 # mounts $(WORKSPACE_DIR) at /workspace so spawned MCP backends (filesystem,
-# code-index, etc.) can see your code, and exposes the aggregator on
-# $(LOCALMCP_PORT). Networking is host-mode so backends like
-# kubernetes-mcp-server can reach Rancher Desktop's K8s API on 127.0.0.1:6443.
+# pincher, etc.) can see your code, and publishes the aggregator on
+# $(LOCALMCP_BIND_ADDR):$(LOCALMCP_PORT). Bridge networking keeps every
+# backend's bind inside the container's network namespace, so only the
+# explicitly published port is reachable from the host.
+#
+# To talk to Rancher Desktop / Docker Desktop's K8s API from a bridge-
+# networked container, `make localmcp-up` first runs `localmcp-kubeconfig`
+# to add a `localmcp` cluster + context to $(KUBERNETES_CONFIG_FILE) that
+# points at host.docker.internal:6443. The agent uses `context: "localmcp"`
+# in kubernetes-mcp-server tool calls to route to the local cluster.
 #
 # Typical usage:
 #   make localmcp-image-build  # one-time per dep change: build the image
@@ -163,6 +190,8 @@ localmcp-image-build: get-corp-root-authority-cert setup-buildx
 		--platform $(PLATFORM) \
 		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
 		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
+		--build-arg PINCHER_REPO=$(PINCHER_REPO) \
+		--build-arg PINCHER_REF=$(PINCHER_REF) \
 		--tag $(LOCALMCP_IMAGE_TAG) \
 		-f $(DOCKERFILE) \
 		.
@@ -177,9 +206,60 @@ localmcp-image-rebuild: get-corp-root-authority-cert setup-buildx
 		--platform $(PLATFORM) \
 		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
 		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
+		--build-arg PINCHER_REPO=$(PINCHER_REPO) \
+		--build-arg PINCHER_REF=$(PINCHER_REF) \
 		--tag $(LOCALMCP_IMAGE_TAG) \
 		-f $(DOCKERFILE) \
 		.
+
+# Add a `localmcp` cluster + context to $(KUBERNETES_CONFIG_FILE) so the
+# bridge-networked container can reach the host's K8s API via
+# host.docker.internal. Idempotent — re-running is safe. Skipped (with a
+# warning) when kubectl is missing or the kubeconfig file doesn't exist,
+# so users without K8s tooling aren't blocked from running localmcp-up.
+#
+# The new entries are: a `localmcp` cluster pointing at
+# https://host.docker.internal:6443 (with --insecure-skip-tls-verify=true,
+# since the Rancher/Docker-Desktop API cert's SANs don't include
+# host.docker.internal), and a `localmcp` context that pairs the cluster
+# with whichever user your kubeconfig's current-context uses. Your
+# current-context is left unchanged; agents pick the localmcp context per
+# call via `kubernetes-mcp-server`'s built-in multi-cluster `context` arg.
+#
+# Verify from the host:  kubectl --context localmcp get nodes
+# Remove later:          make localmcp-clean-kubeconfig
+localmcp-kubeconfig:
+	@if ! command -v kubectl >/dev/null 2>&1; then \
+		echo "(skip) localmcp-kubeconfig: kubectl not found on PATH"; exit 0; \
+	fi; \
+	if [ ! -f "$(KUBERNETES_CONFIG_FILE)" ]; then \
+		echo "(skip) localmcp-kubeconfig: $(KUBERNETES_CONFIG_FILE) not found"; exit 0; \
+	fi; \
+	CURRENT_CTX=$$(kubectl config current-context --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true); \
+	if [ -z "$$CURRENT_CTX" ]; then \
+		echo "(skip) localmcp-kubeconfig: no current-context set in $(KUBERNETES_CONFIG_FILE)"; exit 0; \
+	fi; \
+	CURRENT_USER=$$(kubectl config view --kubeconfig="$(KUBERNETES_CONFIG_FILE)" \
+		-o jsonpath="{.contexts[?(@.name==\"$$CURRENT_CTX\")].context.user}"); \
+	if [ -z "$$CURRENT_USER" ]; then \
+		echo "(skip) localmcp-kubeconfig: could not resolve user for context '$$CURRENT_CTX'"; exit 0; \
+	fi; \
+	kubectl config set-cluster localmcp \
+		--kubeconfig="$(KUBERNETES_CONFIG_FILE)" \
+		--server=https://host.docker.internal:6443 \
+		--insecure-skip-tls-verify=true >/dev/null; \
+	kubectl config set-context localmcp \
+		--kubeconfig="$(KUBERNETES_CONFIG_FILE)" \
+		--cluster=localmcp \
+		--user="$$CURRENT_USER" >/dev/null; \
+	echo "==> kubeconfig: 'localmcp' context added (cluster=localmcp -> https://host.docker.internal:6443, user=$$CURRENT_USER)"
+
+# Remove the entries `localmcp-kubeconfig` added. Safe to run even when no
+# entries exist (the kubectl errors are swallowed).
+localmcp-clean-kubeconfig:
+	@kubectl config delete-context localmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
+	@kubectl config delete-cluster localmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
+	@echo "==> kubeconfig: 'localmcp' context + cluster removed (if present)"
 
 # Run the localmcp container detached. Rebuilds the image first only if it
 # doesn't already exist locally; use localmcp-image-rebuild to force.
@@ -187,14 +267,14 @@ localmcp-image-rebuild: get-corp-root-authority-cert setup-buildx
 # Volume mounts come from $(LOCALMCP_VOLUMES_FILE) (see
 # configs/default-volumes.conf for the format). Defaults wire up:
 #   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config    (read-only)
-#   - $(WORKSPACE_DIR)           -> /workspace            (filesystem + code-index)
+#   - $(WORKSPACE_DIR)           -> /workspace            (filesystem + pincher)
 #   - $(DOCKER_SOCK_FILE)        -> /var/run/docker.sock  (mcp-server-docker)
 #   - localmcp-npm               -> /root/.npm            (npx cache)
 #   - localmcp-cache             -> /root/.cache          (uv/pip cache)
-#   - localmcp-code-index        -> /tmp/code_indexer     (code-index DB)
+#   - localmcp-pincher           -> /tmp/pincher          (pincher SQLite DB)
 # Named volumes survive `docker rm` so caches/indexes persist across restarts.
 # Edit the conf file (or point LOCALMCP_VOLUMES_FILE at your own) to change.
-localmcp-up:
+localmcp-up: localmcp-kubeconfig
 	@if [ ! -f "$(LOCALMCP_VOLUMES_FILE)" ]; then \
 		echo "ERROR: volumes file not found: $(LOCALMCP_VOLUMES_FILE)"; \
 		echo "       Override with LOCALMCP_VOLUMES_FILE=path/to/your.conf"; \
@@ -221,8 +301,8 @@ localmcp-up:
 	docker run -d \
 		--name $(LOCALMCP_CONTAINER) \
 		--restart unless-stopped \
-		--network host \
-		--add-host host.docker.internal=$(shell ipconfig getifaddr en0) \
+		--add-host host.docker.internal:host-gateway \
+		-p $(LOCALMCP_BIND_ADDR):$(LOCALMCP_PORT):$(LOCALMCP_PORT) \
 		$$VOLUME_ARGS \
 		$(LOCALMCP_IMAGE_TAG)
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -311,10 +391,11 @@ localmcp-stop-all:
 		| python3 -m json.tool 2>/dev/null \
 		|| echo "(localmcp not reachable on port $(LOCALMCP_PORT))"
 
-# Populate code-index's in-memory file index plus the deep symbol index so
-# tools like find_files / get_file_summary / get_symbol_body work from the
-# first agent interaction. Idempotent and cheap to re-run. No-op if no
-# code-index backend is running.
+# Drive pincher's `index` MCP tool against /workspace so the codebase
+# intelligence DB (symbols, edges, FTS5) is populated for the first
+# agent interaction. Pincher uses xxh3 content hashing so re-runs are
+# fast (skipped files cost nothing). Idempotent. No-op if no pincher
+# backend is running.
 localmcp-warm-index:
 	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
 		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
@@ -326,20 +407,13 @@ localmcp-warm-index:
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
 		>/dev/null
-	@echo "==> code-index__refresh_index (shallow file list)"
+	@echo "==> pincher__index path=/workspace (AST extraction; first run may take a minute)"
 	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
-		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"code-index__refresh_index","arguments":{}}}' \
-		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"]) if c else print("(no content)")' 2>/dev/null \
-		|| echo "(call failed — code-index backend may not be running)"
-	@echo "==> code-index__build_deep_index (symbol metadata; may take a while)"
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
-		-H "Content-Type: application/json" \
-		-H "Accept: application/json, text/event-stream" \
-		-d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"code-index__build_deep_index","arguments":{}}}' \
-		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:300]) if c else print("(no content)")' 2>/dev/null \
-		|| echo "(call failed — code-index backend may not be running)"
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"/workspace"}}}' \
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:500]) if c else print("(no content)")' 2>/dev/null \
+		|| echo "(call failed — pincher backend may not be running)"
 
 # Print the names of every tool currently exposed by the localmcp aggregator,
 # grouped by backend prefix. Handy after `localmcp-load` to confirm what's available.

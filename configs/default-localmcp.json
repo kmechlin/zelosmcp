@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "rancher-k3s": {
+    "kubernetes": {
       "command": "npx",
       "args": [
         "-y",
@@ -15,13 +15,19 @@
         "/workspace"
       ]
     },
-    "code-index": {
-      "command": "uvx",
+    "pincher": {
+      "command": "pincher",
       "args": [
-        "code-index-mcp",
-        "--project-path",
-        "/workspace"
-      ]
+        "--data-dir",
+        "/tmp/pincher",
+        "--http",
+        "127.0.0.1:8080",
+        "--trust-proxy"
+      ],
+      "reverseProxy": {
+        "mount": "/pincher",
+        "upstream": "http://127.0.0.1:8080"
+      }
     },
     "docker": {
       "command": "uvx",

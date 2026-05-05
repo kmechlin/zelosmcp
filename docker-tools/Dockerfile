@@ -2,6 +2,12 @@
 # These are used in the FROM commands.
 # All other ARGS have to be declared within a stage.
 ARG PROJECT_BASE_IMAGE
+# pincherMCP source — defaults to kmechlin's fork branch with the
+# --basepath / --trust-proxy flags that configs/default-localmcp.json
+# relies on. Switch back to upstream after the PR merges by overriding
+# both args at build time (see Makefile's PINCHER_REPO/PINCHER_REF).
+ARG PINCHER_REPO=https://github.com/kmechlin/pincherMCP.git
+ARG PINCHER_REF=feat/reverse-proxy-basepath
 
 # Base OS layer
 # OS packages are installed here.
@@ -31,6 +37,23 @@ FROM base-os AS extra-os
   RUN update-ca-certificates
 
 
+# Pincher build layer
+# pincherMCP — codebase intelligence MCP server, single Go binary. Built
+# once and COPY'd into the localmcp layer. Uses Debian-based golang image
+# so we can install the corp cert (Alpine variant doesn't share the Debian
+# extra-os stage's update-ca-certificates plumbing). Source is controlled
+# by the PINCHER_REPO / PINCHER_REF global ARGs.
+FROM golang:1.24-bookworm AS pincher-build
+  ARG CERT
+  ARG PINCHER_REPO
+  ARG PINCHER_REF
+  COPY ${CERT} /usr/local/share/ca-certificates/cert.crt
+  RUN update-ca-certificates && \
+      git clone --depth 1 --branch ${PINCHER_REF} ${PINCHER_REPO} /src && \
+      cd /src && \
+      go build -trimpath -ldflags="-s -w" -o /pincher ./cmd/pinch/
+
+
 # LocalMCP layer
 # The Cursor-blessed MCP proxy. Inherits the corp cert + git/curl from
 # `extra-os` so apt/pip/npm/uvx can clear the corporate proxy when
@@ -45,9 +68,13 @@ FROM extra-os AS localmcp
       apt-get clean && \
       rm -rf /var/lib/apt/lists/*
 
-  # uv / uvx / pipx (for uvx-launched MCP backends like code-index-mcp)
+  # uv / uvx / pipx (for uvx-launched MCP backends)
   RUN pip install --no-cache-dir uv pipx && pipx ensurepath
   ENV PATH="/root/.local/bin:${PATH}"
+
+  # Pre-built pincher binary (codebase intelligence MCP). Reachable on
+  # PATH by stdio-launched MCP backends as `pincher`.
+  COPY --from=pincher-build /pincher /usr/local/bin/pincher
 
   # COPY localmcp source from the build context (= repo root).
   # `.dockerignore` excludes .venv, .git, .pytest_cache, etc.

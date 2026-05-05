@@ -147,7 +147,7 @@ class Aggregator:
             # it replaces the response with a validation error. Returning
             # only `r.content` would drop the backend's structuredContent
             # (when set) and trip that validation for any tool with a
-            # declared outputSchema (e.g. filesystem, code-index, anything
+            # declared outputSchema (e.g. filesystem, anything
             # using FastMCP/SDK >=1.13 with auto-generated schemas).
             from mcp.types import CallToolResult
             return CallToolResult(

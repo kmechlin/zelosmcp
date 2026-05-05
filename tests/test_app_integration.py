@@ -600,6 +600,39 @@ class TestCursorRuleEndpoint:
             assert r.status_code == 400
             assert "Unknown access" in r.json()["error"]
 
+    @pytest.mark.asyncio
+    async def test_format_copilot_instructions_no_frontmatter(self):
+        """`?format=copilot-instructions` returns the same body as the
+        cursor-mdc default but without the YAML frontmatter wrapper.
+        The HTTP body matches the MCP tool's body byte-for-byte."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                mdc = await c.get("/api/cursor-rule")
+                copi = await c.get(
+                    "/api/cursor-rule",
+                    params={"format": "copilot-instructions"},
+                )
+            assert mdc.status_code == 200
+            assert copi.status_code == 200
+            assert copi.headers["content-type"].startswith("text/markdown")
+            # No frontmatter in the copilot-instructions body.
+            assert not copi.text.startswith("---")
+            assert "alwaysApply" not in copi.text
+            # The cursor-mdc body's content (after frontmatter) matches.
+            _, _, mdc_after = mdc.text.partition("---\n")
+            _, _, mdc_body = mdc_after.partition("---\n")
+            assert mdc_body == copi.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_format_400(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get("/api/cursor-rule", params={"format": "bogus"})
+            assert r.status_code == 400
+            assert "Unknown format" in r.json()["error"]
+
 
 class TestBuiltinMcp:
     @pytest.mark.asyncio
@@ -793,3 +826,265 @@ class TestCatalogEndpoint:
                 )
             mcp_text = r.json()["result"]["content"][0]["text"]
             assert json.loads(mcp_text) == http_payload
+
+
+# ── Reverse-proxy dispatch ──────────────────────────────────────────────
+
+
+def _install_mock_upstream(manager, handler):
+    """Replace the manager's httpx client with one routed through a
+    MockTransport. The lifespan's startup hook builds a real client first;
+    this swap happens after the lifespan enters so there's something to
+    swap. Tests are responsible for closing the mock client themselves —
+    the lifespan shutdown closes whatever the manager currently holds.
+    """
+    transport = httpx.MockTransport(handler)
+    manager._http_client = httpx.AsyncClient(
+        transport=transport,
+        timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
+    )
+
+
+_PROXY_CONFIG = {
+    "mcpServers": {
+        "alpha": {
+            "command": "echo",
+            "args": ["a"],
+            "reverseProxy": {
+                "mount": "/alpha",
+                "upstream": "http://upstream.test",
+            },
+        },
+    },
+}
+
+
+class TestReverseProxy:
+    @pytest.mark.asyncio
+    async def test_forwards_request_and_injects_xff_headers(self):
+        captured: dict = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured["method"] = req.method
+            captured["url"] = str(req.url)
+            captured["headers"] = dict(req.headers)
+            captured["body"] = req.content
+            return httpx.Response(
+                200,
+                content=b'{"hello":"world"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    start = await c.post("/api/start", json=_PROXY_CONFIG)
+                    assert start.status_code == 200
+                    r = await c.post(
+                        "/alpha/v1/echo?foo=bar",
+                        content=b'{"q":1}',
+                        headers={"Content-Type": "application/json"},
+                    )
+                assert r.status_code == 200
+                assert r.json() == {"hello": "world"}
+
+                # Path/query/body forwarded verbatim (stripPrefix=False default).
+                assert captured["method"] == "POST"
+                assert captured["url"] == "http://upstream.test/alpha/v1/echo?foo=bar"
+                assert captured["body"] == b'{"q":1}'
+
+                hdrs = captured["headers"]
+                assert hdrs["x-forwarded-prefix"] == "/alpha"
+                assert hdrs["x-forwarded-proto"] == "http"
+                assert hdrs["x-forwarded-host"] == "testserver"
+                # Caller's content-type is preserved.
+                assert hdrs.get("content-type") == "application/json"
+
+    @pytest.mark.asyncio
+    async def test_503_when_backend_not_running(self):
+        app, manager = _fresh()
+        async with _lifespan(app):
+            # Skip _apply_patches so start_all is never called — the spec is
+            # injected directly into _specs but no ProxyState exists.
+            from localmcp.config import parse_config
+            specs, _ = parse_config(_PROXY_CONFIG)
+            manager._specs = {s.name: s for s in specs}
+
+            async with _client(app) as c:
+                r = await c.get("/alpha/v1/health")
+            assert r.status_code == 503
+            assert r.json()["error"] == "No MCP server 'alpha' is running"
+
+    @pytest.mark.asyncio
+    async def test_strip_prefix_removes_mount(self):
+        captured: dict = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured["url"] = str(req.url)
+            return httpx.Response(204)
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    cfg = {
+                        "mcpServers": {
+                            "alpha": {
+                                "command": "echo",
+                                "args": ["a"],
+                                "reverseProxy": {
+                                    "mount": "/alpha",
+                                    "upstream": "http://upstream.test",
+                                    "stripPrefix": True,
+                                },
+                            },
+                        },
+                    }
+                    await c.post("/api/start", json=cfg)
+                    r = await c.get("/alpha/v1/health")
+                assert r.status_code == 204
+                # Prefix stripped: upstream sees /v1/health, not /alpha/v1/health.
+                assert captured["url"] == "http://upstream.test/v1/health"
+
+    @pytest.mark.asyncio
+    async def test_bearer_injected_when_caller_has_no_auth(self):
+        captured: dict = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured["auth"] = req.headers.get("authorization")
+            return httpx.Response(200, content=b"")
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    cfg = {
+                        "mcpServers": {
+                            "alpha": {
+                                "command": "echo",
+                                "args": ["a"],
+                                "reverseProxy": {
+                                    "mount": "/alpha",
+                                    "upstream": "http://upstream.test",
+                                    "auth": {"bearer": "s3cret"},
+                                },
+                            },
+                        },
+                    }
+                    await c.post("/api/start", json=cfg)
+                    await c.get("/alpha/v1/health")
+                assert captured["auth"] == "Bearer s3cret"
+
+    @pytest.mark.asyncio
+    async def test_bearer_not_overridden_when_caller_has_auth(self):
+        captured: dict = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured["auth"] = req.headers.get("authorization")
+            return httpx.Response(200, content=b"")
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    cfg = {
+                        "mcpServers": {
+                            "alpha": {
+                                "command": "echo",
+                                "args": ["a"],
+                                "reverseProxy": {
+                                    "mount": "/alpha",
+                                    "upstream": "http://upstream.test",
+                                    "auth": {"bearer": "s3cret"},
+                                },
+                            },
+                        },
+                    }
+                    await c.post("/api/start", json=cfg)
+                    await c.get(
+                        "/alpha/v1/health",
+                        headers={"Authorization": "Bearer caller-token"},
+                    )
+                assert captured["auth"] == "Bearer caller-token"
+
+    @pytest.mark.asyncio
+    async def test_upstream_unreachable_returns_502(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("simulated dead upstream")
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=_PROXY_CONFIG)
+                    r = await c.get("/alpha/v1/health")
+                assert r.status_code == 502
+                body = r.json()
+                assert body["backend"] == "alpha"
+                assert "simulated dead upstream" in body["detail"]
+
+    @pytest.mark.asyncio
+    async def test_named_mcp_takes_precedence_over_proxy(self):
+        """A backend mounted at /alpha must keep /alpha/mcp routing to the
+        MCP session, not the reverse proxy. The dispatcher checks /<name>/mcp
+        before the proxy table.
+
+        We intercept ``session_manager.handle_request`` with a sentinel so we
+        can assert exactly which dispatch arm fired without standing up the
+        full MCP task group (the existing test fakes patch ``run()`` to a
+        no-op, which leaves the session manager's internal task group
+        uninitialised).
+        """
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                proxy_hits: list[str] = []
+                mcp_hits: list[str] = []
+
+                def proxy_handler(req: httpx.Request) -> httpx.Response:
+                    proxy_hits.append(str(req.url))
+                    return httpx.Response(200, content=b"")
+
+                _install_mock_upstream(manager, proxy_handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=_PROXY_CONFIG)
+                    state = manager.get("alpha")
+                    assert state is not None and state.session_manager is not None
+
+                    async def fake_handle_request(scope, receive, send):
+                        mcp_hits.append(scope.get("path", ""))
+                        # Minimal valid ASGI response so the test client doesn't choke.
+                        await send({"type": "http.response.start", "status": 204, "headers": []})
+                        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+                    state.session_manager.handle_request = fake_handle_request
+
+                    r = await c.post(
+                        "/alpha/mcp",
+                        json={"jsonrpc": "2.0", "id": 1, "method": "x", "params": {}},
+                        headers={"Accept": "application/json, text/event-stream"},
+                    )
+                assert r.status_code == 204
+                # Dispatcher chose the MCP arm, not the proxy arm.
+                assert mcp_hits == ["/mcp"]  # path was rewritten by dispatcher
+                assert proxy_hits == []
+
+    @pytest.mark.asyncio
+    async def test_status_exposes_reverse_proxy(self):
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, _ = _fresh()
+            async with _lifespan(app):
+                async with _client(app) as c:
+                    await c.post("/api/start", json=_PROXY_CONFIG)
+                    r = await c.get("/api/status")
+                row = next(s for s in r.json()["servers"] if s["name"] == "alpha")
+                assert row["spec"]["reverseProxy"] == {
+                    "mount": "/alpha",
+                    "upstream": "http://upstream.test",
+                }
