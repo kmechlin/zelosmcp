@@ -197,8 +197,7 @@ class TestLifecycle:
             yield
 
         with (
-            patch("localmcp.proxy.sse_client", side_effect=fake_sse_client, create=True),
-            patch("mcp.client.sse.sse_client", side_effect=fake_sse_client),
+            patch("localmcp.proxy.sse_client", side_effect=fake_sse_client),
             patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
             patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
         ):
@@ -222,8 +221,7 @@ class TestLifecycle:
             yield
 
         with (
-            patch("localmcp.proxy.streamable_http_client", side_effect=fake_http_client, create=True),
-            patch("mcp.client.streamable_http.streamable_http_client", side_effect=fake_http_client),
+            patch("localmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
             patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
             patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
         ):
@@ -248,7 +246,7 @@ class TestLifecycle:
 
             assert any("Starting backend" in l for l in logs)
             assert any("Spawned subprocess" in l for l in logs)
-            assert any("live at /mcp" in l for l in logs)
+            assert any("Proxy is live" in l for l in logs)
 
             await p.stop()
 

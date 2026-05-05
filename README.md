@@ -2,108 +2,140 @@
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 
-Wrap any MCP server and serve it on `localhost:8000/mcp` via Streamable HTTP.
+Wrap one or more MCP servers and re-expose them on stable local URLs. One Cursor or VSCode entry, every backend.
 
-LocalMCP provides a web UI where you point it at any MCP server — a stdio command, an SSE endpoint, or a Streamable HTTP URL — and it re-exposes that server at a single, fixed local address. Cursor (or any MCP client) always connects to the same endpoint regardless of what's behind it.
+LocalMCP runs a single web server that fronts any number of MCP servers — stdio commands, SSE endpoints, or Streamable HTTP URLs. Each one gets a fixed local address (`http://localhost:8000/<name>/mcp`), and a bare `http://localhost:8000/mcp` aggregates tools, prompts, and resources from every running backend under a `<server>__<tool>` namespace. Plus a comprehensive Cursor / Copilot rule generator, a live tool catalog UI, and a small REST control plane.
 
-## Install
+## Quickstart
 
-```
-pip install -e .
-```
+```bash
+# Run as a Python process
+pip install -e . && localmcp
 
-Requires Python 3.10+.
-
-## Run
-
-```
-localmcp
+# Or as a Docker container (recommended on macOS — bundles Node.js + uv + persistent caches)
+make localmcp-up && make localmcp-load
 ```
 
-Then open [http://localhost:8000](http://localhost:8000) in your browser.
-
-## Cursor Setup
-
-Add this to your `.cursor/mcp.json`:
+Then open `http://localhost:8000`. Wire your IDE in:
 
 ```json
-{
-  "mcpServers": {
-    "my-mcp": {
-      "type": "streamable-http",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
+// Cursor — ~/.cursor/mcp.json or .cursor/mcp.json
+{ "mcpServers": { "localmcp-aggregate": {
+    "type": "streamable-http", "url": "http://localhost:8000/mcp" } } }
+
+// VSCode + Copilot — Cmd+Shift+P → "MCP: Open User Configuration", or .vscode/mcp.json
+{ "servers": { "localmcp-aggregate": {
+    "type": "http",            "url": "http://localhost:8000/mcp" } } }
 ```
 
-This config never changes — swap the underlying MCP server any time through the web UI. When you start a server, the web UI updates the displayed snippet so the server name matches your config. Copy it from there for an exact match.
+Generate the dynamic agent-instructions file once your backends are loaded:
 
-## Usage
+```bash
+# Cursor
+mkdir -p .cursor/rules && \
+  curl -fsSL 'http://localhost:8000/api/cursor-rule' > .cursor/rules/localmcp.mdc
 
-1. Open the web UI at `http://localhost:8000`
-2. Paste an MCP server config into the textarea — the same JSON format Cursor uses in `mcp.json`. The transport is auto-detected from the config shape:
+# VSCode + Copilot
+mkdir -p .github && \
+  curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
+    > .github/copilot-instructions.md
+```
 
-   **Stdio** (has `command`):
-   ```json
-   {
-     "mcpServers": {
-       "my-server": {
-         "command": "npx",
-         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-       }
-     }
-   }
-   ```
+Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
 
-   **SSE** (has `type: "sse"`):
-   ```json
-   {
-     "mcpServers": {
-       "my-server": {
-         "type": "sse",
-         "url": "http://example.com/sse"
-       }
-     }
-   }
-   ```
+## Architecture in 60 seconds
 
-   **Streamable HTTP** (has `type: "streamable-http"`):
-   ```json
-   {
-     "mcpServers": {
-       "my-server": {
-         "type": "streamable-http",
-         "url": "http://example.com/mcp"
-       }
-     }
-   }
-   ```
+```mermaid
+flowchart LR
+  subgraph clients [IDE clients]
+    cursor["Cursor"]
+    vscode["VSCode + Copilot"]
+  end
+  subgraph proxy [LocalMCP]
+    dispatch["dispatcher"]
+    agg["Aggregator (/mcp)"]
+    builtin["BuiltinServer (/localmcp/mcp)"]
+    other["filesystem / pincher /\ndocker / kubernetes / ..."]
+    api["HTTP API + Web UI"]
+  end
+  cursor -->|"streamable-http"| dispatch
+  vscode -->|"http"| dispatch
+  dispatch --> agg
+  dispatch --> builtin
+  dispatch --> other
+  dispatch --> api
+  agg -.->|"fan-out"| builtin
+  agg -.->|"fan-out"| other
+```
 
-3. Click **Start**
-4. The **Cursor mcp.json** snippet below the config updates its server name to match your config — copy it into `.cursor/mcp.json`
-5. Cursor can now use the proxied MCP server at `http://localhost:8000/mcp`
+Three things to know:
 
-Click **Stop** to disconnect, then start a different server whenever you need to.
+- **`/<name>/mcp`** is a raw passthrough to one backend (original tool names).
+- **`/mcp`** aggregates every running backend (names prefixed `<server>__`). This is what your IDE should connect to.
+- **`/localmcp/mcp`** is an always-on built-in MCP that exposes self-introspection tools — `localmcp__generate_cursor_rule`, `localmcp__get_aggregated_tool_catalog`, etc. — so the agent can drive LocalMCP itself.
 
-## How It Works
+Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequence): [docs/architecture.md](docs/architecture.md).
 
-LocalMCP runs a single Starlette app on port 8000 with three responsibilities:
+## Documentation
 
-- `/` serves the web UI
-- `/api/*` handles start/stop/status/log-streaming
-- `/mcp` is the MCP Streamable HTTP endpoint that Cursor connects to
+| Topic | Doc |
+|---|---|
+| Architecture deep-dive | [docs/architecture.md](docs/architecture.md) |
+| Quickstart (5 minutes, Cursor or VSCode) | [docs/quickstart.md](docs/quickstart.md) |
+| Rancher Desktop setup (Docker daemon + kubeconfig) | [docs/setup-rancher-desktop.md](docs/setup-rancher-desktop.md) |
+| Makefile reference + volume-mount customization | [docs/makefile.md](docs/makefile.md) |
+| `mcpServers` config schema and `/api/start` lifecycle | [docs/configuration.md](docs/configuration.md) |
+| Reverse-proxy backend HTTP sidecars under LocalMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
+| Default MCP backends (filesystem / pincher / docker / kubernetes) | [docs/default-mcps.md](docs/default-mcps.md) |
+| Cursor integration + dynamic `.mdc` rule generation | [docs/cursor-integration.md](docs/cursor-integration.md) |
+| VSCode + GitHub Copilot integration + `copilot-instructions.md` | [docs/vscode-integration.md](docs/vscode-integration.md) |
+| Built-in MCP at `/localmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |
+| HTTP API reference (`/api/*` and the MCP routes) | [docs/http-api.md](docs/http-api.md) |
 
-When you start a proxy, LocalMCP spawns the backend (or connects to a remote one), establishes an MCP client session, and forwards all tool calls, resource reads, and prompt requests transparently — no prefixing or transformation.
+Plus the interactive Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs) and ReDoc at [http://localhost:8000/redoc](http://localhost:8000/redoc).
 
-## Project Structure
+## Project structure
 
 ```
-pyproject.toml          # Package definition
+pyproject.toml              # Package definition
+Dockerfile                  # Upstream community-friendly image (no corp cert handling)
+Makefile                    # Build + lifecycle targets
+configs/
+  default-localmcp.json     # Project-agnostic default backend set
+  default-volumes.conf      # Default container volume mounts (host paths + named volumes)
+docker-tools/               # Cert-aware build infrastructure (corporate proxy environments)
+  Dockerfile                # Multi-stage: base-os -> extra-os -> localmcp
+  buildx.Dockerfile         # Cert-aware buildkit builder image
+  README.md                 # Build flow + Makefile pointers
+docs/                       # All documentation (this README links into it)
 src/localmcp/
   __init__.py
-  __main__.py           # python -m localmcp
-  app.py                # Starlette app and routes
-  proxy.py              # ProxyState: backend lifecycle and MCP forwarding
-  ui.py                 # Web UI (single-page HTML/CSS/JS)
+  __main__.py               # python -m localmcp
+  app.py                    # Starlette app, ASGI dispatcher, OpenAPI routes
+  aggregator.py             # Aggregator: union of tools/prompts at /mcp
+  builtin.py                # Always-on built-in MCP at /localmcp/mcp + rule generator
+  config.py                 # Cursor-compatible config parser + ServerSpec
+  manager.py                # ProxyManager: many ProxyStates + the aggregator
+  proxy.py                  # ProxyState: single backend lifecycle + MCP forwarding
+  ui.py                     # Web UI (single-page HTML/CSS/JS)
+tests/
+  test_aggregator_unit.py
+  test_app_integration.py
+  test_builtin_unit.py
+  test_config_unit.py
+  test_manager_unit.py
+  test_proxy_unit.py
 ```
+
+## Enterprise / corporate-proxy deploy
+
+If you're behind a TLS-intercepting corporate proxy (e.g. Palo Alto), the upstream `Dockerfile` won't get past the proxy on its `apt`/`pip`/`npm`/`uvx` calls. The [`docker-tools/`](docker-tools/) directory holds a cert-aware multi-stage build for that case, and the [`Makefile`](Makefile) wires up the full lifecycle — see [docs/makefile.md](docs/makefile.md) and [docs/setup-rancher-desktop.md](docs/setup-rancher-desktop.md) for the cert export, build, and run sequence.
+
+## Contributing / hacking
+
+```bash
+pip install -e .
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -q
+```
+
+The test suite covers the dispatcher, aggregator fan-out, in-memory built-in transport, rule generator (both `cursor-mdc` and `copilot-instructions` formats), config parsing, and per-server lifecycle. CI-friendly — no Docker daemon required.

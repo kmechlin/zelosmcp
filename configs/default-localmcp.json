@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "kubernetes": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "kubernetes-mcp-server@latest"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/workspace"
+      ]
+    },
+    "pincher": {
+      "command": "pincher",
+      "args": [
+        "--data-dir",
+        "/tmp/pincher",
+        "--http",
+        "127.0.0.1:8080",
+        "--trust-proxy"
+      ],
+      "reverseProxy": {
+        "mount": "/pincher",
+        "upstream": "http://127.0.0.1:8080"
+      }
+    },
+    "docker": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-docker"
+      ],
+      "env": {
+        "DOCKER_HOST": "unix:///var/run/docker.sock"
+      }
+    }
+  }
+}
