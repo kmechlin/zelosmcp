@@ -459,6 +459,72 @@ def create_app(manager: ProxyManager | None = None):
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 
+    async def api_savings(request: Request) -> JSONResponse:
+        """
+        summary: Token-savings dashboard snapshot.
+        description: |
+          Aggregated token-savings metrics across three sources:
+          (1) tool-list compression per backend (raw vs. wrapper-pair
+          token/byte counts), (2) per-call accounting for every tool
+          invocation routed through this proxy, and (3) pincher's
+          self-reported BPE savings from the `_meta` envelope and the
+          most recent `pincher__stats` snapshot. Returns 503 when the
+          savings store hasn't started yet (e.g. the lifespan hook
+          hasn't fired).
+        tags: [introspection]
+        responses:
+          200:
+            description: Savings snapshot.
+            content:
+              application/json: {}
+          503:
+            description: Savings store not yet initialised.
+        """
+        recorder = manager.savings
+        if recorder is None:
+            return JSONResponse(
+                {"error": "savings store not initialised"},
+                status_code=503,
+            )
+        return JSONResponse(await recorder.snapshot())
+
+    async def api_savings_stream(request: Request) -> StreamingResponse:
+        """
+        summary: Server-Sent-Events stream of incremental savings events.
+        description: |
+          Each frame is a JSON object with at least an `event` key
+          (`call`, `compression`, or `pincher_stats`). Clients should
+          listen for these to invalidate cached `/api/savings` snapshots
+          and trigger a fresh fetch.
+        tags: [introspection]
+        responses:
+          200:
+            description: SSE stream of savings events.
+            content:
+              text/event-stream: {}
+          503:
+            description: Savings store not yet initialised.
+        """
+        recorder = manager.savings
+        if recorder is None:
+            return JSONResponse(
+                {"error": "savings store not initialised"},
+                status_code=503,
+            )
+        q = recorder.subscribe()
+
+        async def event_stream():
+            try:
+                while True:
+                    msg = await q.get()
+                    yield f"data: {msg}\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                recorder.unsubscribe(q)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
     async def api_logs(request: Request) -> StreamingResponse:
         """
         summary: Server-Sent-Events stream of activity logs across all proxies.
@@ -532,6 +598,8 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/catalog", api_catalog),
             Route("/catalog", catalog_page),
             Route("/api/logs", api_logs),
+            Route("/api/savings", api_savings),
+            Route("/api/savings/stream", api_savings_stream),
             Route("/api/servers/{name}", api_server_get),
             Route("/api/servers/{name}/start", api_server_start, methods=["POST"]),
             Route("/api/servers/{name}/stop", api_server_stop, methods=["POST"]),

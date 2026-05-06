@@ -139,6 +139,96 @@ HTML_TEMPLATE = """\
     letter-spacing: 0;
   }
 
+  /* ── Savings dashboard ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .kpi {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--white);
+  }
+  .kpi-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--mid);
+    margin-bottom: 6px;
+  }
+  .kpi-value {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  .savings-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .savings-table th,
+  .savings-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .savings-table th {
+    font-weight: 600;
+    color: var(--mid);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+  .savings-table td.num,
+  .savings-table th.num { text-align: right; font-family: var(--mono); }
+  .savings-table .empty-cell {
+    color: var(--mid);
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+  }
+  .backend-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .backend-bar {
+    display: grid;
+    grid-template-columns: 140px 1fr 90px;
+    gap: 12px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .backend-bar-name { font-family: var(--mono); }
+  .backend-bar-track {
+    height: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .backend-bar-fill {
+    height: 100%;
+    background: var(--accent);
+  }
+  .backend-bar-count {
+    text-align: right;
+    font-family: var(--mono);
+    color: var(--mid);
+  }
+  .savings-pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow: auto;
+    color: var(--black);
+  }
+
   /* Below ~1240px the 220 + 480 columns leave the middle column too
      narrow (the activity log starts wrapping awkwardly). Collapse to a
      single column with the system actions floated up below the nav. */
@@ -663,6 +753,7 @@ HTML_TEMPLATE = """\
     </div>
     <div class="nav-group">
       <div class="nav-group-label">Dashboards</div>
+      <button type="button" class="nav-item" data-view="savings">Savings</button>
       <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
     </div>
     <div class="nav-group">
@@ -779,6 +870,91 @@ HTML_TEMPLATE = """\
             <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
             <pre id="cursor-rule">Loading...</pre>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Savings dashboard view -->
+    <section class="view" data-view="savings">
+      <div class="section">
+        <div class="section-label">
+          <span>Token savings</span>
+          <span class="dashboard-meta" id="savings-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Aggregated savings across three sources: <strong>tool-list compression</strong>
+            (raw vs. wrapper-pair tokens served on every <code>tools/list</code>),
+            <strong>per-call accounting</strong> (input + output tokens of every
+            <code>tools/call</code>), and <strong>pincher self-reported BPE savings</strong>
+            (parsed from each pincher response's <code>_meta</code> envelope plus
+            periodic <code>pincher__stats</code> snapshots). Token counts use
+            <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
+            available; otherwise a <code>len/4</code> heuristic.
+          </p>
+
+          <div class="kpi-grid" id="savings-kpis">
+            <div class="kpi"><div class="kpi-label">Tokens saved (compression)</div><div class="kpi-value" id="kpi-compression-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (pincher)</div><div class="kpi-value" id="kpi-pincher-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Calls recorded</div><div class="kpi-value" id="kpi-calls">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Cost avoided (pincher)</div><div class="kpi-value" id="kpi-cost">&mdash;</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Compression by backend</div>
+        <div class="card">
+          <table class="savings-table" id="savings-compression-table">
+            <thead>
+              <tr>
+                <th>Backend</th>
+                <th>Level</th>
+                <th class="num">Raw tokens</th>
+                <th class="num">Compressed</th>
+                <th class="num">Saved</th>
+                <th class="num">% saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-compression-body">
+              <tr><td colspan="6" class="empty-cell">No compression snapshots yet. Run a <code>tools/list</code> against <code>/mcp</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Top tools by token volume</div>
+        <div class="card">
+          <table class="savings-table" id="savings-top-tools">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th class="num">Calls</th>
+                <th class="num">Tokens</th>
+                <th class="num">Avg latency</th>
+              </tr>
+            </thead>
+            <tbody id="savings-top-tools-body">
+              <tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Per-backend activity</div>
+        <div class="card">
+          <div id="savings-backend-bars" class="backend-bars">
+            <div class="empty-cell">No call events yet.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Pincher session stats</div>
+        <div class="card">
+          <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>LOCALMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
         </div>
       </div>
     </section>
@@ -1491,6 +1667,10 @@ HTML_TEMPLATE = """\
     document.querySelectorAll(".view").forEach((v) =>
       v.classList.toggle("active", v.dataset.view === name));
     if (name === "pincher-dashboard") refreshPincherDashboard(true);
+    if (name === "savings") {
+      refreshSavings();
+      ensureSavingsStream();
+    }
   }
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
@@ -1532,6 +1712,196 @@ HTML_TEMPLATE = """\
       frame.src = url;
       lastDashboardUrl = url;
     }
+  }
+
+  // ── Savings dashboard ───────────────────────────────────────────────
+  // Pulls /api/savings every 5s while the tab is visible, and listens to
+  // /api/savings/stream for instant invalidation on new call/compression/
+  // pincher_stats events. The SSE connection is opened lazily the first
+  // time the user navigates to the Savings view so passive page loads
+  // don't keep an idle connection open.
+  let savingsStream = null;
+  let savingsPollTimer = null;
+  let savingsFetchInflight = false;
+
+  function fmtNum(n) {
+    if (n === null || n === undefined) return "—";
+    if (typeof n !== "number") return String(n);
+    if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(n);
+  }
+
+  function fmtPct(n) {
+    if (n === null || n === undefined) return "—";
+    return n.toFixed(1) + "%";
+  }
+
+  function fmtUsd(n) {
+    if (!n) return "$0.00";
+    if (n < 0.01) return "$" + n.toFixed(4);
+    return "$" + n.toFixed(2);
+  }
+
+  function isSavingsTabActive() {
+    const v = document.querySelector(".view[data-view=savings]");
+    return v && v.classList.contains("active");
+  }
+
+  function ensureSavingsStream() {
+    if (savingsStream) return;
+    try {
+      savingsStream = new EventSource("/api/savings/stream");
+    } catch (_) {
+      savingsStream = null;
+      return;
+    }
+    savingsStream.onmessage = (_evt) => {
+      // Any server-pushed event invalidates our snapshot; refetch once
+      // the tab is visible to keep idle bandwidth low.
+      if (isSavingsTabActive()) refreshSavings();
+    };
+    savingsStream.onerror = () => {
+      // EventSource auto-reconnects; nothing to do beyond keeping the
+      // handle so we don't open a second one.
+    };
+    if (!savingsPollTimer) {
+      savingsPollTimer = setInterval(() => {
+        if (isSavingsTabActive()) refreshSavings();
+      }, 5000);
+    }
+  }
+
+  async function refreshSavings() {
+    if (savingsFetchInflight) return;
+    savingsFetchInflight = true;
+    const meta = document.getElementById("savings-meta");
+    try {
+      const r = await fetch("/api/savings");
+      if (r.status === 503) {
+        if (meta) meta.textContent = "store not initialised";
+        return;
+      }
+      if (!r.ok) {
+        if (meta) meta.textContent = "error " + r.status;
+        return;
+      }
+      const data = await r.json();
+      renderSavings(data);
+    } catch (err) {
+      if (meta) meta.textContent = "error: " + err.message;
+    } finally {
+      savingsFetchInflight = false;
+    }
+  }
+
+  function renderSavings(data) {
+    const meta = document.getElementById("savings-meta");
+    if (meta) {
+      const enc = data.tokenizer && data.tokenizer.heuristic
+        ? "heuristic" : (data.tokenizer.encoding || "tiktoken");
+      const ts = new Date((data.generated_at || 0) * 1000);
+      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}`;
+    }
+
+    const compressionSaved = data.compression_saved_tokens_total || 0;
+    const pincherSaved = (data.pincher && data.pincher.tokens_saved_total) || 0;
+    const totals = (data.calls && data.calls.totals) || {};
+    const cost = (data.pincher && data.pincher.cost_avoided_usd_total) || 0;
+
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = v;
+    };
+    set("kpi-compression-saved", fmtNum(compressionSaved));
+    set("kpi-pincher-saved", fmtNum(pincherSaved));
+    set("kpi-calls", fmtNum(totals.calls || 0));
+    set("kpi-cost", fmtUsd(cost));
+
+    // Compression table
+    const compBody = document.getElementById("savings-compression-body");
+    if (compBody) {
+      const rows = data.compression || [];
+      if (!rows.length) {
+        compBody.innerHTML = '<tr><td colspan="6" class="empty-cell">No compression snapshots yet. Run a <code>tools/list</code> against <code>/mcp</code>.</td></tr>';
+      } else {
+        compBody.innerHTML = rows.map((c) => `
+          <tr>
+            <td>${escapeHtml(c.backend)}</td>
+            <td>${escapeHtml(c.level || "")}</td>
+            <td class="num">${fmtNum(c.raw_tokens)}</td>
+            <td class="num">${fmtNum(c.compressed_tokens)}</td>
+            <td class="num">${fmtNum(c.saved_tokens)}</td>
+            <td class="num">${fmtPct(c.saved_pct)}</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    // Top tools
+    const topBody = document.getElementById("savings-top-tools-body");
+    if (topBody) {
+      const rows = (data.calls && data.calls.top_tools) || [];
+      if (!rows.length) {
+        topBody.innerHTML = '<tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>';
+      } else {
+        topBody.innerHTML = rows.map((t) => `
+          <tr>
+            <td><code>${escapeHtml(t.qualified)}</code></td>
+            <td class="num">${fmtNum(t.calls)}</td>
+            <td class="num">${fmtNum(t.tokens)}</td>
+            <td class="num">${t.avg_latency_ms.toFixed(0)} ms</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    // Per-backend bars
+    const barsHost = document.getElementById("savings-backend-bars");
+    if (barsHost) {
+      const rows = (data.calls && data.calls.per_backend) || [];
+      if (!rows.length) {
+        barsHost.innerHTML = '<div class="empty-cell">No call events yet.</div>';
+      } else {
+        const max = Math.max(1, ...rows.map((r) => r.calls || 0));
+        barsHost.innerHTML = rows.map((b) => {
+          const pct = Math.round(((b.calls || 0) / max) * 100);
+          return `
+            <div class="backend-bar">
+              <div class="backend-bar-name">${escapeHtml(b.backend)}</div>
+              <div class="backend-bar-track"><div class="backend-bar-fill" style="width: ${pct}%"></div></div>
+              <div class="backend-bar-count">${fmtNum(b.calls)} calls</div>
+            </div>`;
+        }).join("");
+      }
+    }
+
+    // Pincher stats
+    const pre = document.getElementById("savings-pincher-stats");
+    if (pre) {
+      const stats = data.pincher && data.pincher.latest_stats;
+      if (!stats) {
+        pre.textContent = "No pincher__stats snapshot yet.";
+      } else {
+        // Prefer the formatted text content from pincher's CallToolResult;
+        // fall back to a JSON dump.
+        let body = null;
+        if (Array.isArray(stats.content) && stats.content.length) {
+          body = stats.content.filter((c) => typeof c === "string").join("\\n").trim();
+        }
+        pre.textContent = body || JSON.stringify(stats, null, 2);
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 
   // Initial status

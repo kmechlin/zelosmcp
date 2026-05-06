@@ -22,6 +22,8 @@ from localmcp.aggregator import Aggregator
 from localmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
 from localmcp.config import ServerSpec, parse_config
 from localmcp.proxy import ProxyState
+from localmcp.savings import SavingsRecorder, TokenCounter
+from localmcp.savings_db import SavingsStore, resolve_db_path
 
 
 # Default lookup order for the mandatory MCP set. First existing path wins.
@@ -102,6 +104,22 @@ class ProxyManager:
         # invocations within a single ProxyManager lifetime).
         self._mandatory_cache: dict[str, Any] | None = None
         self._mandatory_cache_loaded = False
+        # Token-savings store + recorder. The store is opened from the
+        # Starlette lifespan hook (start_http_client) so an event loop is
+        # already running; tests that don't go through the lifespan hook
+        # can call ``ProxyManager.start_savings(":memory:")`` directly,
+        # or attach their own SavingsRecorder via ``manager.savings``.
+        self._savings_store: SavingsStore | None = None
+        self.savings: SavingsRecorder | None = None
+        self._pincher_poll_task: asyncio.Task | None = None
+        # How often to snapshot ``pincher__stats`` into the savings store.
+        # Configurable via ``LOCALMCP_PINCHER_POLL_SECS``; <=0 disables.
+        try:
+            self._pincher_poll_interval: float = float(
+                os.environ.get("LOCALMCP_PINCHER_POLL_SECS", "60")
+            )
+        except ValueError:
+            self._pincher_poll_interval = 60.0
 
     @property
     def primary(self) -> str | None:
@@ -147,6 +165,7 @@ class ProxyManager:
                 # belt-and-braces in case a future code path bypasses it.
                 continue
             state = ProxyState(name=spec.name)
+            state._recorder_provider = lambda: self.savings
             self.servers[spec.name] = state
             self._attach_log_pump(state)
             coros.append(self._start_one_spec(state, spec))
@@ -307,6 +326,7 @@ class ProxyManager:
         state = self.servers.get(name)
         if state is None:
             state = ProxyState(name=name)
+            state._recorder_provider = lambda: self.savings
             self.servers[name] = state
             self._attach_log_pump(state)
         if state.running:
@@ -368,6 +388,7 @@ class ProxyManager:
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0),
             follow_redirects=False,
         )
+        await self.start_savings()
 
     async def stop_http_client(self) -> None:
         """Close the shared httpx.AsyncClient. Called from the lifespan
@@ -378,6 +399,94 @@ class ProxyManager:
                 await client.aclose()
             except Exception as exc:
                 _log.warning("reverse-proxy: client close failed: %s", exc)
+        await self.stop_savings()
+
+    async def start_savings(self, db_path: str | None = None) -> None:
+        """Open the savings store and start the pincher snapshot poller.
+
+        Idempotent; tests may pass ``db_path=":memory:"`` (or set the
+        ``LOCALMCP_SAVINGS_DB`` env var) to skip on-disk state.
+        """
+        if self.savings is not None:
+            return
+        path = resolve_db_path(db_path)
+        store = SavingsStore(path)
+        try:
+            await store.open()
+        except Exception as exc:
+            _log.warning("savings store open failed (%s); disabling", exc)
+            self._broadcast(f"[savings] disabled: {exc}")
+            return
+        counter = TokenCounter()
+        # Warmup is best-effort — heuristic fallback handles failures.
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, counter.warmup
+            )
+        except Exception:
+            pass
+        self._savings_store = store
+        self.savings = SavingsRecorder(store=store, counter=counter)
+        if counter.using_heuristic:
+            self._broadcast(
+                "[savings] tiktoken unavailable; using char/4 heuristic"
+            )
+        else:
+            self._broadcast("[savings] token counter ready (cl100k_base)")
+        if self._pincher_poll_interval > 0:
+            self._pincher_poll_task = asyncio.create_task(self._pincher_poll_loop())
+
+    async def stop_savings(self) -> None:
+        task, self._pincher_poll_task = self._pincher_poll_task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        store, self._savings_store = self._savings_store, None
+        self.savings = None
+        if store is not None:
+            await store.close()
+
+    async def _pincher_poll_loop(self) -> None:
+        """Periodically snapshot ``pincher__stats`` into the savings store.
+
+        Skips silently while pincher isn't running. Resilient: any failure
+        is logged at debug and the loop sleeps the full interval before
+        retrying so one upstream blip doesn't spam writes.
+        """
+        interval = self._pincher_poll_interval
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if self.savings is None:
+                    continue
+                state = self.servers.get("pincher")
+                session = getattr(state, "client_session", None)
+                if state is None or not getattr(state, "running", False) or session is None:
+                    continue
+                try:
+                    result = await session.call_tool("stats", {})
+                except Exception as exc:
+                    _log.debug("pincher stats poll failed: %s", exc)
+                    continue
+                payload: Any = {
+                    "structuredContent": getattr(result, "structuredContent", None),
+                    "content": [
+                        getattr(c, "text", None) or getattr(c, "type", None)
+                        for c in (getattr(result, "content", None) or [])
+                    ],
+                    "isError": bool(getattr(result, "isError", False)),
+                }
+                try:
+                    await self.savings.record_pincher_stats(payload)
+                except Exception as exc:
+                    _log.debug("pincher stats snapshot record failed: %s", exc)
+        except asyncio.CancelledError:
+            pass
 
     def find_reverse_proxy(
         self, path: str

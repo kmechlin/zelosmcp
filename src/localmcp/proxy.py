@@ -5,7 +5,7 @@ import logging
 import shlex
 import time
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import Any, Callable
 
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
@@ -21,6 +21,7 @@ from localmcp.compression import (
     wrapper_tool_names,
 )
 from localmcp.config import CompressSpec
+from localmcp.savings import measure_call
 
 logger = logging.getLogger("localmcp")
 
@@ -56,6 +57,12 @@ class ProxyState:
         # every list_tools call so the wrapper dispatcher resolves names
         # against whatever the backend currently advertises.
         self._compressed_catalog: dict[str, Tool] = {}
+        # Optional callable returning the manager-owned savings recorder.
+        # ProxyManager wires this in when it constructs the state so the
+        # ``call_tool`` handlers can route through ``measure_call``. Stays
+        # None for tests / standalone use, in which case measure_call
+        # short-circuits to a plain await.
+        self._recorder_provider: Callable[[], Any] | None = None
 
     def _emit_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -269,29 +276,56 @@ class ProxyState:
         async def call_tool(name: str, arguments: dict[str, Any]):
             from mcp.types import CallToolResult
 
+            recorder = (
+                self._recorder_provider() if self._recorder_provider else None
+            )
+            qualified = f"{self.name}__{name}"
+
             if compress is not None and name in wrapper_tool_names(compress.level):
                 self._emit_log(f"call_tool (compressed): {name}")
-                return await handle_compressed_call(
-                    catalog=self._compressed_catalog,
-                    op=name,
-                    args=arguments,
-                    dispatch=session.call_tool,
-                    level=compress.level,
+                return await measure_call(
+                    recorder=recorder,
+                    backend=self.name,
+                    tool=name,
+                    qualified=qualified,
+                    compressed=True,
+                    arguments=arguments,
+                    dispatch=lambda: handle_compressed_call(
+                        catalog=self._compressed_catalog,
+                        op=name,
+                        args=arguments,
+                        dispatch=session.call_tool,
+                        level=compress.level,
+                    ),
                 )
             self._emit_log(f"call_tool: {name}")
-            r = await session.call_tool(name, arguments)
-            # Pass through both content and structuredContent unchanged. The
-            # MCP SDK's lowlevel server validates: if the advertised tool has
-            # an outputSchema and the response's structuredContent is None,
-            # it replaces the response with a validation error. Returning
-            # only `r.content` would drop the backend's structuredContent
-            # (when set) and trip that validation for any tool with a
-            # declared outputSchema (e.g. filesystem, anything
-            # using FastMCP/SDK >=1.13 with auto-generated schemas).
-            return CallToolResult(
-                content=r.content,
-                structuredContent=getattr(r, "structuredContent", None),
-                isError=bool(r.isError),
+
+            async def _dispatch() -> CallToolResult:
+                r = await session.call_tool(name, arguments)
+                # Pass through both content and structuredContent unchanged.
+                # The MCP SDK's lowlevel server validates: if the advertised
+                # tool has an outputSchema and the response's
+                # structuredContent is None, it replaces the response with a
+                # validation error. Returning only `r.content` would drop
+                # the backend's structuredContent (when set) and trip that
+                # validation for any tool with a declared outputSchema (e.g.
+                # filesystem, anything using FastMCP/SDK >=1.13 with
+                # auto-generated schemas).
+                return CallToolResult(
+                    content=r.content,
+                    structuredContent=getattr(r, "structuredContent", None),
+                    isError=bool(r.isError),
+                    meta=getattr(r, "meta", None),
+                )
+
+            return await measure_call(
+                recorder=recorder,
+                backend=self.name,
+                tool=name,
+                qualified=qualified,
+                compressed=False,
+                arguments=arguments,
+                dispatch=_dispatch,
             )
 
         @server.list_resources()
