@@ -21,7 +21,7 @@ from tests.conftest import (
 
 def _fresh():
     """Create a fresh ProxyManager + ASGI app pair."""
-    manager = ProxyManager()
+    manager = ProxyManager(mandatory_config_path="")
     app = create_app(manager)
     return app, manager
 
@@ -107,6 +107,24 @@ class TestUIRoute:
         async with _client(app) as c:
             r = await c.get("/")
         assert 'href="/docs"' in r.text
+
+    @pytest.mark.asyncio
+    async def test_index_has_documentation_view(self):
+        """Documentation nav item + center-pane view ship in HTML_TEMPLATE."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/")
+        assert 'data-view="docs"' in r.text
+        assert "loadDocsIndex" in r.text
+
+    @pytest.mark.asyncio
+    async def test_index_has_server_details_view(self):
+        """Per-server "Details" button + center-pane view ship in HTML_TEMPLATE."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/")
+        assert 'data-view="server-details"' in r.text
+        assert "showServerDetails" in r.text
 
 
 # ── OpenAPI explorer ────────────────────────────────────────────────────
@@ -469,6 +487,58 @@ class TestLogsEndpoint:
         assert "integration-test-msg" in msg
         manager.unsubscribe_logs(q)
 
+    @pytest.mark.asyncio
+    async def test_logs_history_buffer_records_broadcasts(self):
+        _, manager = _fresh()
+        manager._broadcast("first-line")
+        manager._broadcast("second-line")
+        snapshot, q = manager.subscribe_logs_with_history()
+        try:
+            assert snapshot == ["first-line", "second-line"]
+            # New broadcasts after subscription land on the queue, NOT
+            # the snapshot, so a client draining snapshot-then-queue
+            # sees the full ordered sequence with no dups.
+            manager._broadcast("third-line")
+            assert q.get_nowait() == "third-line"
+            assert q.empty()
+        finally:
+            manager.unsubscribe_logs(q)
+
+    @pytest.mark.asyncio
+    async def test_logs_history_is_capped(self):
+        _, manager = _fresh()
+        cap = manager._log_history.maxlen
+        assert cap is not None
+        for i in range(cap + 50):
+            manager._broadcast(f"line-{i}")
+        snapshot, q = manager.subscribe_logs_with_history()
+        try:
+            assert len(snapshot) == cap
+            assert snapshot[0] == f"line-{50}"
+            assert snapshot[-1] == f"line-{cap + 50 - 1}"
+        finally:
+            manager.unsubscribe_logs(q)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_with_history_after_subscribe_does_not_dup(self):
+        # Subscribers that joined BEFORE a broadcast already saw the
+        # line in their queue; a later subscribe_logs_with_history call
+        # must replay history but the original subscriber must NOT see
+        # the same line a second time.
+        _, manager = _fresh()
+        existing_q = manager.subscribe_logs()
+        manager._broadcast("only-line")
+        assert existing_q.get_nowait() == "only-line"
+
+        snapshot, new_q = manager.subscribe_logs_with_history()
+        try:
+            assert snapshot == ["only-line"]
+            assert existing_q.empty()
+            assert new_q.empty()
+        finally:
+            manager.unsubscribe_logs(existing_q)
+            manager.unsubscribe_logs(new_q)
+
 
 # ── Full lifecycle ──────────────────────────────────────────────────────
 
@@ -633,6 +703,50 @@ class TestCursorRuleEndpoint:
             assert r.status_code == 400
             assert "Unknown format" in r.json()["error"]
 
+    @pytest.mark.asyncio
+    async def test_tool_use_priority_default_matches_explicit(self):
+        """Default `tool_use=priority` and explicit `?tool_use=priority`
+        must produce identical bodies (round-trip)."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                default = await c.get("/api/cursor-rule")
+                explicit = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "priority"}
+                )
+            assert default.status_code == 200
+            assert explicit.status_code == 200
+            assert default.text == explicit.text
+
+    @pytest.mark.asyncio
+    async def test_tool_use_available_differs_from_priority(self):
+        """`?tool_use=available` produces a different body than the
+        priority default. With no user backends loaded both bodies are
+        the empty-backends template (which has no priority directive
+        either way), so we just assert the request succeeds — content
+        differences are exercised in the unit tests."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "available"}
+                )
+            assert r.status_code == 200
+            # Empty-backend body still has the directive, but no
+            # priority directive in either mode.
+            assert "## Tool-use priority" not in r.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_use_400(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "bogus"}
+                )
+            assert r.status_code == 400
+            assert "Unknown tool_use" in r.json()["error"]
+
 
 class TestBuiltinMcp:
     @pytest.mark.asyncio
@@ -750,11 +864,11 @@ class TestBuiltinMcp:
 
 class TestCatalogEndpoint:
     @pytest.mark.asyncio
-    async def test_api_catalog_includes_builtin_with_seven_tools(self):
+    async def test_api_catalog_includes_builtin_with_eight_tools(self):
         """/api/catalog must include the always-on builtin row with all
-        7 tools and well-formed inputSchemas, even when no user backend
-        is configured. (Was 8 prior to the comprehensive-rule rewrite,
-        which dropped `list_supported_backends`.)"""
+        8 tools and well-formed inputSchemas, even when no user backend
+        is configured. (Was 7 before `list_compressed_tools` was added
+        for the compression discovery surface.)"""
         app, _ = _fresh()
         async with _lifespan(app):
             async with _client(app) as c:
@@ -767,7 +881,7 @@ class TestCatalogEndpoint:
             assert row["transport"] == "builtin"
             assert row["running"] is True
             tools = row["tools"]
-            assert isinstance(tools, list) and len(tools) == 7
+            assert isinstance(tools, list) and len(tools) == 8
             # Each tool entry has the keys the UI consumes.
             for t in tools:
                 assert "name" in t
@@ -826,6 +940,72 @@ class TestCatalogEndpoint:
                 )
             mcp_text = r.json()["result"]["content"][0]["text"]
             assert json.loads(mcp_text) == http_payload
+
+
+# ── Docs API ────────────────────────────────────────────────────────────
+
+class TestDocsRoutes:
+    """Reads the project's own docs/ + README.md, so these tests assume
+    the suite runs from a checkout (or the Docker image — both ship the
+    files). If the discovery falls back to an empty index the assertions
+    will fail loudly, which is the signal we want for a misconfigured
+    image."""
+
+    @pytest.mark.asyncio
+    async def test_api_docs_index_lists_known_slugs(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs")
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        slugs = {d["slug"] for d in data}
+        # Only docs/*.md is surfaced — README is intentionally excluded
+        # so the in-app Documentation view stays focused on docs.
+        assert "readme" not in slugs
+        assert "quickstart" in slugs
+        for entry in data:
+            assert "title" in entry and entry["title"]
+
+    @pytest.mark.asyncio
+    async def test_api_docs_does_not_expose_readme(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/readme")
+        assert r.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_api_docs_get_returns_rendered_html(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/quickstart")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["slug"] == "quickstart"
+        assert data["title"]
+        assert data["html"].startswith("<")
+        assert "<h1" in data["html"] or "<h2" in data["html"]
+        assert data["markdown"]
+
+    @pytest.mark.asyncio
+    async def test_api_docs_get_unknown_slug_404(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/does-not-exist")
+        assert r.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_api_docs_rejects_path_traversal(self):
+        """Slug values that would resolve outside the docs root must
+        404, never expose arbitrary files."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            # Starlette path-converters reject `..` segments outright at
+            # routing time, so this lands as 404 before the handler even
+            # runs — but we still assert the *behaviour* (no 200, no
+            # /etc/passwd-shaped payload) end-to-end.
+            r = await c.get("/api/docs/..%2Fpyproject")
+        assert r.status_code == 404
 
 
 # ── Reverse-proxy dispatch ──────────────────────────────────────────────
@@ -1088,3 +1268,250 @@ class TestReverseProxy:
                     "mount": "/alpha",
                     "upstream": "http://upstream.test",
                 }
+
+
+# ── Compression integration ────────────────────────────────────────────
+
+
+def _compress_config(scope: str, level: str = "medium") -> dict:
+    return {
+        "mcpServers": {
+            "alpha": {
+                "command": "echo",
+                "args": ["a"],
+                "compress": {"level": level, "scope": scope},
+            }
+        }
+    }
+
+
+@asynccontextmanager
+async def _compress_test_env():
+    """Stand up app + lifespan with stdio + ClientSession mocked but session
+    managers running real. The other helper, _apply_patches(), mocks
+    StreamableHTTPSessionManager.run too — that no-op breaks dispatch
+    through /mcp and /<name>/mcp because the task group never gets set up.
+    """
+    mock_session = make_mock_session()
+
+    @asynccontextmanager
+    async def patched_client_session(read, write):
+        yield mock_session
+
+    with (
+        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
+    ):
+        app, manager = _fresh()
+        async with _lifespan(app):
+            yield app, manager, mock_session
+
+
+class TestCompressedAggregatorIntegration:
+    """End-to-end check that POSTing a compressed config swaps the
+    aggregator's tool surface for the wrapper pair, and that
+    get_tool_schema + invoke_tool both round-trip through ``/mcp``."""
+
+    @pytest.mark.asyncio
+    async def test_aggregator_serves_wrappers_when_scope_aggregator(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                r = await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            names = sorted(t["name"] for t in r.json()["result"]["tools"]
+                           if t["name"].startswith("alpha__"))
+            assert names == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+
+    @pytest.mark.asyncio
+    async def test_aggregator_keeps_full_list_when_scope_catalog(self):
+        async with _compress_test_env() as (app, manager, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("catalog"))
+                r = await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            names = sorted(t["name"] for t in r.json()["result"]["tools"]
+                           if t["name"].startswith("alpha__"))
+            assert names == ["alpha__add", "alpha__echo"]
+            assert "alpha" in manager.aggregator.compressed_catalog
+
+    @pytest.mark.asyncio
+    async def test_invoke_tool_dispatches_through_aggregator(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "alpha__invoke_tool",
+                            "arguments": {"tool_name": "echo", "tool_input": {"x": 1}},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            payload = r.json()["result"]
+            assert payload["content"][0]["text"] == "hello"
+            assert payload["isError"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_tool_schema_returns_underlying_schema(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                # Prime the catalog cache.
+                await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "alpha__get_tool_schema",
+                            "arguments": {"tool_name": "echo"},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            payload = r.json()["result"]
+            assert payload["isError"] is False
+            body = json.loads(payload["content"][0]["text"])
+            assert body["name"] == "echo"
+
+
+class TestPerBackendGlobalScope:
+    """Confirm that /<name>/mcp uses compressed wrappers only when the
+    backend's compress.scope is `global`. Default scope (`aggregator`)
+    leaves /<name>/mcp serving the raw backend surface unchanged."""
+
+    @staticmethod
+    async def _list_at_named_route(c, name: str) -> list[str]:
+        r = await c.post(
+            f"/{name}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        return sorted(t["name"] for t in r.json()["result"]["tools"])
+
+    @pytest.mark.asyncio
+    async def test_scope_aggregator_keeps_named_route_uncompressed(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                names = await self._list_at_named_route(c, "alpha")
+            assert names == ["add", "echo"]
+
+    @pytest.mark.asyncio
+    async def test_scope_global_compresses_named_route(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("global"))
+                names = await self._list_at_named_route(c, "alpha")
+            # No backend prefix at /<name>/mcp — clients already know
+            # the backend by URL.
+            assert names == ["get_tool_schema", "invoke_tool"]
+
+    @pytest.mark.asyncio
+    async def test_scope_catalog_keeps_named_route_uncompressed(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("catalog"))
+                names = await self._list_at_named_route(c, "alpha")
+            assert names == ["add", "echo"]
+
+
+class TestBuiltinListCompressedTools:
+    """The builtin `localmcp__list_compressed_tools` tool surfaces the
+    aggregator's catalog cache for any backend with compress configured —
+    independent of scope, so scope=catalog backends still show up."""
+
+    @pytest.mark.asyncio
+    async def test_lists_compressed_backends(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                # Prime the catalog cache.
+                await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "localmcp__list_compressed_tools",
+                            "arguments": {},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            body = json.loads(r.json()["result"]["content"][0]["text"])
+            assert "alpha" in body
+            assert body["alpha"]["configured"]["level"] == "medium"
+            assert body["alpha"]["configured"]["scope"] == "aggregator"
+            assert body["alpha"]["tool_count"] == 2
+            assert any("echo" in line for line in body["alpha"]["catalog"])
+
+    @pytest.mark.asyncio
+    async def test_scope_catalog_is_visible_here(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("catalog"))
+                await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "localmcp__list_compressed_tools",
+                            "arguments": {},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            body = json.loads(r.json()["result"]["content"][0]["text"])
+            assert "alpha" in body
+            assert body["alpha"]["configured"]["scope"] == "catalog"
+
+    @pytest.mark.asyncio
+    async def test_level_override_re_renders(self):
+        async with _compress_test_env() as (app, _, _):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("aggregator"))
+                await c.post(
+                    "/mcp",
+                    json={"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                r = await c.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "localmcp__list_compressed_tools",
+                            "arguments": {"level": "high"},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            body = json.loads(r.json()["result"]["content"][0]["text"])
+            assert body["alpha"]["configured"]["level"] == "medium"
+            assert body["alpha"]["render_level"] == "high"
+            for line in body["alpha"]["catalog"]:
+                assert "(" in line and ")" in line

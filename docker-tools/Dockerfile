@@ -79,10 +79,26 @@ FROM extra-os AS localmcp
   # COPY localmcp source from the build context (= repo root).
   # `.dockerignore` excludes .venv, .git, .pytest_cache, etc.
   COPY pyproject.toml README.md /opt/localmcp/
+  # docs/*.md powers the in-app Documentation view (/api/docs[/{slug}]).
+  # `.dockerignore` re-includes docs/**/*.md so the markdown files
+  # actually ship in the image.
+  COPY docs /opt/localmcp/docs
   COPY src /opt/localmcp/src
+  # Mandatory MCP set merged into every /api/start payload by ProxyManager.
+  # See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
+  COPY configs/mandatory-localmcp.json /opt/localmcp/configs/mandatory-localmcp.json
 
   RUN pip install --no-cache-dir -e /opt/localmcp
 
-  WORKDIR /opt/localmcp
+  # Runtime CWD is deliberately an empty directory rather than
+  # /opt/localmcp. Pincher (spawned as a stdio child of localmcp)
+  # inherits this CWD, and the kmechlin pincher fork auto-indexes
+  # whatever it finds there — so leaving WORKDIR on /opt/localmcp
+  # produced a phantom "/opt/localmcp" project on the dashboard
+  # alongside the legit /user_data_ro/workspace/<repo> one. An empty
+  # CWD has nothing to index. The localmcp package was installed
+  # editable above and is importable from any working directory.
+  RUN mkdir -p /var/lib/default
+  WORKDIR /var/lib/default
   EXPOSE 8000
   CMD ["sh", "-c", "uvicorn localmcp.app:app --host 0.0.0.0 --port 8000"]

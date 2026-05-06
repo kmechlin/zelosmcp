@@ -86,6 +86,7 @@ Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequ
 | Makefile reference + volume-mount customization | [docs/makefile.md](docs/makefile.md) |
 | `mcpServers` config schema and `/api/start` lifecycle | [docs/configuration.md](docs/configuration.md) |
 | Reverse-proxy backend HTTP sidecars under LocalMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
+| Tool-list compression (`get_tool_schema` / `invoke_tool` wrappers) | [docs/compression.md](docs/compression.md) |
 | Default MCP backends (filesystem / pincher / docker / kubernetes) | [docs/default-mcps.md](docs/default-mcps.md) |
 | Cursor integration + dynamic `.mdc` rule generation | [docs/cursor-integration.md](docs/cursor-integration.md) |
 | VSCode + GitHub Copilot integration + `copilot-instructions.md` | [docs/vscode-integration.md](docs/vscode-integration.md) |

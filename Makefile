@@ -33,7 +33,16 @@ CORP_ROOT_AUTHORITY_CERT_NAME ?= Nike Root Authority NG
 # on $(LOCALMCP_PORT) and exposes its aggregator at /mcp; consumer projects
 # (AAL, etc.) load their own backend configs into the running container via
 # `make localmcp-load LOCALMCP_CONFIG=...`.
-WORKSPACE_DIR       ?= $(HOME)/workspace
+#
+# USER_DATA_ROOT is the host directory exposed to MCP backends. It is
+# bind-mounted twice (configs/default-volumes.conf): once at
+# /user_data_rw (read-write, filesystem MCP root) and once at
+# /user_data_ro (kernel-enforced read-only, pincher index target).
+# Default $HOME so cross-repo browsing and full-tree warm-indexing work
+# without configuration. Override per-invocation when you want a tighter
+# scope:
+#   make localmcp-up USER_DATA_ROOT=$(HOME)/code
+USER_DATA_ROOT      ?= $(HOME)/workspace
 LOCALMCP_PORT       ?= 8000
 # Host bind address for the published $(LOCALMCP_PORT). 127.0.0.1 means
 # only the Mac itself can reach :8000 (tightest, matches the network-
@@ -48,10 +57,30 @@ LOCALMCP_CONTAINER  ?= rancher-localmcp
 # Override with: make localmcp-load LOCALMCP_CONFIG=path/to/other.json
 LOCALMCP_CONFIG     ?= $(shell pwd)/configs/default-localmcp.json
 # Persistent volume mount list applied at `make localmcp-up`. One docker `-v`
-# spec per line, with `$HOME` / `$WORKSPACE_DIR` / `$KUBERNETES_CONFIG_FILE`
+# spec per line, with `$HOME` / `$USER_DATA_ROOT` / `$KUBERNETES_CONFIG_FILE`
 # expanded. See the file header for the full format.
 # Override with: make localmcp-up LOCALMCP_VOLUMES_FILE=path/to/your-volumes.conf
 LOCALMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
+
+# Pincher warm-index targets read paths under /user_data_ro (the
+# kernel-enforced read-only mount of $(USER_DATA_ROOT)). The per-repo
+# target derives the relative path from the current git toplevel to
+# $(USER_DATA_ROOT) so `/user_data_ro/<rel>` lines up with the repo's
+# in-container view; falls back to the bare $(PROJECT_NAME) when git
+# isn't available. Override either piece for repos that live outside
+# $(USER_DATA_ROOT):
+#   make localmcp-warm-index LOCALMCP_PROJECT_PATH=/user_data_ro/code/myrepo
+LOCALMCP_PROJECT_NAME ?= $(PROJECT_NAME)
+LOCALMCP_PROJECT_REL  ?= $(shell python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$(git rev-parse --show-toplevel 2>/dev/null)" "$(USER_DATA_ROOT)" 2>/dev/null || echo "$(LOCALMCP_PROJECT_NAME)")
+LOCALMCP_PROJECT_PATH ?= /user_data_ro/$(LOCALMCP_PROJECT_REL)
+
+# When set to 1 (default), `localmcp-load` chains into `localmcp-warm-index`
+# after the backends start so pincher's index for the current repo is
+# ready by the first agent call. Hooked on `load` (not `up`) because
+# pincher is only brought online by /api/start, which `load` triggers.
+# Idempotent (xxh3-skipped on re-run). Set to 0 for fast loads (CI):
+#   make localmcp-load LOCALMCP_WARM_ON_LOAD=0
+LOCALMCP_WARM_ON_LOAD ?= 1
 
 # pincherMCP source baked into the localmcp image at build time.
 # Defaults to kmechlin's fork branch which adds --basepath / --trust-proxy
@@ -86,8 +115,11 @@ PINCHER_REF  ?= feat/reverse-proxy-basepath
 	localmcp-load \
 	localmcp-stop-all \
 	localmcp-warm-index \
+	localmcp-warm-index-full \
 	localmcp-list-tools \
-	clean
+	localmcp-rule-refresh \
+	clean \
+	nuke
 
 # Print variable values, @: is a no-op and prevents this warning message:
 # "make: Nothing to be done for `test-vars'."
@@ -108,13 +140,17 @@ test-vars:
 	$(info KUBERNETES_CONFIG_FILE=$(KUBERNETES_CONFIG_FILE))
 	$(info DOCKER_SOCK_FILE=$(DOCKER_SOCK_FILE))
 	$(info CORP_ROOT_AUTHORITY_CERT_NAME=$(CORP_ROOT_AUTHORITY_CERT_NAME))
-	$(info WORKSPACE_DIR=$(WORKSPACE_DIR))
+	$(info USER_DATA_ROOT=$(USER_DATA_ROOT))
 	$(info LOCALMCP_PORT=$(LOCALMCP_PORT))
 	$(info LOCALMCP_BIND_ADDR=$(LOCALMCP_BIND_ADDR))
 	$(info LOCALMCP_IMAGE_TAG=$(LOCALMCP_IMAGE_TAG))
 	$(info LOCALMCP_CONTAINER=$(LOCALMCP_CONTAINER))
 	$(info LOCALMCP_CONFIG=$(LOCALMCP_CONFIG))
 	$(info LOCALMCP_VOLUMES_FILE=$(LOCALMCP_VOLUMES_FILE))
+	$(info LOCALMCP_PROJECT_NAME=$(LOCALMCP_PROJECT_NAME))
+	$(info LOCALMCP_PROJECT_REL=$(LOCALMCP_PROJECT_REL))
+	$(info LOCALMCP_PROJECT_PATH=$(LOCALMCP_PROJECT_PATH))
+	$(info LOCALMCP_WARM_ON_LOAD=$(LOCALMCP_WARM_ON_LOAD))
 
 # Export the corporate root authority certificate from the macOS keychain.
 # Required for builds behind a TLS-intercepting corporate proxy (Palo Alto).
@@ -152,8 +188,9 @@ setup-buildx: get-corp-root-authority-cert build-buildx-image
 # LocalMCP image build + lifecycle
 #
 # The container talks to whatever cluster is in $(KUBERNETES_CONFIG_FILE),
-# mounts $(WORKSPACE_DIR) at /workspace so spawned MCP backends (filesystem,
-# pincher, etc.) can see your code, and publishes the aggregator on
+# bind-mounts $(USER_DATA_ROOT) twice (rw at /user_data_rw, ro at
+# /user_data_ro) so spawned MCP backends can see your code with the
+# right access contract, and publishes the aggregator on
 # $(LOCALMCP_BIND_ADDR):$(LOCALMCP_PORT). Bridge networking keeps every
 # backend's bind inside the container's network namespace, so only the
 # explicitly published port is reachable from the host.
@@ -266,12 +303,20 @@ localmcp-clean-kubeconfig:
 #
 # Volume mounts come from $(LOCALMCP_VOLUMES_FILE) (see
 # configs/default-volumes.conf for the format). Defaults wire up:
-#   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config    (read-only)
-#   - $(WORKSPACE_DIR)           -> /workspace            (filesystem + pincher)
-#   - $(DOCKER_SOCK_FILE)        -> /var/run/docker.sock  (mcp-server-docker)
-#   - localmcp-npm               -> /root/.npm            (npx cache)
-#   - localmcp-cache             -> /root/.cache          (uv/pip cache)
-#   - localmcp-pincher           -> /tmp/pincher          (pincher SQLite DB)
+#   - $(KUBERNETES_CONFIG_FILE)  -> /root/.kube/config       (read-only)
+#   - $(USER_DATA_ROOT)          -> /user_data_rw            (filesystem MCP root)
+#   - $(USER_DATA_ROOT)          -> /user_data_ro (read-only) (pincher index)
+#   - $(DOCKER_SOCK_FILE)        -> /var/run/docker.sock     (mcp-server-docker)
+#   - localmcp-npm               -> /root/.npm               (npx cache)
+#   - localmcp-cache             -> /root/.cache             (uv/pip cache)
+#   - localmcp-pincher           -> /tmp/pincher             (pincher SQLite DB)
+#   - localmcp-savings           -> /root/.localmcp          (savings SQLite DB)
+# We expose USER_DATA_ROOT through both an rw and a ro mount so writes go
+# through the rw mount and pincher indexes via the kernel-enforced ro
+# mount. `localmcp-warm-index` (auto-chained from `localmcp-load` when
+# LOCALMCP_WARM_ON_LOAD=1) targets /user_data_ro/<rel-to-USER_DATA_ROOT>
+# for the current repo only; `localmcp-warm-index-full` indexes the
+# whole /user_data_ro mount.
 # Named volumes survive `docker rm` so caches/indexes persist across restarts.
 # Edit the conf file (or point LOCALMCP_VOLUMES_FILE at your own) to change.
 localmcp-up: localmcp-kubeconfig
@@ -287,7 +332,7 @@ localmcp-up: localmcp-kubeconfig
 	-docker rm -f $(LOCALMCP_CONTAINER) 2>/dev/null
 	@echo "==> mounting volumes from $(LOCALMCP_VOLUMES_FILE)"
 	@export HOME='$(HOME)' \
-	        WORKSPACE_DIR='$(WORKSPACE_DIR)' \
+	        USER_DATA_ROOT='$(USER_DATA_ROOT)' \
 	        KUBERNETES_CONFIG_FILE='$(KUBERNETES_CONFIG_FILE)' \
 	        DOCKER_SOCK_FILE='$(DOCKER_SOCK_FILE)' ; \
 	VOLUME_ARGS="" ; \
@@ -384,6 +429,11 @@ localmcp-load:
 	@echo ""
 	@echo "==> resulting status"
 	@curl -sS http://localhost:$(LOCALMCP_PORT)/api/status | python3 -m json.tool
+	@if [ "$(LOCALMCP_WARM_ON_LOAD)" = "1" ]; then \
+		echo ""; \
+		$(MAKE) --no-print-directory localmcp-warm-index || \
+			echo "(warm-index failed; run 'make localmcp-warm-index' manually once pincher is up)"; \
+	fi
 
 # Stop all backend servers in localmcp (without stopping localmcp itself).
 localmcp-stop-all:
@@ -391,12 +441,45 @@ localmcp-stop-all:
 		| python3 -m json.tool 2>/dev/null \
 		|| echo "(localmcp not reachable on port $(LOCALMCP_PORT))"
 
-# Drive pincher's `index` MCP tool against /workspace so the codebase
+# Drive pincher's `index` MCP tool against $(LOCALMCP_PROJECT_PATH) (the
+# current git repo viewed through /user_data_ro) so the codebase
 # intelligence DB (symbols, edges, FTS5) is populated for the first
 # agent interaction. Pincher uses xxh3 content hashing so re-runs are
-# fast (skipped files cost nothing). Idempotent. No-op if no pincher
-# backend is running.
+# fast (skipped files cost nothing). Idempotent. Override the path
+# explicitly when warming a sibling repo:
+#   make localmcp-warm-index LOCALMCP_PROJECT_PATH=/user_data_ro/code/myrepo
 localmcp-warm-index:
+	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+		echo "       Run 'make localmcp-up' first."; \
+		exit 1; \
+	fi
+	@if ! docker exec $(LOCALMCP_CONTAINER) test -d "$(LOCALMCP_PROJECT_PATH)" 2>/dev/null; then \
+		echo "ERROR: $(LOCALMCP_PROJECT_PATH) does not exist inside $(LOCALMCP_CONTAINER)."; \
+		echo "       Verify your repo is under $(USER_DATA_ROOT) on the host"; \
+		echo "       (LOCALMCP_PROJECT_NAME=$(LOCALMCP_PROJECT_NAME),"; \
+		echo "        LOCALMCP_PROJECT_REL=$(LOCALMCP_PROJECT_REL))."; \
+		exit 1; \
+	fi
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
+		>/dev/null
+	@echo "==> pincher__index path=$(LOCALMCP_PROJECT_PATH) (AST extraction; first run may take a minute)"
+	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"$(LOCALMCP_PROJECT_PATH)"}}}' \
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:500]) if c else print("(no content)")' 2>/dev/null \
+		|| echo "(call failed — pincher backend may not be running)"
+
+# Warm pincher's index for EVERYTHING under $(USER_DATA_ROOT) by indexing
+# /user_data_ro. Slow on first run (every file under $(USER_DATA_ROOT)
+# gets parsed); subsequent runs are cheap (xxh3-skipped). Use when you
+# want cross-repo search/symbol coverage; otherwise prefer the per-repo
+# `localmcp-warm-index` for tighter scope.
+localmcp-warm-index-full:
 	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
 		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
 		echo "       Run 'make localmcp-up' first."; \
@@ -407,11 +490,11 @@ localmcp-warm-index:
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
 		>/dev/null
-	@echo "==> pincher__index path=/workspace (AST extraction; first run may take a minute)"
+	@echo "==> pincher__index path=/user_data_ro (full $(USER_DATA_ROOT) — may take several minutes)"
 	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
-		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"/workspace"}}}' \
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"/user_data_ro"}}}' \
 		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:500]) if c else print("(no content)")' 2>/dev/null \
 		|| echo "(call failed — pincher backend may not be running)"
 
@@ -437,9 +520,62 @@ from collections import defaultdict; groups=defaultdict(list); \
 [groups[(n.split("__",1)+[""])[0] if "__" in n else "(unprefixed)"].append((n.split("__",1)+[""])[1]) for n in names]; \
 [print(f"\n[{k}] ({len(v)} tools)") or [print(f"  {t}") for t in v] for k,v in sorted(groups.items())]'
 
+# Refresh the project-scoped Cursor rule .mdc to match whatever backend set
+# is currently loaded. Run after `make localmcp-load` (or any reload that
+# changes the running backends) so the agent sees the new tool catalog.
+#
+# Knobs: ACCESS=read-only|read-write (default read-write — allows mutating
+# tools with confirmation; switch to read-only for stricter sessions).
+LOCALMCP_RULE_FILE   ?= .cursor/rules/localmcp.mdc
+LOCALMCP_RULE_ACCESS ?= read-write
+localmcp-rule-refresh:
+	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+		echo "       Run 'make localmcp-up' first."; \
+		exit 1; \
+	fi
+	@mkdir -p "$$(dirname $(LOCALMCP_RULE_FILE))"
+	@curl -fsSL "http://localhost:$(LOCALMCP_PORT)/api/cursor-rule?access=$(LOCALMCP_RULE_ACCESS)" \
+		-o $(LOCALMCP_RULE_FILE)
+	@echo "==> wrote $(LOCALMCP_RULE_FILE) ($(LOCALMCP_RULE_ACCESS) mode, $$(wc -l < $(LOCALMCP_RULE_FILE)) lines)"
+	@echo "    Restart Cursor (Cmd+Q) for the new rule to load."
+
 # clean everything: container, image, builder, registry config helper
 clean: localmcp-down
 	-docker buildx rm ${BUILDX_BUILDER_NAME}
 	-docker image rm ${BUILDX_IMAGE_NAME}
 	-docker image rm ${LOCALMCP_IMAGE_TAG}
 	-rm -f buildkitd.toml
+
+# nuke: everything `clean` removes PLUS the persistent Docker volumes
+# LocalMCP creates (npx/uv/pincher caches, pincher SQLite index DB, and
+# any leftover buildx state for $(BUILDX_BUILDER_NAME)). DESTRUCTIVE —
+# the pincher index has to be rebuilt from scratch on the next
+# `make localmcp-up && make localmcp-load` (which can take several
+# minutes if you also call `localmcp-warm-index-full`). Use
+# `make clean` instead when you just want to tear down the container
+# and image and keep caches.
+#
+# Volumes removed: every Docker volume whose name contains
+# `localmcp-`. That covers the named volumes pinned in
+# configs/default-volumes.conf (`localmcp-npm`, `localmcp-cache`,
+# `localmcp-pincher`, `localmcp-savings`) plus any code-index / buildx
+# state volumes (`localmcp-code-index`, `buildx_buildkit_localmcp-*_state`).
+nuke: clean
+	@echo "==> stopping any leftover buildx containers for $(BUILDX_BUILDER_NAME)"
+	-@cids=$$(docker ps -aq -f name=buildx_buildkit_$(BUILDX_BUILDER_NAME) 2>/dev/null); \
+	if [ -n "$$cids" ]; then \
+		echo "$$cids" | xargs docker rm -f; \
+	else \
+		echo "    (none)"; \
+	fi
+	@echo "==> removing volumes whose name contains 'localmcp-'"
+	-@volumes=$$(docker volume ls -q -f name=localmcp- 2>/dev/null); \
+	if [ -n "$$volumes" ]; then \
+		echo "$$volumes" | sed 's/^/    rm: /'; \
+		echo "$$volumes" | xargs docker volume rm; \
+	else \
+		echo "    (none)"; \
+	fi
+	@echo "==> nuke complete; next 'make localmcp-up' will build a fresh image and rehydrate caches"
+

@@ -32,8 +32,9 @@ The rule generator endpoint deserves its own table because of the parameter comb
 | `format` | `cursor-mdc` | `cursor-mdc` \| `copilot-instructions` | `cursor-mdc`: YAML frontmatter wrapper for `.cursor/rules/*.mdc`. `copilot-instructions`: plain markdown body for `.github/copilot-instructions.md`. |
 | `style` | `always-apply` | `always-apply` \| `scoped` | `always-apply`: `alwaysApply: true` in frontmatter. `scoped`: `alwaysApply: false` plus `globs:` line. **Only meaningful when `format=cursor-mdc`**; ignored otherwise. |
 | `globs` | (none) | any string | Glob pattern for `style=scoped` (e.g. `**/*.py`). Defaults to `**/*` if `style=scoped` is set without `globs`. Ignored when `format=copilot-instructions`. |
+| `tool_use` | `priority` | `priority` \| `available` | `priority`: rule body adds a "prefer MCP tools over shell" directive plus a curated playbook for the mandatory backends (`filesystem`, `pincher`) filtered by access mode. `available`: pure neutral catalog with no prioritization directive or playbook section. |
 
-Returns 400 on unknown `access` / `format` / `style` values. The body is `text/markdown; charset=utf-8`.
+Returns 400 on unknown `access` / `format` / `style` / `tool_use` values. The body is `text/markdown; charset=utf-8`.
 
 ## curl examples
 
@@ -107,6 +108,13 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?style=scoped&globs=**/*.py' \
   > .cursor/rules/localmcp-python.mdc
 ```
 
+### Generate a neutral catalog rule (no prioritization)
+
+```bash
+curl -fsSL 'http://localhost:8000/api/cursor-rule?tool_use=available' \
+  > .cursor/rules/localmcp.mdc
+```
+
 ### Snapshot the full tool catalog
 
 ```bash
@@ -164,7 +172,7 @@ User backends shut down; the built-in MCP at `/localmcp/mcp` (and its tools surf
         "name": "filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/user_data_rw"]
       }
     }
   ]

@@ -1,15 +1,19 @@
 # Default MCP backends
 
-[`configs/default-localmcp.json`](../configs/default-localmcp.json) ships with four MCP backends pre-wired. Each one is upstream open-source and well-maintained. This page covers what each does, what it needs at runtime, and where to find more info.
+LocalMCP ships with two layers of pre-wired MCP backends:
 
-| Backend | Upstream | Transport | Purpose |
-|---|---|---|---|
-| [`filesystem`](#filesystem) | [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) | stdio (npx) | Read/edit/list files in `/workspace`. |
-| [`pincher`](#pincher) | [`pincherMCP`](https://github.com/kwad77/pincherMCP) | stdio (binary, baked into image) | Codebase intelligence: AST symbols, FTS5 full-text search, Cypher graph queries, BPE token-savings accounting. |
-| [`docker`](#docker) | [`mcp-server-docker`](https://github.com/ckreiling/mcp-server-docker) | stdio (uvx) | Inspect / manage Docker containers, images, networks, volumes. |
-| [`kubernetes`](#kubernetes) | [`kubernetes-mcp-server`](https://github.com/manusa/kubernetes-mcp-server) | stdio (npx) | Inspect / manage Kubernetes resources. |
+- **Mandatory** ([`configs/mandatory-localmcp.json`](../configs/mandatory-localmcp.json)) — `pincher` is merged into every `/api/start` payload before parsing. User configs can override its args/env (same-name entries win), but you don't have to copy it into your own config to get it running.
+- **Default** ([`configs/default-localmcp.json`](../configs/default-localmcp.json)) — `kubernetes` and `docker` ship in the file `make localmcp-load` POSTs by default. Drop them, change them, or replace the whole file by overriding `LOCALMCP_CONFIG`.
+- **Optional** — `filesystem` is documented below for reference. It is no longer auto-merged into every payload; add it to your own user config (or to `configs/default-localmcp.json`) when you want file access exposed to the agent.
 
-The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `filesystem__read_text_file`, `pincher__search`).
+| Backend | Layer | Upstream | Transport | Purpose |
+|---|---|---|---|---|
+| [`pincher`](#pincher) | mandatory | [`pincherMCP`](https://github.com/kwad77/pincherMCP) | stdio (binary, baked into image) | Codebase intelligence: AST symbols, FTS5 full-text search, Cypher graph queries, BPE token-savings accounting. |
+| [`docker`](#docker) | default | [`mcp-server-docker`](https://github.com/ckreiling/mcp-server-docker) | stdio (uvx) | Inspect / manage Docker containers, images, networks, volumes. |
+| [`kubernetes`](#kubernetes) | default | [`kubernetes-mcp-server`](https://github.com/manusa/kubernetes-mcp-server) | stdio (npx) | Inspect / manage Kubernetes resources. |
+| [`filesystem`](#filesystem) | optional | [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) | stdio (npx) | Read/edit/list files in `/user_data_rw`. Add to your own config to enable. |
+
+The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `pincher__search`, `filesystem__read_text_file` once enabled). Pincher and kubernetes ship with `compress: { level: "medium" }` so the aggregator surfaces wrapper tools instead of the full schema; see [compression.md](compression.md) for what that means.
 
 ---
 
@@ -22,11 +26,11 @@ The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (
 ```json
 "filesystem": {
   "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/user_data_rw"]
 }
 ```
 
-The `/workspace` argument is the sandbox — the server will refuse to read or write outside it. Inside the LocalMCP container, `/workspace` is bind-mounted to your host's `$WORKSPACE_DIR` (default `$HOME/workspace`).
+The `/user_data_rw` argument is the sandbox — the server will refuse to read or write outside it. Inside the LocalMCP container, `/user_data_rw` is bind-mounted (read/write) to your host's `$USER_DATA_ROOT` (default `$HOME`). The same host directory is also mounted read-only at `/user_data_ro` for backends like pincher that should not be able to write.
 
 ### Tool surface (14 tools)
 
@@ -50,11 +54,11 @@ All tools annotate their MCP `readOnlyHint` correctly, so the [LocalMCP rule gen
 
 ### Mounts needed
 
-`$WORKSPACE_DIR -> /workspace` (default in [`configs/default-volumes.conf`](../configs/default-volumes.conf)).
+`$USER_DATA_ROOT -> /user_data_rw` and `$USER_DATA_ROOT -> /user_data_ro:ro` (default in [`configs/default-volumes.conf`](../configs/default-volumes.conf)).
 
 ### Gotchas
 
-- Paths are container-relative. Tell the agent `/workspace/foo.py`, not `~/workspace/foo.py`.
+- Paths are container-relative. Tell the agent `/user_data_rw/workspace/foo.py`, not `~/workspace/foo.py`.
 - `edit_file` supports `dryRun: true` for preview. Pin that into your Cursor rule for any change >5 lines.
 
 ---
@@ -119,10 +123,10 @@ docker build --build-arg PINCHER_VERSION=v0.3.0 -t localmcp .
 
 ### Mounts needed
 
-- `$WORKSPACE_DIR -> /workspace` (the project being indexed)
+- `$USER_DATA_ROOT -> /user_data_ro` read-only (the host tree being indexed)
 - `localmcp-pincher -> /tmp/pincher` (named volume — persists the SQLite index DB plus its WAL/SHM siblings across container restarts)
 
-`make localmcp-warm-index` calls `pincher__index` with `path=/workspace` post-startup so the index DB is ready by the first agent call. Subsequent runs are fast (skipped via xxh3 content-hash).
+`make localmcp-warm-index` calls `pincher__index` with `path=/user_data_ro/<rel-to-USER_DATA_ROOT>` (the current git repo) post-startup so the index DB is ready by the first agent call. Subsequent runs are fast (skipped via xxh3 content-hash). Use `make localmcp-warm-index-full` to index the whole `/user_data_ro` mount instead.
 
 ### Stable symbol IDs
 
@@ -142,7 +146,7 @@ Pincher's MCP server doesn't currently ship `readOnlyHint` / `destructiveHint` a
 
 ### Gotchas
 
-- **First call needs `index`.** Pincher's tools (`search`, `symbol`, `query`, ...) return empty until you've called `index path=/workspace` at least once. `make localmcp-warm-index` does this for you; otherwise the agent has to call `pincher__index` itself before anything else.
+- **First call needs `index`.** Pincher's tools (`search`, `symbol`, `query`, ...) return empty until you've called `index path=/user_data_ro/<rel>` (or `path=/user_data_ro`) at least once. `make localmcp-warm-index` does this for you; otherwise the agent has to call `pincher__index` itself before anything else.
 - **Language coverage is uneven.** Go gets full AST extraction (confidence 1.0). Python / TypeScript / JavaScript / Rust / Java / Kotlin use stable regex (0.85). Ruby / PHP / C / C++ / C# use approximate regex (0.70). See [the README's language-support table](https://github.com/kwad77/pincherMCP#language-support) for the per-language list.
 - **SQLite serializes writes.** Pincher uses `SetMaxOpenConns(1)` for the writer pool. Concurrent re-indexes (e.g. running `pincher index` from two terminals) will queue rather than collide; healthy default but worth knowing for large-repo workflows.
 

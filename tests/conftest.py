@@ -24,6 +24,48 @@ class FakeResult:
             setattr(self, k, v)
 
 
+def make_pincher_call_result(
+    *,
+    text: str = "ok",
+    tokens_used: int = 100,
+    tokens_saved: int = 900,
+    cost_avoided: float = 0.0042,
+    location: str = "result",
+):
+    """Build a fake CallToolResult-shaped object with the pincher `_meta`
+    envelope placed at one of three known locations.
+
+    ``location`` selects which carrier holds the envelope:
+    - ``"result"`` — directly on the result via ``meta``.
+    - ``"structured"`` — on ``structuredContent``.
+    - ``"annotation"`` — on ``content[0].annotations``.
+    """
+    meta_payload = {
+        "tokens_used": tokens_used,
+        "tokens_saved": tokens_saved,
+        "cost_avoided": cost_avoided,
+    }
+    text_block = TextContent(type="text", text=text)
+    if location == "annotation":
+        text_block = FakeResult(
+            type="text",
+            text=text,
+            annotations=meta_payload,
+        )
+    structured = None
+    meta_attr = None
+    if location == "result":
+        meta_attr = meta_payload
+    elif location == "structured":
+        structured = {"_meta": meta_payload}
+    return FakeResult(
+        content=[text_block],
+        structuredContent=structured,
+        isError=False,
+        meta=meta_attr,
+    )
+
+
 def _tool(name: str) -> Tool:
     return Tool(name=name, description="desc", inputSchema={"type": "object", "properties": {}})
 

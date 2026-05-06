@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "pincher": {
+      "command": "pincher",
+      "args": [
+        "--data-dir",
+        "/tmp/pincher",
+        "--http",
+        "127.0.0.1:8080",
+        "--trust-proxy"
+      ],
+      "reverseProxy": {
+        "mount": "/pincher",
+        "upstream": "http://127.0.0.1:8080"
+      },
+      "compress": {
+        "level": "medium"
+      }
+    }
+  }
+}

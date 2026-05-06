@@ -9,7 +9,8 @@ make localmcp-up              # start the container (auto-builds image if missin
 make localmcp-load            # POST configs/default-localmcp.json to /api/start
 make localmcp-status          # is it up? + curl probes
 make localmcp-list-tools      # tools each backend exposes (uses /mcp aggregator)
-make localmcp-warm-index      # pre-build pincher's symbol DB against /workspace
+make localmcp-warm-index      # pre-build pincher's symbol DB for the current repo
+make localmcp-warm-index-full # pre-build it for the entire /user_data_ro mount
 make localmcp-shell           # bash inside the container
 make localmcp-logs            # tail container logs
 make localmcp-restart         # bounce the container
@@ -29,7 +30,11 @@ Every target takes Make variable overrides on the command line, e.g. `make local
 | `LOCALMCP_CONTAINER` | `rancher-localmcp` | Container name `make localmcp-up` creates. |
 | `LOCALMCP_CONFIG` | `$(pwd)/configs/default-localmcp.json` | JSON config file `make localmcp-load` POSTs into the running container. |
 | `LOCALMCP_VOLUMES_FILE` | `$(pwd)/configs/default-volumes.conf` | List of `docker run -v` specs. See "Volume mounts" below. |
-| `WORKSPACE_DIR` | `$HOME/workspace` | Host directory bind-mounted to `/workspace` inside the container (filesystem + pincher backends operate on this). |
+| `USER_DATA_ROOT` | `$HOME` | Host directory bind-mounted twice: read-write at `/user_data_rw` (filesystem MCP root) and read-only at `/user_data_ro` (pincher index target). |
+| `LOCALMCP_PROJECT_NAME` | `$(PROJECT_NAME)` (current git repo basename) | Used to derive the per-repo warm-index path. |
+| `LOCALMCP_PROJECT_REL` | computed via `python3 os.path.relpath` | Relative path from `$(USER_DATA_ROOT)` to the current git toplevel. Falls back to `$(LOCALMCP_PROJECT_NAME)` when git isn't available. |
+| `LOCALMCP_PROJECT_PATH` | `/user_data_ro/$(LOCALMCP_PROJECT_REL)` | In-container path that `localmcp-warm-index` indexes. Override directly for repos outside `$(USER_DATA_ROOT)`. |
+| `LOCALMCP_WARM_ON_LOAD` | `1` | When `1`, `make localmcp-load` chains into `make localmcp-warm-index` after backends start. Set to `0` for fast loads. |
 | `KUBERNETES_CONFIG_FILE` | `$HOME/.kube/config` | Host kubeconfig bind-mounted read-only to `/root/.kube/config` (the `kubernetes` backend reads this). `make localmcp-up` adds a `localmcp` cluster + context to it via `kubectl config set-cluster/set-context` so the bridge-networked container can reach the host's K8s API at `host.docker.internal:6443`. See [setup-rancher-desktop.md](setup-rancher-desktop.md#bridge-networking--the-localmcp-context) for the full flow. |
 | `DOCKER_SOCK_FILE` | `/var/run/docker.sock` | Host Docker socket bind-mounted at `/var/run/docker.sock` (mcp-server-docker uses this). See [setup-rancher-desktop.md](setup-rancher-desktop.md) for when to override. |
 | `PINCHER_REPO` | kmechlin fork URL | Git URL for the pincherMCP source baked into the image. |
@@ -99,13 +104,25 @@ POSTs `/api/stop`. Tears down user backends; the always-on built-in MCP at `/loc
 
 ### `make localmcp-warm-index`
 
-Pre-populates `pincher`'s codebase intelligence DB (symbols + edges + FTS5) by indexing `/workspace`. Call once after `localmcp-load` to avoid the first-call indexing latency:
+Pre-populates `pincher`'s codebase intelligence DB (symbols + edges + FTS5) by indexing the **current git repo** at `$(LOCALMCP_PROJECT_PATH)` (default `/user_data_ro/<rel-from-USER_DATA_ROOT-to-git-toplevel>`). Auto-chained from `make localmcp-load` when `LOCALMCP_WARM_ON_LOAD=1` (default), so the typical flow is just:
 
 ```bash
-make localmcp-up && make localmcp-load && make localmcp-warm-index
+make localmcp-up && make localmcp-load
 ```
 
-Calls `pincher__index` with `path=/workspace` via the aggregator's `/mcp` endpoint. xxh3 content-hashing makes re-runs cheap (skipped files cost nothing), so it's fine to re-run after big edits.
+Calls `pincher__index` via the aggregator's `/mcp` endpoint. xxh3 content-hashing makes re-runs cheap (skipped files cost nothing), so it's fine to re-run after big edits. Override the path explicitly when warming a sibling repo:
+
+```bash
+make localmcp-warm-index LOCALMCP_PROJECT_PATH=/user_data_ro/code/myrepo
+```
+
+### `make localmcp-warm-index-full`
+
+Same idea but indexes the **entire `/user_data_ro` mount** (the whole `$(USER_DATA_ROOT)` host tree). Slow on first run; useful when you want cross-repo search/symbol coverage. Subsequent runs are cheap (xxh3-skipped):
+
+```bash
+make localmcp-warm-index-full
+```
 
 ### `make localmcp-list-tools`
 
@@ -151,11 +168,13 @@ Named volumes (the npx/uv/pincher caches) **survive** by design — re-running `
 
 ```
 $KUBERNETES_CONFIG_FILE:/root/.kube/config:ro    # kubeconfig (read-only)
-$WORKSPACE_DIR:/workspace                         # source tree
+$USER_DATA_ROOT:/user_data_rw                     # source tree (read/write — filesystem MCP)
+$USER_DATA_ROOT:/user_data_ro:ro                  # source tree (read-only — pincher index)
 $DOCKER_SOCK_FILE:/var/run/docker.sock            # docker daemon socket
 localmcp-npm:/root/.npm                           # npx cache (named volume)
 localmcp-cache:/root/.cache                       # uv/pip cache (named volume)
 localmcp-pincher:/tmp/pincher                     # pincher SQLite index DB (named volume)
+localmcp-savings:/root/.localmcp                  # savings SQLite store (named volume)
 ```
 
 ### Variables expanded at runtime
@@ -165,7 +184,7 @@ These four shell variables are substituted by the Makefile into the volumes file
 | Var | Default | Source |
 |---|---|---|
 | `$HOME` | (your home dir) | shell env |
-| `$WORKSPACE_DIR` | `$HOME/workspace` | Make variable, exported |
+| `$USER_DATA_ROOT` | `$HOME` | Make variable, exported |
 | `$KUBERNETES_CONFIG_FILE` | `$HOME/.kube/config` | Make variable, exported |
 | `$DOCKER_SOCK_FILE` | `/var/run/docker.sock` | Make variable, exported |
 
@@ -173,7 +192,7 @@ Override any of them on the command line:
 
 ```bash
 make localmcp-up \
-  WORKSPACE_DIR=/Users/me/code/myproject \
+  USER_DATA_ROOT=/Users/me/code \
   KUBERNETES_CONFIG_FILE=/Users/me/.kube/staging-config
 ```
 

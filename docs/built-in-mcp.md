@@ -19,8 +19,9 @@ The built-in is a synthetic [`ProxyState`](../src/localmcp/proxy.py) — same at
 | `localmcp__start_server` | Wraps `ProxyManager.start_one(name)`. Refuses `name="localmcp"`. |
 | `localmcp__stop_server` | Wraps `ProxyManager.stop_one(name)`. Refuses `name="localmcp"`. |
 | `localmcp__reload_config` | Replaces the entire backend set; same JSON shape `POST /api/start` accepts. |
+| `localmcp__list_compressed_tools` | Returns the compressed catalog (one short line per tool) for any backend with a `compress` block configured. Independent of `compress.scope` — even `scope=catalog` backends surface here. Optional `backend` filter and `level` override (preview a different level without changing the live config). See [compression.md](compression.md). |
 
-All seven are reachable via `/localmcp/mcp` (unprefixed) or `/mcp` (prefixed `localmcp__`).
+All eight are reachable via `/localmcp/mcp` (unprefixed) or `/mcp` (prefixed `localmcp__`).
 
 ### `localmcp__generate_cursor_rule` in detail
 
@@ -32,6 +33,7 @@ The most-used tool. Synthesizes an agent-instructions document from the live cat
 | `format` | `cursor-mdc` | `cursor-mdc` (YAML frontmatter for `.cursor/rules/*.mdc`) or `copilot-instructions` (no frontmatter for `.github/copilot-instructions.md`). |
 | `style` | `always-apply` | `always-apply` or `scoped`. Only meaningful for `format=cursor-mdc`. |
 | `globs` | (none) | Glob pattern when `style=scoped`. Only meaningful for `format=cursor-mdc`. |
+| `tool_use` | `priority` | `priority` (rule body adds a "prefer MCP tools over shell" directive plus a curated playbook for the mandatory backends `filesystem` and `pincher`, filtered by `access`) or `available` (neutral catalog with no prioritization directive or playbook section). |
 
 The same generator also drives `GET /api/cursor-rule` — both surfaces are guaranteed-equivalent (covered by `test_aggregate_call_tool_round_trip` in [tests/test_app_integration.py](../tests/test_app_integration.py)).
 

@@ -23,6 +23,7 @@ from localmcp.builtin import (
     render_comprehensive_rule,
 )
 from localmcp.config import ConfigError
+from localmcp.docs import list_docs, read_doc
 from localmcp.manager import ProxyManager
 from localmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
 
@@ -350,6 +351,60 @@ def create_app(manager: ProxyManager | None = None):
         catalog = await collect_backend_full_catalog(manager, skip_self=False)
         return JSONResponse(catalog)
 
+    async def api_docs_index(request: Request) -> JSONResponse:
+        """
+        summary: List the markdown documents available to the in-app Docs view.
+        tags: [introspection]
+        responses:
+          200:
+            description: |
+              Ordered list of ``{slug, title}`` entries. The top-level
+              ``README.md`` (when present) is exposed under the slug
+              ``readme`` and surfaced first; subsequent entries come from
+              ``docs/*.md`` and are alphabetised by slug. The same
+              whitelist gates ``GET /api/docs/{slug}`` reads.
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      slug:  { type: string }
+                      title: { type: string }
+        """
+        return JSONResponse(list_docs())
+
+    async def api_docs_get(request: Request) -> JSONResponse:
+        """
+        summary: Read one markdown document by slug, rendered to HTML.
+        tags: [introspection]
+        parameters:
+          - in: path
+            name: slug
+            required: true
+            schema: { type: string }
+        responses:
+          200:
+            description: |
+              ``{slug, title, markdown, html}``. ``html`` is rendered
+              with the ``markdown`` package (extensions: ``fenced_code``,
+              ``tables``, ``toc``, ``sane_lists``) and post-processed to
+              strip ``<script>`` tags and inline ``on*`` handlers
+              defensively.
+            content:
+              application/json: {}
+          404:
+            description: Slug isn't in the docs whitelist.
+        """
+        slug = request.path_params["slug"]
+        doc = read_doc(slug)
+        if doc is None:
+            return JSONResponse(
+                {"error": f"Unknown doc slug: {slug!r}"}, status_code=404
+            )
+        return JSONResponse(doc)
+
     async def catalog_page(request: Request) -> HTMLResponse:
         """
         summary: Standalone, searchable documentation page for every running backend.
@@ -405,13 +460,26 @@ def create_app(manager: ProxyManager | None = None):
             required: false
             schema: { type: string }
             description: Glob pattern when style=scoped (e.g. `**/*.py`).
+          - in: query
+            name: tool_use
+            required: false
+            schema:
+              type: string
+              enum: [available, priority]
+              default: priority
+            description: |
+              priority (default): rule body adds a "prefer MCP tools
+              over shell" directive plus a curated playbook for the
+              mandatory backends (`filesystem`, `pincher`) filtered by
+              access mode. available: neutral catalog with no
+              prioritization directive or playbook section.
         responses:
           200:
             description: Markdown body of the generated rule (frontmatter + body, or body-only for copilot-instructions).
             content:
               text/markdown: {}
           400:
-            description: Unknown `access`, `format`, or `style` value.
+            description: Unknown `access`, `format`, `style`, or `tool_use` value.
         """
         access = request.query_params.get("access", "read-only")
         if access not in ("read-only", "read-write"):
@@ -428,12 +496,89 @@ def create_app(manager: ProxyManager | None = None):
             return JSONResponse(
                 {"error": f"Unknown style: {style!r}"}, status_code=400
             )
+        tool_use = request.query_params.get("tool_use", "priority")
+        if tool_use not in ("available", "priority"):
+            return JSONResponse(
+                {"error": f"Unknown tool_use: {tool_use!r}"}, status_code=400
+            )
         globs = request.query_params.get("globs")
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
         body = render_comprehensive_rule(
-            catalog, access=access, style=style, globs=globs, fmt=fmt
+            catalog,
+            access=access,
+            style=style,
+            globs=globs,
+            fmt=fmt,
+            tool_use=tool_use,
+            mandatory_names=manager.mandatory_names(),
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
+
+    async def api_savings(request: Request) -> JSONResponse:
+        """
+        summary: Token-savings dashboard snapshot.
+        description: |
+          Aggregated token-savings metrics across three sources:
+          (1) tool-list compression per backend (raw vs. wrapper-pair
+          token/byte counts), (2) per-call accounting for every tool
+          invocation routed through this proxy, and (3) pincher's
+          self-reported BPE savings from the `_meta` envelope and the
+          most recent `pincher__stats` snapshot. Returns 503 when the
+          savings store hasn't started yet (e.g. the lifespan hook
+          hasn't fired).
+        tags: [introspection]
+        responses:
+          200:
+            description: Savings snapshot.
+            content:
+              application/json: {}
+          503:
+            description: Savings store not yet initialised.
+        """
+        recorder = manager.savings
+        if recorder is None:
+            return JSONResponse(
+                {"error": "savings store not initialised"},
+                status_code=503,
+            )
+        return JSONResponse(await recorder.snapshot())
+
+    async def api_savings_stream(request: Request) -> StreamingResponse:
+        """
+        summary: Server-Sent-Events stream of incremental savings events.
+        description: |
+          Each frame is a JSON object with at least an `event` key
+          (`call`, `compression`, or `pincher_stats`). Clients should
+          listen for these to invalidate cached `/api/savings` snapshots
+          and trigger a fresh fetch.
+        tags: [introspection]
+        responses:
+          200:
+            description: SSE stream of savings events.
+            content:
+              text/event-stream: {}
+          503:
+            description: Savings store not yet initialised.
+        """
+        recorder = manager.savings
+        if recorder is None:
+            return JSONResponse(
+                {"error": "savings store not initialised"},
+                status_code=503,
+            )
+        q = recorder.subscribe()
+
+        async def event_stream():
+            try:
+                while True:
+                    msg = await q.get()
+                    yield f"data: {msg}\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                recorder.unsubscribe(q)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     async def api_logs(request: Request) -> StreamingResponse:
         """
@@ -445,10 +590,15 @@ def create_app(manager: ProxyManager | None = None):
             content:
               text/event-stream: {}
         """
-        q = manager.subscribe_logs()
+        snapshot, q = manager.subscribe_logs_with_history()
 
         async def event_stream():
             try:
+                # Replay the buffered history first so the client sees
+                # the full session timeline (including startup banners
+                # that fired before this SSE subscriber connected).
+                for line in snapshot:
+                    yield f"data: {line}\n\n"
                 while True:
                     msg = await q.get()
                     yield f"data: {msg}\n\n"
@@ -501,8 +651,12 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/stop", api_stop, methods=["POST"]),
             Route("/api/cursor-rule", api_cursor_rule),
             Route("/api/catalog", api_catalog),
+            Route("/api/docs", api_docs_index),
+            Route("/api/docs/{slug}", api_docs_get),
             Route("/catalog", catalog_page),
             Route("/api/logs", api_logs),
+            Route("/api/savings", api_savings),
+            Route("/api/savings/stream", api_savings_stream),
             Route("/api/servers/{name}", api_server_get),
             Route("/api/servers/{name}/start", api_server_start, methods=["POST"]),
             Route("/api/servers/{name}/stop", api_server_stop, methods=["POST"]),

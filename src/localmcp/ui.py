@@ -34,18 +34,218 @@ HTML_TEMPLATE = """\
     -webkit-font-smoothing: antialiased;
   }
 
-  .container {
-    max-width: 720px;
+  /* ── App shell (three-column landscape grid) ──
+     Designed for wide displays. Uses the full viewport up to 2000px so
+     the activity log and pincher dashboard get the room they need. The
+     right column is sized to fit a fully-formed MCP URL on one line
+     (`http://localhost:8000/<name>/mcp`) plus pills + a STOP button. */
+  .app-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 2000px;
     margin: 0 auto;
-    padding: 48px 24px;
+    padding: 24px 32px 0;
   }
 
-  /* ── Header ── */
+  .app-shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr) 480px;
+    gap: 32px;
+    max-width: 2000px;
+    margin: 0 auto;
+    padding: 24px 32px 32px;
+    align-items: start;
+  }
+
+  .left-col, .mid-col, .right-col { min-width: 0; }
+
+  .right-col {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ── Left nav ── */
+  .nav-group { margin-bottom: 24px; }
+
+  .nav-group-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 8px;
+  }
+
+  .nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--black);
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+  }
+  .nav-item:hover { background: var(--surface); }
+  .nav-item.active {
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+  }
+
+  /* ── Views (only one visible at a time) ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── Pincher dashboard iframe ── */
+  .dashboard-frame {
+    display: block;
+    width: 100%;
+    height: calc(100vh - 200px);
+    min-height: 480px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--white);
+  }
+  .dashboard-empty {
+    color: var(--mid);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .dashboard-empty code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--white);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .dashboard-meta {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mid);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* ── Savings dashboard ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .kpi {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--white);
+  }
+  .kpi-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--mid);
+    margin-bottom: 6px;
+  }
+  .kpi-value {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  .savings-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .savings-table th,
+  .savings-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .savings-table th {
+    font-weight: 600;
+    color: var(--mid);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+  .savings-table td.num,
+  .savings-table th.num { text-align: right; font-family: var(--mono); }
+  .savings-table .empty-cell {
+    color: var(--mid);
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+  }
+  .backend-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .backend-bar {
+    display: grid;
+    grid-template-columns: 140px 1fr 90px;
+    gap: 12px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .backend-bar-name { font-family: var(--mono); }
+  .backend-bar-track {
+    height: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .backend-bar-fill {
+    height: 100%;
+    background: var(--accent);
+  }
+  .backend-bar-count {
+    text-align: right;
+    font-family: var(--mono);
+    color: var(--mid);
+  }
+  .savings-pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow: auto;
+    color: var(--black);
+  }
+
+  /* Below ~1240px the 220 + 480 columns leave the middle column too
+     narrow (the activity log starts wrapping awkwardly). Collapse to a
+     single column with the system actions floated up below the nav. */
+  @media (max-width: 1240px) {
+    .app-shell { grid-template-columns: 1fr; gap: 24px; padding: 24px; }
+    .app-topbar { padding: 24px 24px 0; }
+    .left-col { order: 1; }
+    .right-col { order: 2; position: static; top: auto; }
+    .mid-col { order: 3; }
+  }
+
+  /* ── Top bar ── */
   .header {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 24px;
+    flex: 1;
   }
 
   .wordmark {
@@ -254,6 +454,7 @@ HTML_TEMPLATE = """\
     font-size: 11px;
     width: auto;
     border-radius: 999px;
+    flex-shrink: 0;
   }
 
   /* ── Server list ── */
@@ -273,7 +474,8 @@ HTML_TEMPLATE = """\
   .server-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
     background: var(--white);
     border-radius: 12px;
     padding: 12px 16px;
@@ -281,7 +483,10 @@ HTML_TEMPLATE = """\
     cursor: pointer;
     transition: background 0.1s ease;
     user-select: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
+  .server-row > * { min-width: 0; }
   .server-row:hover {
     background: var(--surface);
   }
@@ -293,13 +498,24 @@ HTML_TEMPLATE = """\
     color: var(--black);
   }
 
-  .server-meta {
+  .server-row .grow { flex: 1; min-width: 0; }
+
+  /* Specificity override: the meta also carries the `.grow` class
+     (legacy from the old single-row layout), and `.server-row .grow`
+     would otherwise collapse it to `flex: 1 1 0%` and force a
+     character-per-line break-all when it lands on its own wrap line.
+     We pin it to a full-width line of its own with a real basis. */
+  .server-row .server-meta {
+    flex: 0 0 100%;
+    min-width: 0;
+    width: 100%;
+    margin-left: 24px;
+    font-family: var(--mono);
     font-size: 12px;
     color: var(--mid);
-    font-family: var(--mono);
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
-
-  .server-row .grow { flex: 1; }
 
   /* Caret indicating click-to-expand. Rotates 90deg when the row is open. */
   .caret {
@@ -401,6 +617,8 @@ HTML_TEMPLATE = """\
     padding: 3px 8px;
     border-radius: 999px;
     line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .pill.transport { background: var(--surface); color: var(--mid); }
@@ -414,7 +632,8 @@ HTML_TEMPLATE = """\
     background: var(--white);
     border-radius: 12px;
     padding: 16px;
-    max-height: 320px;
+    height: calc(100vh - 240px);
+    min-height: 480px;
     overflow-y: auto;
     font-family: var(--mono);
     font-size: 13px;
@@ -423,8 +642,26 @@ HTML_TEMPLATE = """\
   }
 
   .log-viewer:empty::before {
-    content: "Logs will appear here...";
+    content: "Waiting for events...";
     color: var(--mid);
+  }
+
+  .log-filter {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.4;
+    outline: none;
+  }
+  .log-filter:focus {
+    border-color: var(--accent);
   }
 
   .log-line {
@@ -434,6 +671,10 @@ HTML_TEMPLATE = """\
 
   .log-line.error {
     color: var(--error);
+  }
+
+  .log-line.hidden {
+    display: none;
   }
 
   /* ── Snippet block ── */
@@ -483,32 +724,276 @@ HTML_TEMPLATE = """\
     border-color: var(--accent);
   }
 
+  /* ── Documentation view ── */
+  /* Two modes share the same view: index (list of cards) and content
+     (rendered HTML). Switched by toggling .hidden on each container. */
+  .docs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .docs-toolbar .btn-back {
+    width: auto;
+    padding: 8px 18px;
+    font-size: 12px;
+    border-radius: 999px;
+  }
+  .docs-toolbar .docs-current {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .docs-index {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .docs-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    cursor: pointer;
+    font-family: var(--font);
+    color: var(--black);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  }
+  .docs-card:hover {
+    border-color: var(--black);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  }
+  .docs-card:active { transform: translateY(1px); }
+  .docs-card-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--black);
+  }
+  .docs-card-slug {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--mid);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .docs-content {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--black);
+    overflow-x: auto;
+    min-height: 240px;
+  }
+  .docs-content h1, .docs-content h2, .docs-content h3,
+  .docs-content h4, .docs-content h5, .docs-content h6 {
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1.4em 0 0.5em;
+  }
+  .docs-content h1 { font-size: 26px; margin-top: 0; }
+  .docs-content h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .docs-content h3 { font-size: 17px; }
+  .docs-content h4 { font-size: 15px; color: var(--mid); text-transform: uppercase; letter-spacing: 0.05em; }
+  .docs-content p { margin: 0 0 1em; }
+  .docs-content a { color: var(--accent); text-decoration: none; }
+  .docs-content a:hover { text-decoration: underline; }
+  .docs-content ul, .docs-content ol { margin: 0 0 1em 1.4em; }
+  .docs-content li { margin-bottom: 0.25em; }
+  .docs-content code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .docs-content pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 1em;
+  }
+  .docs-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .docs-content blockquote {
+    border-left: 3px solid var(--border);
+    color: var(--mid);
+    padding-left: 14px;
+    margin: 0 0 1em;
+  }
+  .docs-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 1em;
+    font-size: 14px;
+  }
+  .docs-content th, .docs-content td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .docs-content th {
+    background: var(--surface);
+    font-weight: 700;
+  }
+  .docs-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5em 0;
+  }
+  .docs-content img { max-width: 100%; height: auto; }
+  /* Mermaid blocks: rendered SVGs from mermaid.js. The library injects
+     SVGs directly into the .mermaid container; we just give them a
+     light frame consistent with the other code blocks. */
+  .docs-content .mermaid {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin: 0 0 1em;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .docs-content .mermaid svg { max-width: 100%; height: auto; }
+  .docs-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+
+  /* Stack the docs index on narrow viewports — single column, full
+     width in the middle pane. */
+  @media (max-width: 1240px) {
+    .docs-index { grid-template-columns: 1fr; }
+  }
+
+  /* ── Server details view (catalog rendered in the center pane) ── */
+  .details-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+  .details-body .cat-group { margin-bottom: 20px; }
+  .details-body .cat-group:last-child { margin-bottom: 0; }
+  .details-body .cat-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 10px;
+  }
+  .details-body ul { list-style: none; }
+  .details-body li {
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    border-left: 2px solid var(--border);
+    padding-left: 12px;
+    margin-bottom: 8px;
+  }
+  .details-body li code { font-weight: 700; }
+  .details-body li .desc {
+    font-family: var(--font);
+    color: var(--mid);
+    font-size: 13px;
+    margin-top: 3px;
+    white-space: pre-wrap;
+  }
+  .details-body li details { margin-top: 6px; }
+  .details-body li details summary {
+    cursor: pointer;
+    color: var(--mid);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .details-body li pre {
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-top: 6px;
+    overflow-x: auto;
+  }
+  .details-body .empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 13px;
+  }
+
   /* ── Utilities ── */
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
-<div class="container">
 
-  <!-- Header -->
+<!-- Top bar -->
+<div class="app-topbar">
   <div class="header">
     <span class="wordmark">LOCALMCP</span>
-    <span class="badge stopped" id="badge">STOPPED</span>
     <span class="header-spacer"></span>
     <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
+</div>
 
-  <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough), and the aggregate endpoint at <code>localhost:8000/mcp</code> exposes every running server's tools, prompts, and resources under the <code>&lt;server&gt;__&lt;name&gt;</code> namespace (resource URIs keep their original form). The aggregate is the recommended way to wire Cursor &mdash; one entry, every backend.</p>
+<div class="app-shell">
 
-  <!-- Config -->
-  <div class="section">
-    <div class="section-label">Configuration</div>
-    <div class="card">
-      <textarea
-        class="config-textarea"
-        id="config-input"
-        spellcheck="false"
-      >{
+  <!-- Left nav -->
+  <aside class="left-col">
+    <div class="nav-group">
+      <div class="nav-group-label">Configuration</div>
+      <button type="button" class="nav-item active" data-view="configuration">Servers config</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Rules generation</div>
+      <button type="button" class="nav-item" data-view="rules">Cursor rule (.mdc)</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Dashboards</div>
+      <button type="button" class="nav-item" data-view="savings">Savings</button>
+      <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Event logging</div>
+      <button type="button" class="nav-item" data-view="logs">Activity</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Help</div>
+      <button type="button" class="nav-item" data-view="docs">Documentation</button>
+    </div>
+  </aside>
+
+  <!-- Middle content (only one .view is .active at a time) -->
+  <main class="mid-col">
+
+    <!-- Configuration view -->
+    <section class="view active" data-view="configuration">
+      <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough), and the aggregate endpoint at <code>localhost:8000/mcp</code> exposes every running server's tools, prompts, and resources under the <code>&lt;server&gt;__&lt;name&gt;</code> namespace (resource URIs keep their original form). The aggregate is the recommended way to wire Cursor &mdash; one entry, every backend.</p>
+
+      <div class="section">
+        <div class="section-label">Configuration</div>
+        <div class="card">
+          <textarea
+            class="config-textarea"
+            id="config-input"
+            spellcheck="false"
+          >{
   "mcpServers": {
     "pincher": {
       "command": "pincher",
@@ -516,44 +1001,24 @@ HTML_TEMPLATE = """\
     }
   }
 }</textarea>
+        </div>
+      </div>
 
-      <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
-        START
-      </button>
-    </div>
-  </div>
-
-  <!-- Running servers -->
-  <div class="section hidden" id="servers-section">
-    <div class="servers-header">
-      <div class="section-label" style="margin: 0;">Servers</div>
-      <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        Click any row to inspect that backend's tools, prompts, and resources inline. The
-        <a href="/catalog" target="_blank" rel="noopener">full catalog</a> opens a searchable, print-friendly documentation page.
-      </p>
-      <div class="server-list" id="server-list"></div>
-    </div>
-  </div>
-
-  <!-- Cursor mcp.json — aggregated (recommended) -->
-  <div class="section">
-    <div class="section-label">
-      <span>Cursor mcp.json (aggregated)</span>
-      <span class="recommended-pill">Recommended</span>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        One Cursor entry, every running backend's tools and prompts. Names are
-        namespaced as <code>&lt;server&gt;__&lt;tool&gt;</code> so they don't collide.
-        Use this unless you have a specific reason to talk to a single backend
-        directly.
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
-        <pre id="mcp-snippet-aggregate">{
+      <div class="section">
+        <div class="section-label">
+          <span>Cursor mcp.json (aggregated)</span>
+          <span class="recommended-pill">Recommended</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One Cursor entry, every running backend's tools and prompts. Names are
+            namespaced as <code>&lt;server&gt;__&lt;tool&gt;</code> so they don't collide.
+            Use this unless you have a specific reason to talk to a single backend
+            directly.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
+            <pre id="mcp-snippet-aggregate">{
   "mcpServers": {
     "localmcp-aggregate": {
       "type": "streamable-http",
@@ -561,23 +1026,22 @@ HTML_TEMPLATE = """\
     }
   }
 }</pre>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- Cursor mcp.json — full (per-backend passthrough + aggregate) -->
-  <div class="section">
-    <div class="section-label">Cursor full mcp.json</div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        One entry per running backend at <code>/&lt;name&gt;/mcp</code> (raw
-        passthrough, original tool names) plus the aggregate. Use when you need
-        a backend's tools to keep their unprefixed names, or to wire a single
-        backend into a separate Cursor profile.
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
-        <pre id="mcp-snippet">{
+      <div class="section">
+        <div class="section-label">Cursor full mcp.json</div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One entry per running backend at <code>/&lt;name&gt;/mcp</code> (raw
+            passthrough, original tool names) plus the aggregate. Use when you need
+            a backend's tools to keep their unprefixed names, or to wire a single
+            backend into a separate Cursor profile.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
+            <pre id="mcp-snippet">{
   "mcpServers": {
     "localmcp-aggregate": {
       "type": "streamable-http",
@@ -585,53 +1049,278 @@ HTML_TEMPLATE = """\
     }
   }
 }</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Rules generation view -->
+    <section class="view" data-view="rules">
+      <div class="section">
+        <div class="section-label">
+          <span>Cursor rule (.mdc)</span>
+          <span class="rule-access-control">
+            <label for="rule-tool-use">Tool use:</label>
+            <select id="rule-tool-use" onchange="onRuleToolUseChange()">
+              <option value="priority" selected>Priority (encourage MCP tools)</option>
+              <option value="available">Available (neutral catalog)</option>
+            </select>
+            <label for="rule-access">Access:</label>
+            <select id="rule-access" onchange="onRuleAccessChange()">
+              <option value="read-only" selected>Read-only (safe)</option>
+              <option value="read-write">Read-write (allows mutation)</option>
+            </select>
+          </span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
+            and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
+            <strong>Tool use</strong> &mdash; <em>Priority</em> (default) tells the agent to prefer MCP tools over shell commands and
+            includes a curated playbook for the mandatory backends; <em>Available</em> emits a neutral catalog with no prioritization.
+            <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
+            inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
+            to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
+            workspace (or <code>~/.cursor/rules/</code> for global).
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
+            <pre id="cursor-rule">Loading...</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Savings dashboard view -->
+    <section class="view" data-view="savings">
+      <div class="section">
+        <div class="section-label">
+          <span>Token savings</span>
+          <span class="dashboard-meta" id="savings-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Aggregated savings across three sources: <strong>tool-list compression</strong>
+            (raw vs. wrapper-pair tokens served on every <code>tools/list</code>),
+            <strong>per-call accounting</strong> (input + output tokens of every
+            <code>tools/call</code>), and <strong>pincher self-reported BPE savings</strong>
+            (parsed from each pincher response's <code>_meta</code> envelope plus
+            periodic <code>pincher__stats</code> snapshots). Token counts use
+            <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
+            available; otherwise a <code>len/4</code> heuristic.
+          </p>
+
+          <div class="kpi-grid" id="savings-kpis">
+            <div class="kpi"><div class="kpi-label">Tokens saved (compression)</div><div class="kpi-value" id="kpi-compression-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (pincher)</div><div class="kpi-value" id="kpi-pincher-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Calls recorded</div><div class="kpi-value" id="kpi-calls">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Cost avoided (pincher)</div><div class="kpi-value" id="kpi-cost">&mdash;</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Compression by backend</div>
+        <div class="card">
+          <table class="savings-table" id="savings-compression-table">
+            <thead>
+              <tr>
+                <th>Backend</th>
+                <th>Level</th>
+                <th class="num">Raw tokens</th>
+                <th class="num">Compressed</th>
+                <th class="num">Saved</th>
+                <th class="num">% saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-compression-body">
+              <tr><td colspan="6" class="empty-cell">No compression snapshots yet. Run a <code>tools/list</code> against <code>/mcp</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Top tools by token volume</div>
+        <div class="card">
+          <table class="savings-table" id="savings-top-tools">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th class="num">Calls</th>
+                <th class="num">Tokens</th>
+                <th class="num">Avg latency</th>
+              </tr>
+            </thead>
+            <tbody id="savings-top-tools-body">
+              <tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Per-backend activity</div>
+        <div class="card">
+          <div id="savings-backend-bars" class="backend-bars">
+            <div class="empty-cell">No call events yet.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Pincher session stats</div>
+        <div class="card">
+          <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>LOCALMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pincher dashboard view -->
+    <section class="view" data-view="pincher-dashboard">
+      <div class="section">
+        <div class="section-label">
+          <span>Pincher dashboard</span>
+          <span class="dashboard-meta" id="pincher-dashboard-meta">&mdash;</span>
+        </div>
+        <div class="card dashboard-empty hidden" id="pincher-dashboard-empty">
+          Pincher isn't running. Start the <code>pincher</code> backend from the
+          Servers panel on the right to load its dashboard. The dashboard URL is
+          read from the live <code>reverseProxy.mount</code> (defaults to
+          <code>/pincher/v1/dashboard</code>).
+        </div>
+        <iframe
+          id="pincher-dashboard-frame"
+          class="dashboard-frame hidden"
+          title="Pincher dashboard"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </div>
+    </section>
+
+    <!-- Event logging view -->
+    <section class="view" data-view="logs">
+      <div class="section">
+        <div class="section-label">Activity</div>
+        <div class="card">
+          <input
+            type="text"
+            id="log-filter"
+            class="log-filter"
+            placeholder="Filter (substring, e.g. pincher_)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="log-viewer" id="log-viewer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Documentation view -->
+    <section class="view" data-view="docs">
+      <div class="section">
+        <div class="section-label">
+          <span id="docs-section-title">Documentation</span>
+          <span class="dashboard-meta" id="docs-meta">&mdash;</span>
+        </div>
+        <div class="docs-toolbar hidden" id="docs-toolbar">
+          <button type="button" class="btn btn-outline btn-back" onclick="showDocsIndex()">&larr; All docs</button>
+          <span class="docs-current" id="docs-current">&mdash;</span>
+        </div>
+        <div id="docs-index" class="docs-index">
+          <span class="docs-empty">Loading...</span>
+        </div>
+        <article class="docs-content hidden" id="docs-content"></article>
+      </div>
+    </section>
+
+    <!-- Server details view (catalog rendered in the center pane) -->
+    <section class="view" data-view="server-details">
+      <div class="section">
+        <div class="section-label">
+          <span id="server-details-title">Server details</span>
+          <span class="dashboard-meta" id="server-details-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="details-body" id="server-details-body">
+            <p class="details-empty">Click <strong>Details</strong> on any server in the right column to inspect its tools, prompts, and resources here.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Right column: status badge, global action, servers list -->
+  <aside class="right-col">
+    <div class="card" style="display: flex; align-items: center; gap: 12px; padding: 16px;">
+      <span class="badge stopped" id="badge">STOPPED</span>
+      <span style="flex: 1;"></span>
+    </div>
+    <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
+      START
+    </button>
+
+    <div class="section" id="servers-section" style="margin: 0;">
+      <div class="servers-header">
+        <div class="section-label" style="margin: 0;">Servers</div>
+        <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
+      </div>
+      <div class="card">
+        <p class="intro" style="margin: 0 0 12px 0; font-size: 13px;">
+          Click any row to inspect that backend's tools, prompts, and resources inline.
+        </p>
+        <div class="server-list" id="server-list"></div>
       </div>
     </div>
-  </div>
-
-  <!-- Cursor rule -->
-  <div class="section">
-    <div class="section-label">
-      <span>Cursor rule (.mdc)</span>
-      <span class="rule-access-control">
-        <label for="rule-access">Access:</label>
-        <select id="rule-access" onchange="onRuleAccessChange()">
-          <option value="read-only" selected>Read-only (safe)</option>
-          <option value="read-write">Read-write (allows mutation)</option>
-        </select>
-      </span>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
-        and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
-        <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
-        inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
-        to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
-        workspace (or <code>~/.cursor/rules/</code> for global).
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
-        <pre id="cursor-rule">Loading...</pre>
-      </div>
-    </div>
-  </div>
-
-  <!-- Logs -->
-  <div class="section">
-    <div class="section-label">Activity</div>
-    <div class="card">
-      <div class="log-viewer" id="log-viewer"></div>
-    </div>
-  </div>
+  </aside>
 
 </div>
+
+<!-- Mermaid: rendered for fenced ```mermaid blocks inside loaded docs.
+     Loaded from a CDN so the page stays a single self-contained file
+     (no static asset pipeline). securityLevel:'loose' lets links inside
+     diagrams render normally; we never feed agent-supplied markdown
+     through this path, only repo-controlled docs/*.md. -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  if (window.mermaid && typeof mermaid.initialize === "function") {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
+  }
+</script>
 
 <script>
   const badge = document.getElementById("badge");
   const actionBtn = document.getElementById("action-btn");
   const configInput = document.getElementById("config-input");
   const logViewer = document.getElementById("log-viewer");
+  const logFilter = document.getElementById("log-filter");
+  let currentLogFilter = "";
+
+  function logLineMatchesFilter(text) {
+    if (!currentLogFilter) return true;
+    return text.toLowerCase().indexOf(currentLogFilter) !== -1;
+  }
+
+  function applyLogFilter() {
+    const lines = logViewer.querySelectorAll(".log-line");
+    let lastVisible = null;
+    lines.forEach((el) => {
+      const match = logLineMatchesFilter(el.textContent || "");
+      el.classList.toggle("hidden", !match);
+      if (match) lastVisible = el;
+    });
+    if (lastVisible) {
+      logViewer.scrollTop = logViewer.scrollHeight;
+    }
+  }
+
+  if (logFilter) {
+    logFilter.addEventListener("input", () => {
+      currentLogFilter = logFilter.value.trim().toLowerCase();
+      applyLogFilter();
+    });
+  }
   const mcpSnippet = document.getElementById("mcp-snippet");
   const mcpSnippetAggregate = document.getElementById("mcp-snippet-aggregate");
   const cursorRule = document.getElementById("cursor-rule");
@@ -649,6 +1338,12 @@ HTML_TEMPLATE = """\
   let currentCatalog = {};
   let lastCatalogSig = null;
   let catalogInFlight = false;
+  // Center-pane "Server details" selection. Cleared on page reload.
+  let currentDetailsServer = null;
+  // Documentation view state — index fetched lazily on first activation.
+  let docsIndex = null;
+  let currentDocSlug = null;
+  let docsLoadInflight = false;
 
   // Loose client-side validation. Server is the source of truth.
   function parseConfig(raw) {
@@ -724,13 +1419,21 @@ HTML_TEMPLATE = """\
 
   function renderServers(status) {
     const servers = status.servers || [];
-    if (servers.length === 0) {
-      serversSection.classList.add("hidden");
-      serverList.innerHTML = "";
-      return;
-    }
+    // The servers card lives in the right column now, so don't hide it
+    // when there are no backends — show a placeholder instead so the
+    // column doesn't collapse into an empty stub.
     serversSection.classList.remove("hidden");
     serverList.innerHTML = "";
+    if (servers.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.style.color = "var(--mid)";
+      empty.style.fontSize = "13px";
+      empty.style.fontStyle = "italic";
+      empty.textContent = "No servers running. Apply a config from the Configuration view to start backends.";
+      serverList.appendChild(empty);
+      return;
+    }
     for (const s of servers) {
       const entry = document.createElement("div");
       entry.className = "server-entry";
@@ -814,6 +1517,18 @@ HTML_TEMPLATE = """\
         row.appendChild(btn);
       }
 
+      // "Details" button — opens the same catalog payload in the center
+      // pane (wider than the inline expansion below the row). Available
+      // on every server, including the always-on builtin.
+      const detailsBtn = document.createElement("button");
+      detailsBtn.className = "btn btn-mini btn-outline";
+      detailsBtn.textContent = "Details";
+      detailsBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        showServerDetails(s.name);
+      };
+      row.appendChild(detailsBtn);
+
       // Click anywhere on the row toggles the inline catalog block.
       row.onclick = () => toggleServerCatalog(s.name);
       entry.appendChild(row);
@@ -861,6 +1576,7 @@ HTML_TEMPLATE = """\
       refreshCursorRule(data);
       refreshCatalog(data);
       syncConfigInput(data);
+      refreshPincherDashboard(false);
       updateUI();
     } catch (err) {
       addLog("ERROR: " + err.message);
@@ -912,19 +1628,21 @@ HTML_TEMPLATE = """\
   }
 
   // Refetch the generated Cursor rule from /api/cursor-rule whenever the
-  // running-backends set OR the access-mode selector changes. Signature
-  // includes `access:` so toggling the dropdown forces a refetch.
+  // running-backends set OR the access / tool-use selectors change. The
+  // signature includes both control values so toggling either dropdown
+  // forces a refetch.
   async function refreshCursorRule(status) {
     const access = ruleAccessValue();
+    const toolUse = ruleToolUseValue();
     const sig =
-      "access:" + access + "|" +
+      "access:" + access + "|tool_use:" + toolUse + "|" +
       (status.servers || [])
         .map((s) => s.name + ":" + (s.running ? "1" : "0"))
         .join(",");
     if (sig === lastRuleSig) return;
     lastRuleSig = sig;
     try {
-      const params = new URLSearchParams({ access });
+      const params = new URLSearchParams({ access, tool_use: toolUse });
       const r = await fetch("/api/cursor-rule?" + params.toString());
       cursorRule.textContent = await r.text();
     } catch (err) {
@@ -937,6 +1655,11 @@ HTML_TEMPLATE = """\
     return sel && sel.value === "read-write" ? "read-write" : "read-only";
   }
 
+  function ruleToolUseValue() {
+    const sel = document.getElementById("rule-tool-use");
+    return sel && sel.value === "available" ? "available" : "priority";
+  }
+
   // Triggered by the `<select id="rule-access">`. Forces a re-fetch by
   // clearing the cached signature, then runs refreshCursorRule against
   // the latest status snapshot.
@@ -946,9 +1669,18 @@ HTML_TEMPLATE = """\
     refreshCursorRule(currentStatus);
   }
 
+  // Triggered by the `<select id="rule-tool-use">`. Same shape as
+  // onRuleAccessChange — clears the cached signature and refetches.
+  function onRuleToolUseChange() {
+    lastRuleSig = null;
+    cursorRule.textContent = "Loading...";
+    refreshCursorRule(currentStatus);
+  }
+
   // Refetch /api/catalog whenever the running-backends set changes (same
   // signature pattern as refreshCursorRule). On success, re-render any
-  // currently-expanded inline catalog blocks.
+  // currently-expanded inline catalog blocks AND the center-pane
+  // "Server details" view if one is currently selected.
   async function refreshCatalog(status) {
     const sig = (status.servers || [])
       .map((s) => s.name + ":" + (s.running ? "1" : "0"))
@@ -961,6 +1693,7 @@ HTML_TEMPLATE = """\
       const r = await fetch("/api/catalog");
       currentCatalog = await r.json();
       for (const name of expandedRows) renderServerCatalog(name);
+      if (currentDetailsServer) renderServerDetails(currentDetailsServer);
     } catch (err) {
       // Don't blank existing data on a transient failure; just log.
       addLog("ERROR: /api/catalog: " + err.message);
@@ -986,14 +1719,14 @@ HTML_TEMPLATE = """\
     }
   }
 
-  // Build the inline catalog block for one backend from currentCatalog.
-  function renderServerCatalog(name) {
-    const box = document.getElementById("catalog-" + cssEscape(name));
-    if (!box) return;
+  // Shared DOM builder used by BOTH the inline catalog box and the
+  // center-pane "Server details" view. Empties `target` and refills it
+  // with one .cat-group per non-empty kind.
+  function populateCatalogInto(target, name) {
     const data = currentCatalog[name];
-    box.innerHTML = "";
+    target.innerHTML = "";
     if (!data) {
-      box.textContent = "No catalog data available.";
+      target.textContent = "No catalog data available.";
       return;
     }
     const KINDS = [
@@ -1033,14 +1766,20 @@ HTML_TEMPLATE = """\
       } else {
         continue;
       }
-      box.appendChild(group);
+      target.appendChild(group);
     }
-    if (!any && box.childElementCount === 0) {
+    if (!any && target.childElementCount === 0) {
       const p = document.createElement("p");
       p.className = "empty";
       p.textContent = "Backend advertised no tools, prompts, or resources.";
-      box.appendChild(p);
+      target.appendChild(p);
     }
+  }
+
+  function renderServerCatalog(name) {
+    const box = document.getElementById("catalog-" + cssEscape(name));
+    if (!box) return;
+    populateCatalogInto(box, name);
   }
 
   function buildCatalogItem(kind, item) {
@@ -1086,6 +1825,49 @@ HTML_TEMPLATE = """\
     return li;
   }
 
+  // ── Server details (center pane) ────────────────────────────────────
+  // Per-server "Details" button switches the center pane to this view
+  // and renders the catalog payload there. Survives /api/catalog
+  // refreshes via refreshCatalog -> renderServerDetails.
+  function showServerDetails(name) {
+    currentDetailsServer = name;
+    setView("server-details");
+    renderServerDetails(name);
+  }
+
+  function renderServerDetails(name) {
+    const body = document.getElementById("server-details-body");
+    const titleEl = document.getElementById("server-details-title");
+    const meta = document.getElementById("server-details-meta");
+    if (!body) return;
+    if (titleEl) titleEl.textContent = `Server: ${name}`;
+    const status = (currentStatus.servers || []).find((s) => s.name === name);
+    if (meta) {
+      const bits = [];
+      if (status) {
+        bits.push(status.transport || "unknown");
+        if (status.error) bits.push("error");
+        else if (status.running) bits.push("running");
+        else bits.push("stopped");
+        bits.push(makeUrl(name, false));
+      } else {
+        bits.push("not registered");
+      }
+      meta.textContent = bits.join(" • ");
+    }
+    if (!currentCatalog[name]) {
+      body.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "details-empty";
+      p.textContent = status && !status.running
+        ? "This server isn't running. Start it from the right column to load its catalog."
+        : "Loading catalog...";
+      body.appendChild(p);
+      return;
+    }
+    populateCatalogInto(body, name);
+  }
+
   function setLoading(state) {
     loading = state;
     actionBtn.disabled = state;
@@ -1111,12 +1893,24 @@ HTML_TEMPLATE = """\
     actionBtn.disabled = false;
   }
 
+  // Cap DOM growth on very long sessions. Server-side history is also
+  // capped (manager._log_history maxlen=2000), so the viewer can hold
+  // both the replayed history and ~3000 lines of live tail before the
+  // oldest entries fall off.
+  const LOG_VIEWER_MAX_LINES = 5000;
+
   function addLog(text) {
     const line = document.createElement("div");
-    line.className = "log-line" + (text.includes("ERROR") ? " error" : "");
+    let cls = "log-line" + (text.includes("ERROR") ? " error" : "");
+    const visible = logLineMatchesFilter(text);
+    if (!visible) cls += " hidden";
+    line.className = cls;
     line.textContent = text;
     logViewer.appendChild(line);
-    logViewer.scrollTop = logViewer.scrollHeight;
+    while (logViewer.childElementCount > LOG_VIEWER_MAX_LINES) {
+      logViewer.removeChild(logViewer.firstChild);
+    }
+    if (visible) logViewer.scrollTop = logViewer.scrollHeight;
   }
 
   async function handleAction() {
@@ -1193,6 +1987,459 @@ HTML_TEMPLATE = """\
   // SSE log stream
   const events = new EventSource("/api/logs");
   events.onmessage = (e) => addLog(e.data);
+
+  // ── Left-nav view switcher ──────────────────────────────────────────
+  // Toggle .active between .nav-item[data-view] and .view[data-view].
+  // Forces a pincher-dashboard reload when the user navigates to it
+  // (so a stale iframe from a previous session gets a fresh hit).
+  function setView(name) {
+    document.querySelectorAll(".nav-item").forEach((b) =>
+      b.classList.toggle("active", b.dataset.view === name));
+    document.querySelectorAll(".view").forEach((v) =>
+      v.classList.toggle("active", v.dataset.view === name));
+    if (name === "pincher-dashboard") refreshPincherDashboard(true);
+    if (name === "savings") {
+      refreshSavings();
+      ensureSavingsStream();
+    }
+    if (name === "docs") loadDocsIndex();
+  }
+  document.querySelectorAll(".nav-item").forEach((b) =>
+    b.addEventListener("click", () => setView(b.dataset.view)));
+
+  // ── Documentation view ──────────────────────────────────────────────
+  // Two modes share the same view:
+  //   1. Index — full-width grid of {title, slug} cards in the middle pane.
+  //   2. Content — rendered HTML for one doc, with a back button.
+  // setView('docs') always lands on the index unless a doc is already
+  // selected (re-entry preserves your last-read doc).
+  async function loadDocsIndex() {
+    // Show index mode (always). Fetch the index once per session unless
+    // it errored last time.
+    showDocsIndex();
+    if (docsLoadInflight) return;
+    if (Array.isArray(docsIndex) && docsIndex.length > 0) {
+      renderDocsCards();
+      return;
+    }
+    docsLoadInflight = true;
+    const meta = document.getElementById("docs-meta");
+    if (meta) meta.textContent = "loading...";
+    try {
+      const r = await fetch("/api/docs");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      docsIndex = await r.json();
+    } catch (err) {
+      docsIndex = null;
+      if (meta) meta.textContent = "error: " + err.message;
+      const list = document.getElementById("docs-index");
+      if (list) {
+        list.innerHTML = "";
+        const p = document.createElement("span");
+        p.className = "docs-empty";
+        p.textContent = "Failed to load docs index.";
+        list.appendChild(p);
+      }
+      docsLoadInflight = false;
+      return;
+    } finally {
+      docsLoadInflight = false;
+    }
+    if (meta) meta.textContent = `${docsIndex.length} document${docsIndex.length === 1 ? "" : "s"}`;
+    renderDocsCards();
+  }
+
+  function renderDocsCards() {
+    const list = document.getElementById("docs-index");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!Array.isArray(docsIndex) || docsIndex.length === 0) {
+      const p = document.createElement("span");
+      p.className = "docs-empty";
+      p.textContent = "No documentation files found.";
+      list.appendChild(p);
+      return;
+    }
+    for (const d of docsIndex) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "docs-card";
+      card.dataset.slug = d.slug;
+      card.onclick = () => loadDoc(d.slug);
+      const title = document.createElement("div");
+      title.className = "docs-card-title";
+      title.textContent = d.title;
+      card.appendChild(title);
+      const slug = document.createElement("div");
+      slug.className = "docs-card-slug";
+      slug.textContent = `docs/${d.slug}.md`;
+      card.appendChild(slug);
+      list.appendChild(card);
+    }
+  }
+
+  function showDocsIndex() {
+    currentDocSlug = null;
+    const list = document.getElementById("docs-index");
+    const content = document.getElementById("docs-content");
+    const toolbar = document.getElementById("docs-toolbar");
+    const title = document.getElementById("docs-section-title");
+    if (list) list.classList.remove("hidden");
+    if (content) content.classList.add("hidden");
+    if (toolbar) toolbar.classList.add("hidden");
+    if (title) title.textContent = "Documentation";
+  }
+
+  async function loadDoc(slug) {
+    const list = document.getElementById("docs-index");
+    const content = document.getElementById("docs-content");
+    const toolbar = document.getElementById("docs-toolbar");
+    const title = document.getElementById("docs-section-title");
+    const current = document.getElementById("docs-current");
+    if (!content) return;
+    // Make sure we land on the docs view in case we got here via a
+    // link from another tab.
+    setView("docs");
+    currentDocSlug = slug;
+    if (list) list.classList.add("hidden");
+    if (toolbar) toolbar.classList.remove("hidden");
+    if (content) content.classList.remove("hidden");
+    if (current) current.textContent = `docs/${slug}.md`;
+    content.innerHTML = '<p class="docs-empty">Loading...</p>';
+    try {
+      const r = await fetch("/api/docs/" + encodeURIComponent(slug));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      if (title) title.textContent = data.title || "Documentation";
+      content.innerHTML = data.html || "";
+      rewriteDocLinks(content);
+      await renderMermaidIn(content);
+      content.scrollTop = 0;
+    } catch (err) {
+      content.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "docs-empty";
+      p.textContent = "Failed to load: " + err.message;
+      content.appendChild(p);
+    }
+  }
+
+  // Markdown links to other docs (e.g. `[walkthrough](docs/quickstart.md)`)
+  // resolve to absolute browser paths once rendered (`/docs/quickstart.md`)
+  // — that 404s against the Swagger /docs endpoint. Walk every <a> in
+  // the rendered body and rewrite *.md targets to call loadDoc(slug)
+  // in-place. We deliberately don't gate on `docsIndex` membership: if
+  // the slug isn't shipped, loadDoc renders a clean "Failed to load:
+  // HTTP 404" inside the docs view, which is a far better UX than
+  // silently swallowing the click. External URLs and pure in-page
+  // anchors are left alone.
+  function rewriteDocLinks(container) {
+    if (!container) return;
+    const anchors = container.querySelectorAll("a[href]");
+    for (const a of anchors) {
+      const raw = a.getAttribute("href") || "";
+      if (!raw) continue;
+      // Pure in-page anchor — let the browser handle it.
+      if (raw.startsWith("#")) continue;
+      // Absolute URLs — open externally in a new tab.
+      if (/^[a-z][a-z0-9+.\\-]*:\\/\\//i.test(raw) || raw.startsWith("//")) {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener");
+        continue;
+      }
+      // mailto:, tel:, etc. — leave alone.
+      if (/^[a-z][a-z0-9+.\\-]*:/i.test(raw)) continue;
+      // Strip optional ./ or ../ prefixes and leading docs/ so we land
+      // at "<file>.md" and can derive the slug.
+      let path = raw;
+      let hash = "";
+      const hashIdx = path.indexOf("#");
+      if (hashIdx >= 0) {
+        hash = path.slice(hashIdx);
+        path = path.slice(0, hashIdx);
+      }
+      const cleaned = path.replace(/^\\.\\.?\\//, "").replace(/^docs\\//, "");
+      const m = cleaned.match(/^([A-Za-z0-9._\\-]+)\\.md$/);
+      if (m) {
+        const slug = m[1].toLowerCase();
+        a.setAttribute("href", "#" + slug);
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          loadDoc(slug);
+          if (hash) {
+            // Defer: wait for the new doc to land before scrolling.
+            setTimeout(() => {
+              const el = document.getElementById(hash.slice(1));
+              if (el) el.scrollIntoView({ behavior: "smooth" });
+            }, 250);
+          }
+        });
+        continue;
+      }
+      // Non-.md repo path (e.g. ../configs/foo.json). Leave the href
+      // untouched — the browser will visibly 404 against this server,
+      // which is more honest than silently swallowing the click. Mark
+      // it visually so the reader knows it can't be opened in-app.
+      a.title = "Repo path: " + raw + " (open from the source repo, not the in-app docs)";
+      a.style.textDecoration = "underline dotted";
+    }
+  }
+
+  // Replace every `<pre><code class="language-mermaid">` block produced
+  // by the python-markdown fenced_code extension with a `<div class=
+  // "mermaid">` and ask mermaid.js to render it. No-op when mermaid
+  // failed to load (e.g. offline) — the raw fenced block stays visible.
+  async function renderMermaidIn(container) {
+    if (!container || !window.mermaid) return;
+    const blocks = container.querySelectorAll("pre > code.language-mermaid");
+    if (blocks.length === 0) return;
+    const created = [];
+    for (const code of blocks) {
+      const pre = code.parentElement;
+      if (!pre || !pre.parentElement) continue;
+      const div = document.createElement("div");
+      div.className = "mermaid";
+      // textContent decodes the &gt;/&lt; the markdown renderer emitted.
+      div.textContent = code.textContent;
+      pre.parentElement.replaceChild(div, pre);
+      created.push(div);
+    }
+    if (created.length === 0) return;
+    try {
+      await mermaid.run({ nodes: created });
+    } catch (err) {
+      addLog("ERROR: mermaid render failed: " + (err && err.message ? err.message : err));
+    }
+  }
+
+  // ── Pincher dashboard iframe ────────────────────────────────────────
+  // The dashboard is served by pincher itself on a loopback HTTP sidecar
+  // and reverse-proxied by LocalMCP under reverseProxy.mount (defaults
+  // to /pincher per configs/mandatory-localmcp.json). Read the live
+  // mount from /api/status so renaming the backend or moving the mount
+  // is handled transparently.
+  function pincherDashboardUrl(status) {
+    for (const s of (status && status.servers) || []) {
+      if (s.name !== "pincher" || !s.running || s.error) continue;
+      const m = s.spec && s.spec.reverseProxy && s.spec.reverseProxy.mount;
+      if (m) return m + "/v1/dashboard";
+    }
+    return null;
+  }
+
+  let lastDashboardUrl = null;
+  function refreshPincherDashboard(force) {
+    const frame = document.getElementById("pincher-dashboard-frame");
+    const empty = document.getElementById("pincher-dashboard-empty");
+    const meta = document.getElementById("pincher-dashboard-meta");
+    if (!frame || !empty || !meta) return;
+    const url = pincherDashboardUrl(currentStatus);
+    if (!url) {
+      frame.classList.add("hidden");
+      frame.removeAttribute("src");
+      empty.classList.remove("hidden");
+      meta.textContent = "pincher offline";
+      lastDashboardUrl = null;
+      return;
+    }
+    empty.classList.add("hidden");
+    frame.classList.remove("hidden");
+    meta.textContent = url;
+    if (force || url !== lastDashboardUrl) {
+      frame.src = url;
+      lastDashboardUrl = url;
+    }
+  }
+
+  // ── Savings dashboard ───────────────────────────────────────────────
+  // Pulls /api/savings every 5s while the tab is visible, and listens to
+  // /api/savings/stream for instant invalidation on new call/compression/
+  // pincher_stats events. The SSE connection is opened lazily the first
+  // time the user navigates to the Savings view so passive page loads
+  // don't keep an idle connection open.
+  let savingsStream = null;
+  let savingsPollTimer = null;
+  let savingsFetchInflight = false;
+
+  function fmtNum(n) {
+    if (n === null || n === undefined) return "—";
+    if (typeof n !== "number") return String(n);
+    if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(n);
+  }
+
+  function fmtPct(n) {
+    if (n === null || n === undefined) return "—";
+    return n.toFixed(1) + "%";
+  }
+
+  function fmtUsd(n) {
+    if (!n) return "$0.00";
+    if (n < 0.01) return "$" + n.toFixed(4);
+    return "$" + n.toFixed(2);
+  }
+
+  function isSavingsTabActive() {
+    const v = document.querySelector(".view[data-view=savings]");
+    return v && v.classList.contains("active");
+  }
+
+  function ensureSavingsStream() {
+    if (savingsStream) return;
+    try {
+      savingsStream = new EventSource("/api/savings/stream");
+    } catch (_) {
+      savingsStream = null;
+      return;
+    }
+    savingsStream.onmessage = (_evt) => {
+      // Any server-pushed event invalidates our snapshot; refetch once
+      // the tab is visible to keep idle bandwidth low.
+      if (isSavingsTabActive()) refreshSavings();
+    };
+    savingsStream.onerror = () => {
+      // EventSource auto-reconnects; nothing to do beyond keeping the
+      // handle so we don't open a second one.
+    };
+    if (!savingsPollTimer) {
+      savingsPollTimer = setInterval(() => {
+        if (isSavingsTabActive()) refreshSavings();
+      }, 5000);
+    }
+  }
+
+  async function refreshSavings() {
+    if (savingsFetchInflight) return;
+    savingsFetchInflight = true;
+    const meta = document.getElementById("savings-meta");
+    try {
+      const r = await fetch("/api/savings");
+      if (r.status === 503) {
+        if (meta) meta.textContent = "store not initialised";
+        return;
+      }
+      if (!r.ok) {
+        if (meta) meta.textContent = "error " + r.status;
+        return;
+      }
+      const data = await r.json();
+      renderSavings(data);
+    } catch (err) {
+      if (meta) meta.textContent = "error: " + err.message;
+    } finally {
+      savingsFetchInflight = false;
+    }
+  }
+
+  function renderSavings(data) {
+    const meta = document.getElementById("savings-meta");
+    if (meta) {
+      const enc = data.tokenizer && data.tokenizer.heuristic
+        ? "heuristic" : (data.tokenizer.encoding || "tiktoken");
+      const ts = new Date((data.generated_at || 0) * 1000);
+      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}`;
+    }
+
+    const compressionSaved = data.compression_saved_tokens_total || 0;
+    const pincherSaved = (data.pincher && data.pincher.tokens_saved_total) || 0;
+    const totals = (data.calls && data.calls.totals) || {};
+    const cost = (data.pincher && data.pincher.cost_avoided_usd_total) || 0;
+
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = v;
+    };
+    set("kpi-compression-saved", fmtNum(compressionSaved));
+    set("kpi-pincher-saved", fmtNum(pincherSaved));
+    set("kpi-calls", fmtNum(totals.calls || 0));
+    set("kpi-cost", fmtUsd(cost));
+
+    // Compression table
+    const compBody = document.getElementById("savings-compression-body");
+    if (compBody) {
+      const rows = data.compression || [];
+      if (!rows.length) {
+        compBody.innerHTML = '<tr><td colspan="6" class="empty-cell">No compression snapshots yet. Run a <code>tools/list</code> against <code>/mcp</code>.</td></tr>';
+      } else {
+        compBody.innerHTML = rows.map((c) => `
+          <tr>
+            <td>${escapeHtml(c.backend)}</td>
+            <td>${escapeHtml(c.level || "")}</td>
+            <td class="num">${fmtNum(c.raw_tokens)}</td>
+            <td class="num">${fmtNum(c.compressed_tokens)}</td>
+            <td class="num">${fmtNum(c.saved_tokens)}</td>
+            <td class="num">${fmtPct(c.saved_pct)}</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    // Top tools
+    const topBody = document.getElementById("savings-top-tools-body");
+    if (topBody) {
+      const rows = (data.calls && data.calls.top_tools) || [];
+      if (!rows.length) {
+        topBody.innerHTML = '<tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>';
+      } else {
+        topBody.innerHTML = rows.map((t) => `
+          <tr>
+            <td><code>${escapeHtml(t.qualified)}</code></td>
+            <td class="num">${fmtNum(t.calls)}</td>
+            <td class="num">${fmtNum(t.tokens)}</td>
+            <td class="num">${t.avg_latency_ms.toFixed(0)} ms</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    // Per-backend bars
+    const barsHost = document.getElementById("savings-backend-bars");
+    if (barsHost) {
+      const rows = (data.calls && data.calls.per_backend) || [];
+      if (!rows.length) {
+        barsHost.innerHTML = '<div class="empty-cell">No call events yet.</div>';
+      } else {
+        const max = Math.max(1, ...rows.map((r) => r.calls || 0));
+        barsHost.innerHTML = rows.map((b) => {
+          const pct = Math.round(((b.calls || 0) / max) * 100);
+          return `
+            <div class="backend-bar">
+              <div class="backend-bar-name">${escapeHtml(b.backend)}</div>
+              <div class="backend-bar-track"><div class="backend-bar-fill" style="width: ${pct}%"></div></div>
+              <div class="backend-bar-count">${fmtNum(b.calls)} calls</div>
+            </div>`;
+        }).join("");
+      }
+    }
+
+    // Pincher stats
+    const pre = document.getElementById("savings-pincher-stats");
+    if (pre) {
+      const stats = data.pincher && data.pincher.latest_stats;
+      if (!stats) {
+        pre.textContent = "No pincher__stats snapshot yet.";
+      } else {
+        // Prefer the formatted text content from pincher's CallToolResult;
+        // fall back to a JSON dump.
+        let body = null;
+        if (Array.isArray(stats.content) && stats.content.length) {
+          body = stats.content.filter((c) => typeof c === "string").join("\\n").trim();
+        }
+        pre.textContent = body || JSON.stringify(stats, null, 2);
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
 
   // Initial status
   refreshStatus();

@@ -19,4 +19,5 @@ tests/
 .cursor/
 *.md
 !README.md
+!docs/**/*.md
 .DS_Store

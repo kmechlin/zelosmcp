@@ -8,7 +8,12 @@ subscriptions across all servers.
 from __future__ import annotations
 
 import asyncio
+import collections
+import json
 import logging
+import os
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +23,21 @@ from localmcp.aggregator import Aggregator
 from localmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
 from localmcp.config import ServerSpec, parse_config
 from localmcp.proxy import ProxyState
+from localmcp.savings import SavingsRecorder, TokenCounter
+from localmcp.savings_db import SavingsStore, resolve_db_path
+
+
+# Default lookup order for the mandatory MCP set. First existing path wins.
+# - /app/configs is the root Dockerfile's runtime path.
+# - /opt/localmcp/configs is the cert-aware Dockerfile's runtime path.
+# - The repo-relative path lets developers run uvicorn directly from the
+#   working tree (tests can use ProxyManager(mandatory_config_path="") to
+#   skip mandatory entirely).
+_MANDATORY_PATH_CANDIDATES: tuple[str, ...] = (
+    "/app/configs/mandatory-localmcp.json",
+    "/opt/localmcp/configs/mandatory-localmcp.json",
+    str(Path(__file__).resolve().parent.parent.parent / "configs" / "mandatory-localmcp.json"),
+)
 
 
 # Hop-by-hop headers per RFC 7230 §6.1 plus a few headers httpx manages
@@ -44,7 +64,7 @@ _log = logging.getLogger("localmcp.manager")
 class ProxyManager:
     """Lifecycle owner for many ProxyStates plus the /mcp aggregator."""
 
-    def __init__(self) -> None:
+    def __init__(self, mandatory_config_path: str | None = None) -> None:
         # ``self.servers`` mixes user-configured ProxyStates with the
         # always-on BuiltinServer (under the reserved key "localmcp").
         # The builtin is ProxyState-shaped, so the dispatcher and
@@ -54,6 +74,12 @@ class ProxyManager:
         self._specs: dict[str, ServerSpec] = {}
         self._primary: str | None = None
         self._log_subscribers: list[asyncio.Queue[str]] = []
+        # Ring buffer of every line ever broadcast, capped to keep memory
+        # bounded. New SSE subscribers replay this snapshot before
+        # entering live-tail so the activity panel reflects the full
+        # session history (including startup banners that fired before
+        # the browser connected).
+        self._log_history: collections.deque[str] = collections.deque(maxlen=2000)
         self._log_pumps: dict[str, asyncio.Task] = {}
         self.aggregator = Aggregator(self)
         # The BuiltinServer is ProxyState-shaped and pre-seeded so the
@@ -68,6 +94,33 @@ class ProxyManager:
         # pooling survives across config reloads. Tests can replace the
         # client by setting this attribute directly.
         self._http_client: httpx.AsyncClient | None = None
+        # Mandatory MCP set merged into every start_all() payload before
+        # parsing. ``None`` (default) auto-discovers from the runtime paths
+        # in _MANDATORY_PATH_CANDIDATES; ``""`` disables mandatory merging
+        # entirely (used by tests to avoid spawning real subprocesses);
+        # any other value is the literal path to the mandatory JSON.
+        self._mandatory_config_path = mandatory_config_path
+        # Cached parsed mandatory ``mcpServers`` dict (populated lazily on
+        # first read by _read_mandatory_servers; reused across start_all()
+        # invocations within a single ProxyManager lifetime).
+        self._mandatory_cache: dict[str, Any] | None = None
+        self._mandatory_cache_loaded = False
+        # Token-savings store + recorder. The store is opened from the
+        # Starlette lifespan hook (start_http_client) so an event loop is
+        # already running; tests that don't go through the lifespan hook
+        # can call ``ProxyManager.start_savings(":memory:")`` directly,
+        # or attach their own SavingsRecorder via ``manager.savings``.
+        self._savings_store: SavingsStore | None = None
+        self.savings: SavingsRecorder | None = None
+        self._pincher_poll_task: asyncio.Task | None = None
+        # How often to snapshot ``pincher__stats`` into the savings store.
+        # Configurable via ``LOCALMCP_PINCHER_POLL_SECS``; <=0 disables.
+        try:
+            self._pincher_poll_interval: float = float(
+                os.environ.get("LOCALMCP_PINCHER_POLL_SECS", "60")
+            )
+        except ValueError:
+            self._pincher_poll_interval = 60.0
 
     @property
     def primary(self) -> str | None:
@@ -87,19 +140,22 @@ class ProxyManager:
     async def start_all(self, raw_config: Any) -> dict[str, Any]:
         """Replace the current set of servers with whatever ``raw_config`` defines.
 
-        Stops anything currently running, parses the config, concurrently starts
-        each backend, then brings up the aggregator at ``/mcp``. Returns a
-        per-server result map.
+        Stops anything currently running, parses the config (after merging
+        the mandatory MCP set on top of the user payload — user wins on
+        same-name collisions), concurrently starts each backend, then brings
+        up the aggregator at ``/mcp``. Returns a per-server result map.
         """
         await self.stop_all()
 
-        specs, primary = parse_config(raw_config)
+        merged = self._merge_mandatory(raw_config)
+        specs, primary = parse_config(merged)
         self._specs = {s.name: s for s in specs}
 
         if primary is not None:
-            self._broadcast(
-                "[aggregator] primaryMCP is deprecated and ignored — "
-                "/mcp now aggregates all servers"
+            self._broadcast_tagged(
+                "aggregator",
+                "primaryMCP is deprecated and ignored — "
+                "/mcp now aggregates all servers",
             )
         self._primary = None
 
@@ -111,6 +167,7 @@ class ProxyManager:
                 # belt-and-braces in case a future code path bypasses it.
                 continue
             state = ProxyState(name=spec.name)
+            state._recorder_provider = lambda: self.savings
             self.servers[spec.name] = state
             self._attach_log_pump(state)
             coros.append(self._start_one_spec(state, spec))
@@ -126,12 +183,113 @@ class ProxyManager:
             try:
                 await self.aggregator.start()
             except Exception as exc:
-                self._broadcast(f"[aggregator] failed to start: {exc}")
+                self._broadcast_tagged("aggregator", f"failed to start: {exc}")
 
         return {
             "primary": None,
             "servers": results,
         }
+
+    def _merge_mandatory(self, raw_config: Any) -> Any:
+        """Merge the mandatory MCP set into ``raw_config``.
+
+        Returns a new dict (the input is left unmodified). Mandatory
+        backends fill in any names absent from the user's payload; if the
+        user's payload defines an entry with the same name, the user's
+        entry wins so they can override args/env/etc.
+
+        Returns the input unchanged when:
+        - ``mandatory_config_path`` is set to the empty string (test mode).
+        - The mandatory file doesn't exist or fails to parse.
+        - ``raw_config`` isn't a dict (parse_config will raise downstream).
+        """
+        mandatory = self._read_mandatory_servers()
+        if not mandatory or not isinstance(raw_config, dict):
+            return raw_config
+
+        merged = dict(raw_config)
+        user_servers = merged.get("mcpServers")
+        user_servers = dict(user_servers) if isinstance(user_servers, dict) else {}
+
+        injected: list[str] = []
+        for name, entry in mandatory.items():
+            if name not in user_servers:
+                user_servers[name] = entry
+                injected.append(name)
+
+        merged["mcpServers"] = user_servers
+        if injected:
+            self._broadcast_tagged(
+                "manager",
+                f"merged mandatory backends: {', '.join(sorted(injected))}",
+            )
+        return merged
+
+    def _read_mandatory_servers(self) -> dict[str, Any] | None:
+        """Read and cache the mandatory file's ``mcpServers`` dict.
+
+        Returns ``None`` when mandatory is disabled, the file is missing,
+        or the file can't be parsed. Subsequent calls return the cached
+        result (positive or None) without re-reading the file.
+        """
+        if self._mandatory_cache_loaded:
+            return self._mandatory_cache
+
+        self._mandatory_cache_loaded = True
+        path = self._resolve_mandatory_path()
+        if path is None:
+            return None
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except FileNotFoundError:
+            _log.info("mandatory config not found at %s; skipping merge", path)
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            _log.warning("mandatory config %s failed to load: %s", path, exc)
+            return None
+
+        servers = payload.get("mcpServers") if isinstance(payload, dict) else None
+        if not isinstance(servers, dict):
+            _log.warning(
+                "mandatory config %s missing 'mcpServers' object; skipping merge",
+                path,
+            )
+            return None
+
+        self._mandatory_cache = servers
+        return servers
+
+    def mandatory_names(self) -> set[str]:
+        """Set of backend names declared in the mandatory config.
+
+        Used by the cursor-rule generator to decide which backends get
+        a curated playbook block. Returns an empty set when the
+        mandatory config is disabled, missing, or unreadable so callers
+        can treat "no mandatory backends" and "no playbook" identically.
+        """
+        servers = self._read_mandatory_servers() or {}
+        return set(servers.keys())
+
+    def _resolve_mandatory_path(self) -> str | None:
+        """Pick the actual mandatory-file path to read.
+
+        Honours the constructor's ``mandatory_config_path`` argument:
+        - ``""`` => disabled (test mode).
+        - non-empty string => use that path verbatim.
+        - ``None`` (default) => first existing path in
+          _MANDATORY_PATH_CANDIDATES, or ``None`` if none exist.
+        """
+        explicit = self._mandatory_config_path
+        if explicit == "":
+            return None
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        for candidate in _MANDATORY_PATH_CANDIDATES:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     async def stop_all(self) -> None:
         """Stop every user-configured backend AND the aggregator. The
@@ -171,6 +329,7 @@ class ProxyManager:
         state = self.servers.get(name)
         if state is None:
             state = ProxyState(name=name)
+            state._recorder_provider = lambda: self.savings
             self.servers[name] = state
             self._attach_log_pump(state)
         if state.running:
@@ -208,7 +367,7 @@ class ProxyManager:
             try:
                 await self.aggregator.start()
             except Exception as exc:
-                self._broadcast(f"[aggregator] failed to start: {exc}")
+                self._broadcast_tagged("aggregator", f"failed to start: {exc}")
 
     async def stop_builtin(self) -> None:
         """Tear down the builtin. Called from the lifespan shutdown hook."""
@@ -232,6 +391,7 @@ class ProxyManager:
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0),
             follow_redirects=False,
         )
+        await self.start_savings()
 
     async def stop_http_client(self) -> None:
         """Close the shared httpx.AsyncClient. Called from the lifespan
@@ -242,6 +402,95 @@ class ProxyManager:
                 await client.aclose()
             except Exception as exc:
                 _log.warning("reverse-proxy: client close failed: %s", exc)
+        await self.stop_savings()
+
+    async def start_savings(self, db_path: str | None = None) -> None:
+        """Open the savings store and start the pincher snapshot poller.
+
+        Idempotent; tests may pass ``db_path=":memory:"`` (or set the
+        ``LOCALMCP_SAVINGS_DB`` env var) to skip on-disk state.
+        """
+        if self.savings is not None:
+            return
+        path = resolve_db_path(db_path)
+        store = SavingsStore(path)
+        try:
+            await store.open()
+        except Exception as exc:
+            _log.warning("savings store open failed (%s); disabling", exc)
+            self._broadcast_tagged("savings", f"disabled: {exc}")
+            return
+        counter = TokenCounter()
+        # Warmup is best-effort — heuristic fallback handles failures.
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, counter.warmup
+            )
+        except Exception:
+            pass
+        self._savings_store = store
+        self.savings = SavingsRecorder(store=store, counter=counter)
+        if counter.using_heuristic:
+            self._broadcast_tagged(
+                "savings",
+                "tiktoken unavailable; using char/4 heuristic",
+            )
+        else:
+            self._broadcast_tagged("savings", "token counter ready (cl100k_base)")
+        if self._pincher_poll_interval > 0:
+            self._pincher_poll_task = asyncio.create_task(self._pincher_poll_loop())
+
+    async def stop_savings(self) -> None:
+        task, self._pincher_poll_task = self._pincher_poll_task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        store, self._savings_store = self._savings_store, None
+        self.savings = None
+        if store is not None:
+            await store.close()
+
+    async def _pincher_poll_loop(self) -> None:
+        """Periodically snapshot ``pincher__stats`` into the savings store.
+
+        Skips silently while pincher isn't running. Resilient: any failure
+        is logged at debug and the loop sleeps the full interval before
+        retrying so one upstream blip doesn't spam writes.
+        """
+        interval = self._pincher_poll_interval
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if self.savings is None:
+                    continue
+                state = self.servers.get("pincher")
+                session = getattr(state, "client_session", None)
+                if state is None or not getattr(state, "running", False) or session is None:
+                    continue
+                try:
+                    result = await session.call_tool("stats", {})
+                except Exception as exc:
+                    _log.debug("pincher stats poll failed: %s", exc)
+                    continue
+                payload: Any = {
+                    "structuredContent": getattr(result, "structuredContent", None),
+                    "content": [
+                        getattr(c, "text", None) or getattr(c, "type", None)
+                        for c in (getattr(result, "content", None) or [])
+                    ],
+                    "isError": bool(getattr(result, "isError", False)),
+                }
+                try:
+                    await self.savings.record_pincher_stats(payload)
+                except Exception as exc:
+                    _log.debug("pincher stats snapshot record failed: %s", exc)
+        except asyncio.CancelledError:
+            pass
 
     def find_reverse_proxy(
         self, path: str
@@ -480,6 +729,25 @@ class ProxyManager:
         self._log_subscribers.append(q)
         return q
 
+    def subscribe_logs_with_history(
+        self,
+    ) -> tuple[list[str], asyncio.Queue[str]]:
+        """Snapshot the buffered history and atomically register a new
+        subscriber queue.
+
+        Both operations are synchronous, so they run without any
+        ``await`` interleaving with ``_broadcast`` (the only writer of
+        history and queues). That means new lines emitted after this
+        call go to the queue, lines emitted before went to the
+        snapshot, and there is no window for duplicates or drops.
+        Callers should drain the snapshot first, then pull from the
+        queue.
+        """
+        snapshot = list(self._log_history)
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=512)
+        self._log_subscribers.append(q)
+        return snapshot, q
+
     def unsubscribe_logs(self, q: asyncio.Queue[str]) -> None:
         try:
             self._log_subscribers.remove(q)
@@ -487,11 +755,24 @@ class ProxyManager:
             pass
 
     def _broadcast(self, line: str) -> None:
+        self._log_history.append(line)
         for q in list(self._log_subscribers):
             try:
                 q.put_nowait(line)
             except asyncio.QueueFull:
                 pass
+
+    def _broadcast_tagged(self, tag: str, message: str) -> None:
+        """Broadcast an activity-log line in the canonical
+        ``[HH:MM:SS] [<tag>] <message>`` format.
+
+        Use this for manager-/aggregator-/savings-level events that
+        don't originate from a per-backend ``_emit_log`` (which already
+        timestamps). Keeps every line in the ``/api/logs`` SSE stream
+        and the home-page activity panel uniformly parseable.
+        """
+        ts = time.strftime("%H:%M:%S")
+        self._broadcast(f"[{ts}] [{tag}] {message}")
 
     def _attach_log_pump(self, state: ProxyState) -> None:
         """Forward a child state's logs into the manager's subscriber set."""
@@ -519,4 +800,5 @@ class ProxyManager:
             env=spec.env,
             cwd=spec.cwd,
             headers=spec.headers,
+            compress=spec.compress,
         )

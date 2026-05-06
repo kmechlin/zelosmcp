@@ -13,7 +13,12 @@ dependencies = [
     "uvicorn",
     "pyyaml",
     "httpx>=0.25",
+    "aiosqlite>=0.20",
+    "markdown>=3.5",
 ]
+
+[project.optional-dependencies]
+tokenizer = ["tiktoken>=0.7"]
 
 [project.scripts]
 localmcp = "localmcp.app:main"

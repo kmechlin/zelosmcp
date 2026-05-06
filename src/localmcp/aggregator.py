@@ -23,7 +23,14 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
-from mcp.types import METHOD_NOT_FOUND
+from mcp.types import METHOD_NOT_FOUND, Tool
+
+from localmcp.compression import (
+    compressed_tool_list,
+    handle_compressed_call,
+    wrapper_tool_names,
+)
+from localmcp.savings import measure_call
 
 if TYPE_CHECKING:
     from localmcp.manager import ProxyManager
@@ -44,6 +51,13 @@ class Aggregator:
         self._ready: asyncio.Event = asyncio.Event()
         self._startup_error: BaseException | None = None
         self._resource_origin: dict[str, str] = {}
+        # Cached full tool catalog per compressed backend, populated on
+        # every list_tools(). The compression scope determines whether
+        # the aggregator's own tools/list output uses the wrappers (in
+        # {aggregator, global}) or the full prefixed list (catalog).
+        # Either way the cache is filled so /localmcp/list_compressed_tools
+        # and the cursor-rule generator can render the compressed view.
+        self.compressed_catalog: dict[str, dict[str, Tool]] = {}
 
     @property
     def running(self) -> bool:
@@ -71,7 +85,7 @@ class Aggregator:
 
     def _log(self, message: str) -> None:
         logger.info("[aggregator] %s", message)
-        self.manager._broadcast(f"[aggregator] {message}")
+        self.manager._broadcast_tagged("aggregator", message)
 
     def _running_states(self) -> list["ProxyState"]:
         return [
@@ -115,6 +129,7 @@ class Aggregator:
         @server.list_tools()
         async def list_tools() -> list:
             states = self._running_states()
+            self.compressed_catalog.clear()
             if not states:
                 return []
             results = await asyncio.gather(
@@ -122,38 +137,141 @@ class Aggregator:
                 return_exceptions=True,
             )
             tools: list = []
+            # Compression snapshots are recorded after the iteration so we
+            # never block the wire-format response on the savings DB. Each
+            # entry: (backend, level, raw_payload, compressed_payload).
+            snapshots: list[tuple[str, str, list, list]] = []
             for state, r in zip(states, results):
                 if isinstance(r, BaseException):
                     if not _is_method_not_found(r):
                         self._log(f"{state.name} list_tools failed: {r}")
                     continue
-                for t in getattr(r, "tools", []) or []:
-                    tools.append(_qualified_copy(t, state.name))
+                spec = self.manager._specs.get(state.name)
+                compress = spec.compress if spec is not None else None
+                backend_tools = list(getattr(r, "tools", []) or [])
+                # Cache the full catalog whenever compression is configured
+                # so docs/discovery surfaces (`localmcp__list_compressed_tools`,
+                # cursor-rule generator) see the compressed view regardless
+                # of scope.
+                if compress is not None:
+                    self.compressed_catalog[state.name] = {
+                        t.name: t for t in backend_tools
+                    }
+                applies_to_aggregator = (
+                    compress is not None
+                    and compress.scope in ("aggregator", "global")
+                    and compress.level != "low"
+                )
+                if compress is not None:
+                    raw_payload = [
+                        _tool_to_wire(_qualified_copy(t, state.name))
+                        for t in backend_tools
+                    ]
+                    compressed_payload = [
+                        _tool_to_wire(t)
+                        for t in compressed_tool_list(
+                            prefix=state.name,
+                            tools=backend_tools,
+                            level=compress.level,
+                        )
+                    ]
+                    snapshots.append(
+                        (state.name, compress.level, raw_payload, compressed_payload)
+                    )
+                if not applies_to_aggregator:
+                    for t in backend_tools:
+                        tools.append(_qualified_copy(t, state.name))
+                    continue
+                tools.extend(
+                    compressed_tool_list(
+                        prefix=state.name,
+                        tools=backend_tools,
+                        level=compress.level,
+                    )
+                )
+            self._log(f"list_tools -> {len(tools)} tools")
+            recorder = getattr(self.manager, "savings", None)
+            if recorder is not None and snapshots:
+                # Record snapshots in the background — don't block the
+                # MCP response on a SQLite write.
+                for backend_name, level, raw_payload, comp_payload in snapshots:
+                    asyncio.create_task(
+                        recorder.record_compression(
+                            backend=backend_name,
+                            level=level,
+                            raw_payload=raw_payload,
+                            compressed_payload=comp_payload,
+                        )
+                    )
             return tools
 
         @server.call_tool(validate_input=False)
         async def call_tool(qualified_name: str, arguments: dict[str, Any]) -> list:
             backend, original = _split_qualified(qualified_name)
+            recorder = getattr(self.manager, "savings", None)
+            # Compression-wrapper interception. We check the cache first so
+            # only backends with `compress` configured can route this way —
+            # an uncompressed backend that happens to expose a tool literally
+            # named `invoke_tool` keeps working as today.
+            if backend and backend in self.compressed_catalog:
+                spec = self.manager._specs.get(backend)
+                level = spec.compress.level if spec and spec.compress else "medium"
+                if original in wrapper_tool_names(level):
+                    state = self.manager.servers.get(backend)
+                    if state is None or not state.running or state.client_session is None:
+                        return _error_tool_result(
+                            f"Unknown or unavailable tool '{qualified_name}'"
+                        )
+                    self._log(f"call_tool (compressed): {qualified_name}")
+                    return await measure_call(
+                        recorder=recorder,
+                        backend=backend,
+                        tool=original,
+                        qualified=qualified_name,
+                        compressed=True,
+                        arguments=arguments,
+                        dispatch=lambda: handle_compressed_call(
+                            catalog=self.compressed_catalog[backend],
+                            op=original,
+                            args=arguments,
+                            dispatch=state.client_session.call_tool,
+                            level=level,
+                        ),
+                    )
             state = self.manager.servers.get(backend) if original else None
             if state is None or not state.running or state.client_session is None:
                 return _error_tool_result(
                     f"Unknown or unavailable tool '{qualified_name}'"
                 )
             self._log(f"call_tool: {qualified_name}")
-            r = await state.client_session.call_tool(original, arguments)
-            # Pass through both content and structuredContent unchanged. The
-            # MCP SDK's lowlevel server validates: if the advertised tool has
-            # an outputSchema and the response's structuredContent is None,
-            # it replaces the response with a validation error. Returning
-            # only `r.content` would drop the backend's structuredContent
-            # (when set) and trip that validation for any tool with a
-            # declared outputSchema (e.g. filesystem, anything
-            # using FastMCP/SDK >=1.13 with auto-generated schemas).
             from mcp.types import CallToolResult
-            return CallToolResult(
-                content=r.content,
-                structuredContent=getattr(r, "structuredContent", None),
-                isError=bool(r.isError),
+
+            async def _dispatch() -> CallToolResult:
+                r = await state.client_session.call_tool(original, arguments)
+                # Pass through both content and structuredContent unchanged.
+                # The MCP SDK's lowlevel server validates: if the advertised
+                # tool has an outputSchema and the response's
+                # structuredContent is None, it replaces the response with a
+                # validation error. Returning only `r.content` would drop
+                # the backend's structuredContent (when set) and trip that
+                # validation for any tool with a declared outputSchema (e.g.
+                # filesystem, anything using FastMCP/SDK >=1.13 with
+                # auto-generated schemas).
+                return CallToolResult(
+                    content=r.content,
+                    structuredContent=getattr(r, "structuredContent", None),
+                    isError=bool(r.isError),
+                    meta=getattr(r, "meta", None),
+                )
+
+            return await measure_call(
+                recorder=recorder,
+                backend=backend,
+                tool=original,
+                qualified=qualified_name,
+                compressed=False,
+                arguments=arguments,
+                dispatch=_dispatch,
             )
 
         @server.list_prompts()
@@ -173,6 +291,7 @@ class Aggregator:
                     continue
                 for p in getattr(r, "prompts", []) or []:
                     prompts.append(_qualified_copy(p, state.name))
+            self._log(f"list_prompts -> {len(prompts)} prompts")
             return prompts
 
         @server.get_prompt()
@@ -214,6 +333,7 @@ class Aggregator:
                 for res in getattr(r, "resources", []) or []:
                     self._resource_origin[str(res.uri)] = state.name
                     out.append(res)
+            self._log(f"list_resources -> {len(out)} resources")
             return out
 
         @server.list_resource_templates()
@@ -233,6 +353,7 @@ class Aggregator:
                     continue
                 for tmpl in getattr(r, "resourceTemplates", []) or []:
                     out.append(tmpl)
+            self._log(f"list_resource_templates -> {len(out)} templates")
             return out
 
         @server.read_resource()
@@ -298,6 +419,19 @@ def _qualified_copy(item: Any, server_name: str):
         return item.model_copy(update={"name": qualified})
     item.name = qualified
     return item
+
+
+def _tool_to_wire(tool: Any) -> Any:
+    """Render a Tool (or Tool-like) into its JSON-serializable wire shape.
+
+    Used by the savings recorder so the byte/token counts on raw vs.
+    compressed catalogs reflect what actually goes over the wire (with
+    aliases like ``inputSchema`` resolved via Pydantic's ``by_alias``
+    mode).
+    """
+    if hasattr(tool, "model_dump"):
+        return tool.model_dump(by_alias=True, exclude_none=True)
+    return dict(tool) if isinstance(tool, dict) else {"name": str(tool)}
 
 
 def _to_internal_contents(contents: Any) -> list[ReadResourceContents]:

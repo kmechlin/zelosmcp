@@ -44,6 +44,10 @@ RESERVED_MOUNTS: frozenset[str] = frozenset({
     "/catalog",
 })
 
+# Compression knobs for tool-list shrinking. See docs/compression.md.
+COMPRESS_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "max"})
+COMPRESS_SCOPES: frozenset[str] = frozenset({"catalog", "aggregator", "global"})
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]*$")
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -86,6 +90,27 @@ class ReverseProxySpec:
 
 
 @dataclass
+class CompressSpec:
+    """Tool-list compression policy for one backend.
+
+    Replaces the backend's full tool surface with a two-tool wrapper pair
+    (``get_tool_schema`` + ``invoke_tool``, or a single ``list_tools`` at
+    level=max) so the LLM sees a much smaller schema in ``tools/list``.
+
+    - ``level`` controls how aggressively the inlined catalog is summarised.
+    - ``scope`` controls which endpoints the wrapper replacement applies to:
+      ``catalog`` (docs/discovery only), ``aggregator`` (default — replaces
+      tools at ``/mcp``), or ``global`` (also replaces at ``/<name>/mcp``).
+    """
+
+    level: str = "medium"
+    scope: str = "aggregator"
+
+    def to_status(self) -> dict[str, Any]:
+        return {"level": self.level, "scope": self.scope}
+
+
+@dataclass
 class ServerSpec:
     """Normalized, transport-tagged description of one MCP backend."""
 
@@ -98,6 +123,7 @@ class ServerSpec:
     url: str | None = None
     headers: dict[str, str] | None = None
     reverse_proxy: ReverseProxySpec | None = None
+    compress: CompressSpec | None = None
 
     def to_status(self) -> dict[str, Any]:
         """Compact JSON-serializable view used by status endpoints."""
@@ -116,6 +142,8 @@ class ServerSpec:
                 info["headers"] = dict(self.headers)
         if self.reverse_proxy is not None:
             info["reverseProxy"] = self.reverse_proxy.to_status()
+        if self.compress is not None:
+            info["compress"] = self.compress.to_status()
         return info
 
 
@@ -258,6 +286,36 @@ def _parse_reverse_proxy(server_name: str, raw: Any) -> ReverseProxySpec:
     )
 
 
+def _parse_compress(server_name: str, raw: Any) -> CompressSpec:
+    """Validate and normalize one ``compress`` block.
+
+    Both ``level`` and ``scope`` default to the dataclass defaults
+    (``medium`` / ``aggregator``) when the keys are absent. An empty
+    object ``{}`` therefore expands to a fully-default-configured
+    :class:`CompressSpec` rather than being rejected.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Server '{server_name}': 'compress' must be an object"
+        )
+
+    level = raw.get("level", "medium")
+    if not isinstance(level, str) or level not in COMPRESS_LEVELS:
+        raise ConfigError(
+            f"Server '{server_name}': compress.level must be one of "
+            f"{sorted(COMPRESS_LEVELS)} (got {level!r})"
+        )
+
+    scope = raw.get("scope", "aggregator")
+    if not isinstance(scope, str) or scope not in COMPRESS_SCOPES:
+        raise ConfigError(
+            f"Server '{server_name}': compress.scope must be one of "
+            f"{sorted(COMPRESS_SCOPES)} (got {scope!r})"
+        )
+
+    return CompressSpec(level=level, scope=scope)
+
+
 def _parse_server(name: str, raw: Any) -> ServerSpec:
     if not isinstance(raw, dict):
         raise ConfigError(f"Server '{name}': entry must be an object")
@@ -267,6 +325,10 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     reverse_proxy: ReverseProxySpec | None = None
     if "reverseProxy" in raw and raw["reverseProxy"] is not None:
         reverse_proxy = _parse_reverse_proxy(name, raw["reverseProxy"])
+
+    compress: CompressSpec | None = None
+    if "compress" in raw and raw["compress"] is not None:
+        compress = _parse_compress(name, raw["compress"])
 
     # Stdio: presence of `command` (matches Cursor's discrimination rule).
     if "command" in raw:
@@ -294,6 +356,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             env=env,
             cwd=cwd,
             reverse_proxy=reverse_proxy,
+            compress=compress,
         )
 
     # Remote transports: discriminated by `type`.
@@ -315,6 +378,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             url=url.strip(),
             headers=headers,
             reverse_proxy=reverse_proxy,
+            compress=compress,
         )
 
     raise ConfigError(

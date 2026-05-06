@@ -9,7 +9,8 @@
 #
 # Build:    docker build -t localmcp .
 # Run:      docker run --rm -p 8000:8000 localmcp
-# Mount fs: docker run --rm -p 8000:8000 -v "$PWD:/workspace" localmcp
+# Mount fs: docker run --rm -p 8000:8000 \
+#               -v "$HOME:/user_data_rw" -v "$HOME:/user_data_ro:ro" localmcp
 
 # ── Stage 1: build the pincherMCP Go binary ───────────────────────────
 # pincherMCP — codebase intelligence MCP server. Single Go binary spoken
@@ -62,7 +63,11 @@ COPY --from=pincher-build /pincher /usr/local/bin/pincher
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY docs ./docs
 COPY src ./src
+# Mandatory MCP set merged into every /api/start payload by ProxyManager.
+# See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
+COPY configs/mandatory-localmcp.json /app/configs/mandatory-localmcp.json
 
 RUN pip install --no-cache-dir -e .
 
