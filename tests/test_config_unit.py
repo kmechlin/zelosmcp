@@ -4,6 +4,9 @@ from __future__ import annotations
 import pytest
 
 from localmcp.config import (
+    COMPRESS_LEVELS,
+    COMPRESS_SCOPES,
+    CompressSpec,
     ConfigError,
     ReverseProxySpec,
     ServerSpec,
@@ -411,3 +414,84 @@ class TestReverseProxy:
             "mount": "/alpha",
             "upstream": "http://x:8080",
         }
+
+
+def _stdio_with_compress(rp: dict | None) -> dict:
+    """Build a single-server config wrapping ``rp`` as the compress block.
+
+    Pass ``None`` to omit the block entirely and exercise the "no
+    compression configured" path.
+    """
+    entry: dict = {"command": "echo", "args": ["a"]}
+    if rp is not None:
+        entry["compress"] = rp
+    return {"mcpServers": {"alpha": entry}}
+
+
+class TestCompressSpec:
+    def test_block_absent_means_no_compress(self):
+        specs, _ = parse_config(_stdio_with_compress(None))
+        assert specs[0].compress is None
+
+    def test_empty_block_uses_defaults(self):
+        # `compress: {}` means "default everything".
+        specs, _ = parse_config(_stdio_with_compress({}))
+        c = specs[0].compress
+        assert c is not None
+        assert c.level == "medium"
+        assert c.scope == "aggregator"
+
+    @pytest.mark.parametrize("level", sorted(COMPRESS_LEVELS))
+    def test_each_level_accepted(self, level):
+        specs, _ = parse_config(_stdio_with_compress({"level": level}))
+        assert specs[0].compress.level == level
+
+    @pytest.mark.parametrize("scope", sorted(COMPRESS_SCOPES))
+    def test_each_scope_accepted(self, scope):
+        specs, _ = parse_config(_stdio_with_compress({"scope": scope}))
+        assert specs[0].compress.scope == scope
+
+    def test_full_block_round_trips(self):
+        specs, _ = parse_config(
+            _stdio_with_compress({"level": "high", "scope": "global"})
+        )
+        c = specs[0].compress
+        assert c.level == "high"
+        assert c.scope == "global"
+        assert c.to_status() == {"level": "high", "scope": "global"}
+
+    def test_unknown_level_rejected(self):
+        with pytest.raises(ConfigError, match="compress.level"):
+            parse_config(_stdio_with_compress({"level": "ultra"}))
+
+    def test_unknown_scope_rejected(self):
+        with pytest.raises(ConfigError, match="compress.scope"):
+            parse_config(_stdio_with_compress({"scope": "everything"}))
+
+    def test_non_object_block_rejected(self):
+        with pytest.raises(ConfigError, match="must be an object"):
+            parse_config(_stdio_with_compress("medium"))  # type: ignore[arg-type]
+
+    def test_remote_backend_can_have_compress(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "alpha": {
+                    "type": "streamable-http",
+                    "url": "http://x/mcp",
+                    "compress": {"level": "max", "scope": "catalog"},
+                },
+            }
+        })
+        c = specs[0].compress
+        assert c.level == "max"
+        assert c.scope == "catalog"
+
+    def test_server_spec_to_status_includes_compress(self):
+        s = ServerSpec(
+            name="alpha",
+            transport="stdio",
+            command="echo",
+            compress=CompressSpec(level="high", scope="global"),
+        )
+        d = s.to_status()
+        assert d["compress"] == {"level": "high", "scope": "global"}

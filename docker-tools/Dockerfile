@@ -80,6 +80,9 @@ FROM extra-os AS localmcp
   # `.dockerignore` excludes .venv, .git, .pytest_cache, etc.
   COPY pyproject.toml README.md /opt/localmcp/
   COPY src /opt/localmcp/src
+  # Mandatory MCP set merged into every /api/start payload by ProxyManager.
+  # See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
+  COPY configs/mandatory-localmcp.json /opt/localmcp/configs/mandatory-localmcp.json
 
   RUN pip install --no-cache-dir -e /opt/localmcp
 

@@ -413,10 +413,10 @@ class TestRenderComprehensiveRule:
 
 
 class TestToolRegistry:
-    def test_seven_tools_registered(self):
-        # Was 8 — `list_supported_backends` removed in the comprehensive
-        # rule rewrite (the renderer treats every backend equally).
-        assert len(_TOOLS) == 7
+    def test_eight_tools_registered(self):
+        # Was 7 before the compression work added `list_compressed_tools`.
+        # If you add a builtin, bump this number AND ship a handler in _HANDLERS.
+        assert len(_TOOLS) == 8
 
     def test_handler_per_tool(self):
         names = [t.name for t in _TOOLS]
@@ -454,7 +454,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_handler_default_read_only(self):
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         # builtin not started: catalog is empty -> rule reports no backends.
         result = await _HANDLERS["generate_cursor_rule"](m.builtin, {})
         assert len(result) == 1
@@ -469,7 +469,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_access_read_write(self):
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_rule"](
             m.builtin, {"access": "read-write"}
         )
@@ -482,7 +482,7 @@ class TestToolHandlers:
 
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown access"):
             await _HANDLERS["generate_cursor_rule"](
                 m.builtin, {"access": "bogus"}
@@ -494,7 +494,7 @@ class TestToolHandlers:
         body without the YAML frontmatter."""
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_rule"](
             m.builtin, {"format": "copilot-instructions"}
         )
@@ -510,7 +510,7 @@ class TestToolHandlers:
 
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown format"):
             await _HANDLERS["generate_cursor_rule"](
                 m.builtin, {"format": "bogus"}
@@ -522,7 +522,7 @@ class TestToolHandlers:
 
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown style"):
             await _HANDLERS["generate_cursor_rule"](
                 m.builtin, {"style": "bogus"}
@@ -541,7 +541,7 @@ class TestToolHandlers:
         # client_session that mimics filesystem's tool surface.
         from unittest.mock import AsyncMock
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
 
         class _Stub:
             name = "filesystem"
@@ -597,7 +597,7 @@ class TestToolHandlers:
         from localmcp.builtin import collect_backend_full_catalog
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
 
         class _Stub:
             name = "filesystem"
@@ -626,7 +626,7 @@ class TestToolHandlers:
     async def test_generate_cursor_mcp_json_aggregate(self):
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_mcp_json"](
             m.builtin, {"shape": "aggregate", "host": "127.0.0.1:9000"}
         )
@@ -642,7 +642,7 @@ class TestToolHandlers:
 
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="builtin"):
             await _HANDLERS["start_server"](m.builtin, {"name": NAME})
         with pytest.raises(McpError, match="builtin"):
@@ -654,6 +654,6 @@ class TestToolHandlers:
 
         from localmcp.manager import ProxyManager
 
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="`name` is required"):
             await _HANDLERS["start_server"](m.builtin, {})

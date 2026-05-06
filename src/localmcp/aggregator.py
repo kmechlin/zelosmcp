@@ -23,7 +23,13 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
-from mcp.types import METHOD_NOT_FOUND
+from mcp.types import METHOD_NOT_FOUND, Tool
+
+from localmcp.compression import (
+    compressed_tool_list,
+    handle_compressed_call,
+    wrapper_tool_names,
+)
 
 if TYPE_CHECKING:
     from localmcp.manager import ProxyManager
@@ -44,6 +50,13 @@ class Aggregator:
         self._ready: asyncio.Event = asyncio.Event()
         self._startup_error: BaseException | None = None
         self._resource_origin: dict[str, str] = {}
+        # Cached full tool catalog per compressed backend, populated on
+        # every list_tools(). The compression scope determines whether
+        # the aggregator's own tools/list output uses the wrappers (in
+        # {aggregator, global}) or the full prefixed list (catalog).
+        # Either way the cache is filled so /localmcp/list_compressed_tools
+        # and the cursor-rule generator can render the compressed view.
+        self.compressed_catalog: dict[str, dict[str, Tool]] = {}
 
     @property
     def running(self) -> bool:
@@ -115,6 +128,7 @@ class Aggregator:
         @server.list_tools()
         async def list_tools() -> list:
             states = self._running_states()
+            self.compressed_catalog.clear()
             if not states:
                 return []
             results = await asyncio.gather(
@@ -127,13 +141,59 @@ class Aggregator:
                     if not _is_method_not_found(r):
                         self._log(f"{state.name} list_tools failed: {r}")
                     continue
-                for t in getattr(r, "tools", []) or []:
-                    tools.append(_qualified_copy(t, state.name))
+                spec = self.manager._specs.get(state.name)
+                compress = spec.compress if spec is not None else None
+                backend_tools = list(getattr(r, "tools", []) or [])
+                # Cache the full catalog whenever compression is configured
+                # so docs/discovery surfaces (`localmcp__list_compressed_tools`,
+                # cursor-rule generator) see the compressed view regardless
+                # of scope.
+                if compress is not None:
+                    self.compressed_catalog[state.name] = {
+                        t.name: t for t in backend_tools
+                    }
+                applies_to_aggregator = (
+                    compress is not None
+                    and compress.scope in ("aggregator", "global")
+                    and compress.level != "low"
+                )
+                if not applies_to_aggregator:
+                    for t in backend_tools:
+                        tools.append(_qualified_copy(t, state.name))
+                    continue
+                tools.extend(
+                    compressed_tool_list(
+                        prefix=state.name,
+                        tools=backend_tools,
+                        level=compress.level,
+                    )
+                )
             return tools
 
         @server.call_tool(validate_input=False)
         async def call_tool(qualified_name: str, arguments: dict[str, Any]) -> list:
             backend, original = _split_qualified(qualified_name)
+            # Compression-wrapper interception. We check the cache first so
+            # only backends with `compress` configured can route this way —
+            # an uncompressed backend that happens to expose a tool literally
+            # named `invoke_tool` keeps working as today.
+            if backend and backend in self.compressed_catalog:
+                spec = self.manager._specs.get(backend)
+                level = spec.compress.level if spec and spec.compress else "medium"
+                if original in wrapper_tool_names(level):
+                    state = self.manager.servers.get(backend)
+                    if state is None or not state.running or state.client_session is None:
+                        return _error_tool_result(
+                            f"Unknown or unavailable tool '{qualified_name}'"
+                        )
+                    self._log(f"call_tool (compressed): {qualified_name}")
+                    return await handle_compressed_call(
+                        catalog=self.compressed_catalog[backend],
+                        op=original,
+                        args=arguments,
+                        dispatch=state.client_session.call_tool,
+                        level=level,
+                    )
             state = self.manager.servers.get(backend) if original else None
             if state is None or not state.running or state.client_session is None:
                 return _error_tool_result(

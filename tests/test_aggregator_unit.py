@@ -81,7 +81,7 @@ def _text_contents(uri: str, text: str) -> TextResourceContents:
 
 def _make_manager_with_two_running_backends():
     """Create a manager with alpha and beta running, each with mocked sessions."""
-    m = ProxyManager()
+    m = ProxyManager(mandatory_config_path="")
 
     sess_alpha = AsyncMock()
     sess_alpha.list_tools = AsyncMock(return_value=FakeResult(
@@ -219,7 +219,7 @@ class TestListTools:
 
     @pytest.mark.asyncio
     async def test_empty_when_no_backends_running(self):
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         agg = Aggregator(m)
         server = _register_for_test(agg)
         handler = _find_handler(server, "ListToolsRequest")
@@ -458,7 +458,7 @@ class TestListResources:
 
     @pytest.mark.asyncio
     async def test_empty_when_no_backends_running(self):
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         agg = Aggregator(m)
         server = _register_for_test(agg)
         handler = _find_handler(server, "ListResourcesRequest")
@@ -577,7 +577,7 @@ class TestReadResource:
 
     @pytest.mark.asyncio
     async def test_no_backends_running_raises(self):
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         agg = Aggregator(m)
         server = _register_for_test(agg)
         handler = _find_handler(server, "ReadResourceRequest")
@@ -595,7 +595,7 @@ class TestLifecycle:
             yield
 
         with patch("localmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
-            m = ProxyManager()
+            m = ProxyManager(mandatory_config_path="")
             agg = Aggregator(m)
             await agg.start()
             assert agg.running is True
@@ -611,7 +611,7 @@ class TestLifecycle:
             yield
 
         with patch("localmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
-            m = ProxyManager()
+            m = ProxyManager(mandatory_config_path="")
             agg = Aggregator(m)
             await agg.start()
             first_sm = agg.session_manager
@@ -621,7 +621,207 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_when_not_started_is_noop(self):
-        m = ProxyManager()
+        m = ProxyManager(mandatory_config_path="")
         agg = Aggregator(m)
         await agg.stop()
         assert agg.running is False
+
+
+# ── Compression scopes ─────────────────────────────────────────────────
+
+from localmcp.config import CompressSpec, ServerSpec  # noqa: E402
+
+
+def _state_with_tools(name: str, tools: list[Tool]) -> tuple[ProxyState, AsyncMock]:
+    """Build a fake ProxyState whose client_session.list_tools returns ``tools``
+    and whose call_tool dispatch is observable via the returned mock."""
+    sess = AsyncMock()
+    sess.list_tools = AsyncMock(return_value=FakeResult(tools=tools))
+    sess.call_tool = AsyncMock(return_value=FakeResult(
+        content=[TextContent(type="text", text="dispatched")],
+        isError=False,
+    ))
+    state = ProxyState(name=name)
+    state.client_session = sess
+    state.running = True
+    return state, sess
+
+
+def _spec_for(name: str, *, compress: CompressSpec | None) -> ServerSpec:
+    return ServerSpec(
+        name=name, transport="stdio", command="echo",
+        compress=compress,
+    )
+
+
+def _setup(compress: CompressSpec | None, tool_count: int = 4):
+    m = ProxyManager(mandatory_config_path="")
+    tools = [
+        Tool(
+            name=f"tool_{i}",
+            description=f"Tool number {i}. With more detail after the period.",
+            inputSchema={"type": "object", "properties": {"arg": {"type": "string"}}},
+        )
+        for i in range(tool_count)
+    ]
+    state, sess = _state_with_tools("alpha", tools)
+    m.servers["alpha"] = state
+    m._specs["alpha"] = _spec_for("alpha", compress=compress)
+    agg = Aggregator(m)
+    server = _register_for_test(agg)
+    return m, agg, server, state, sess, tools
+
+
+class TestCompressedScopes:
+    @pytest.mark.asyncio
+    async def test_no_compress_block_returns_full_prefixed_list(self):
+        m, agg, server, _, _, tools = _setup(compress=None, tool_count=3)
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        assert sorted(names) == ["alpha__tool_0", "alpha__tool_1", "alpha__tool_2"]
+        # No catalog cached when compress is unset.
+        assert agg.compressed_catalog == {}
+
+    @pytest.mark.asyncio
+    async def test_scope_catalog_keeps_full_list_but_caches(self):
+        m, agg, server, _, _, tools = _setup(
+            compress=CompressSpec(level="medium", scope="catalog"), tool_count=3
+        )
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        # Full uncompressed surface is preserved on the wire.
+        assert sorted(names) == ["alpha__tool_0", "alpha__tool_1", "alpha__tool_2"]
+        # But the catalog cache is still populated for docs/discovery.
+        assert "alpha" in agg.compressed_catalog
+        assert set(agg.compressed_catalog["alpha"].keys()) == {"tool_0", "tool_1", "tool_2"}
+
+    @pytest.mark.asyncio
+    async def test_scope_aggregator_returns_wrappers(self):
+        m, agg, server, _, _, _ = _setup(
+            compress=CompressSpec(level="medium", scope="aggregator"), tool_count=4
+        )
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        assert sorted(names) == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+        assert "alpha" in agg.compressed_catalog
+
+    @pytest.mark.asyncio
+    async def test_scope_global_returns_wrappers_at_aggregator_too(self):
+        m, agg, server, _, _, _ = _setup(
+            compress=CompressSpec(level="medium", scope="global"), tool_count=4
+        )
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        assert sorted(names) == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+
+    @pytest.mark.asyncio
+    async def test_level_low_skips_wrappers(self):
+        # `level=low` is treated as "show full descriptions" — no wrappers,
+        # but the catalog cache is still populated.
+        m, agg, server, _, _, _ = _setup(
+            compress=CompressSpec(level="low", scope="aggregator"), tool_count=2
+        )
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        assert sorted(names) == ["alpha__tool_0", "alpha__tool_1"]
+        assert "alpha" in agg.compressed_catalog
+
+    @pytest.mark.asyncio
+    async def test_level_max_returns_single_wrapper(self):
+        m, agg, server, _, _, _ = _setup(
+            compress=CompressSpec(level="max", scope="aggregator"), tool_count=15
+        )
+        handler = _find_handler(server, "ListToolsRequest")
+        result = await handler(None)
+        names = [t.name for t in result.root.tools]
+        assert names == ["alpha__list_tools"]
+
+
+class TestCompressedCallToolDispatch:
+    @pytest.mark.asyncio
+    async def test_get_tool_schema_returns_serialized_tool(self):
+        m, agg, server, _, sess, _ = _setup(
+            compress=CompressSpec(level="medium", scope="aggregator"), tool_count=3
+        )
+        # Populate the catalog by calling list_tools first.
+        await _find_handler(server, "ListToolsRequest")(None)
+        call_handler = _find_handler(server, "CallToolRequest")
+        # Wrap into the request shape the handler expects.
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__get_tool_schema",
+                arguments={"tool_name": "tool_1"},
+            ),
+        )
+        result = await call_handler(req)
+        # No backend dispatch on get_tool_schema.
+        sess.call_tool.assert_not_called()
+        text = result.root.content[0].text
+        assert "tool_1" in text
+
+    @pytest.mark.asyncio
+    async def test_invoke_tool_dispatches_to_backend(self):
+        m, agg, server, _, sess, _ = _setup(
+            compress=CompressSpec(level="medium", scope="aggregator"), tool_count=3
+        )
+        await _find_handler(server, "ListToolsRequest")(None)
+        call_handler = _find_handler(server, "CallToolRequest")
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__invoke_tool",
+                arguments={"tool_name": "tool_2", "tool_input": {"arg": "v"}},
+            ),
+        )
+        result = await call_handler(req)
+        # Underlying backend was called with the actual tool_name + tool_input.
+        sess.call_tool.assert_awaited_once_with("tool_2", {"arg": "v"})
+        # Response content forwarded.
+        assert result.root.content[0].text == "dispatched"
+
+    @pytest.mark.asyncio
+    async def test_invoke_tool_unknown_name_skips_dispatch(self):
+        m, agg, server, _, sess, _ = _setup(
+            compress=CompressSpec(level="medium", scope="aggregator"), tool_count=2
+        )
+        await _find_handler(server, "ListToolsRequest")(None)
+        call_handler = _find_handler(server, "CallToolRequest")
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__invoke_tool",
+                arguments={"tool_name": "ghost", "tool_input": {}},
+            ),
+        )
+        result = await call_handler(req)
+        sess.call_tool.assert_not_called()
+        assert result.root.isError is True
+
+    @pytest.mark.asyncio
+    async def test_uncompressed_backend_gets_normal_dispatch(self):
+        # No compress block — `<backend>__invoke_tool` is just a normal name
+        # that gets forwarded to the backend if it exists; the wrapper
+        # interception does NOT activate.
+        m, agg, server, _, sess, _ = _setup(compress=None, tool_count=2)
+        await _find_handler(server, "ListToolsRequest")(None)
+        call_handler = _find_handler(server, "CallToolRequest")
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__tool_0",
+                arguments={"x": 1},
+            ),
+        )
+        result = await call_handler(req)
+        sess.call_tool.assert_awaited_once_with("tool_0", {"x": 1})
+        assert result.root.content[0].text == "dispatched"

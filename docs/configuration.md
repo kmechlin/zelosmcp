@@ -122,6 +122,36 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
 
 See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the canonical `X-Forwarded-*` set, network-isolation pattern, and pincher worked example.
 
+### Compression (`compress`)
+
+Any backend can declare an optional `compress` block. When set, LocalMCP swaps the backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair — `<backend>__get_tool_schema` and `<backend>__invoke_tool` — slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`.
+
+```json
+"kubernetes": {
+  "command": "npx",
+  "args": ["-y", "kubernetes-mcp-server@latest"],
+  "compress": {
+    "level": "medium",
+    "scope": "aggregator"
+  }
+}
+```
+
+| Field | Required | Type | Default | Notes |
+|---|---|---|---|---|
+| `level` | no | string | `"medium"` | One of `"low"`, `"medium"`, `"high"`, `"max"`. `low` keeps full descriptions; `max` collapses to a single `list_tools` wrapper. |
+| `scope` | no | string | `"aggregator"` | One of `"catalog"`, `"aggregator"`, `"global"`. Controls which endpoints surface the wrappers vs. the full tool list. |
+
+Quick scope reference:
+
+| `scope` | `/<name>/mcp` | `/mcp` (aggregator) | docs / cursor-rule |
+|---|---|---|---|
+| `catalog` | full | full | compressed |
+| `aggregator` (default) | full | wrappers | compressed |
+| `global` | wrappers | wrappers | compressed |
+
+See [compression.md](compression.md) for the full reference, level comparison, agent-side flow, and worked examples.
+
 ## Reserved names
 
 A handful of `<name>` values collide with built-in HTTP routes; LocalMCP rejects them with a `ConfigError`:
@@ -195,5 +225,6 @@ All of these come back as 400-status JSON: `{"ok": false, "error": "<message>"}`
 
 - [default-mcps.md](default-mcps.md) — what the four blessed backends in `default-localmcp.json` do.
 - [reverse-proxy.md](reverse-proxy.md) — full reference for the optional `reverseProxy` block.
+- [compression.md](compression.md) — full reference for the optional `compress` block.
 - [http-api.md](http-api.md) — full HTTP API reference for `/api/start` and friends.
 - [makefile.md](makefile.md) — `make localmcp-load LOCALMCP_CONFIG=...` to push your own config.

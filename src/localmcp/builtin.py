@@ -223,6 +223,42 @@ _TOOLS: list[Tool] = [
             "additionalProperties": False,
         },
     ),
+    Tool(
+        name="list_compressed_tools",
+        description=(
+            "Return the compressed catalog for backends that have a "
+            "`compress` block configured. Independent of compression "
+            "scope: even a backend running with `scope=catalog` (which "
+            "leaves the wire format uncompressed) still surfaces a "
+            "compressed view here, since this tool is the documentation "
+            "/ discovery affordance. Each entry's render level defaults "
+            "to whatever the backend was configured with; pass `level` "
+            "to re-render at a different level."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "description": (
+                        "Limit output to a single backend by name. "
+                        "Omit to return every backend with `compress` set."
+                    ),
+                },
+                "level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max"],
+                    "description": (
+                        "Re-render the catalog at this level instead of "
+                        "the per-backend configured level. Useful for "
+                        "previewing what `level=high` would look like "
+                        "without changing the live config."
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 
@@ -711,6 +747,54 @@ async def _h_reload_config(
     return _json_text(result)
 
 
+async def _h_list_compressed_tools(
+    self_: "BuiltinServer", args: dict[str, Any]
+) -> list[ContentBlock]:
+    from localmcp.compression import compress_for_catalog, COMPRESS_LEVELS
+
+    backend_filter = args.get("backend")
+    level_override = args.get("level")
+    if level_override is not None and (
+        not isinstance(level_override, str) or level_override not in COMPRESS_LEVELS
+    ):
+        raise McpError(
+            ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"`level` must be one of {sorted(COMPRESS_LEVELS)} "
+                    f"(got {level_override!r})"
+                ),
+            )
+        )
+    if backend_filter is not None and (
+        not isinstance(backend_filter, str) or not backend_filter
+    ):
+        raise McpError(
+            ErrorData(code=INVALID_PARAMS, message="`backend` must be a non-empty string")
+        )
+
+    catalog = self_.manager.aggregator.compressed_catalog
+    out: dict[str, Any] = {}
+    for name, tools in catalog.items():
+        if backend_filter is not None and name != backend_filter:
+            continue
+        spec = self_.manager._specs.get(name)
+        configured_level = (
+            spec.compress.level if spec is not None and spec.compress is not None else "medium"
+        )
+        configured_scope = (
+            spec.compress.scope if spec is not None and spec.compress is not None else "aggregator"
+        )
+        render_level = level_override or configured_level
+        out[name] = {
+            "configured": {"level": configured_level, "scope": configured_scope},
+            "render_level": render_level,
+            "tool_count": len(tools),
+            "catalog": [compress_for_catalog(t, render_level) for t in tools.values()],
+        }
+    return _json_text(out)
+
+
 _HANDLERS: dict[str, ToolHandler] = {
     "generate_cursor_rule": _h_generate_cursor_rule,
     "list_loaded_servers": _h_list_loaded_servers,
@@ -719,6 +803,7 @@ _HANDLERS: dict[str, ToolHandler] = {
     "start_server": _h_start_server,
     "stop_server": _h_stop_server,
     "reload_config": _h_reload_config,
+    "list_compressed_tools": _h_list_compressed_tools,
 }
 
 

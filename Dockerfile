@@ -63,6 +63,9 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+# Mandatory MCP set merged into every /api/start payload by ProxyManager.
+# See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
+COPY configs/mandatory-localmcp.json /app/configs/mandatory-localmcp.json
 
 RUN pip install --no-cache-dir -e .
 

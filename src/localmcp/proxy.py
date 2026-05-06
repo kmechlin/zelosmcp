@@ -13,6 +13,14 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.types import Tool
+
+from localmcp.compression import (
+    compressed_tool_list,
+    handle_compressed_call,
+    wrapper_tool_names,
+)
+from localmcp.config import CompressSpec
 
 logger = logging.getLogger("localmcp")
 
@@ -38,6 +46,16 @@ class ProxyState:
         self._task: asyncio.Task | None = None
         self._ready: asyncio.Event = asyncio.Event()
         self._startup_error: BaseException | None = None
+        # Set on start() when the backend's compress.scope == "global" — the
+        # per-backend session manager exposes the same wrapper tools the
+        # aggregator does, so /<name>/mcp consumers see compressed schemas
+        # instead of the raw backend surface. Otherwise stays None and the
+        # session manager runs in passthrough mode.
+        self._compress: CompressSpec | None = None
+        # Cached full tool list when compression is active. Refreshed on
+        # every list_tools call so the wrapper dispatcher resolves names
+        # against whatever the backend currently advertises.
+        self._compressed_catalog: dict[str, Tool] = {}
 
     def _emit_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -69,6 +87,7 @@ class ProxyState:
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         headers: dict[str, str] | None = None,
+        compress: CompressSpec | None = None,
     ) -> None:
         if self.running:
             raise RuntimeError("Proxy is already running — stop it first")
@@ -76,6 +95,13 @@ class ProxyState:
         self.error = None
         self._ready = asyncio.Event()
         self._startup_error = None
+        # Only retain compress for scope=global — that's the only case
+        # where the per-backend /<name>/mcp endpoint should serve wrappers
+        # instead of the raw surface. Aggregator-only and catalog-only
+        # scopes are handled by the aggregator alone.
+        self._compress = compress if (
+            compress is not None and compress.scope == "global"
+        ) else None
 
         self._task = asyncio.create_task(
             self._run_backend(transport, command, args, url, env, cwd, headers)
@@ -214,19 +240,41 @@ class ProxyState:
             self.client_session = None
             self.running = False
             self.backend_info = {}
+            self._compressed_catalog = {}
             self._emit_log("Proxy stopped")
 
     def _register_handlers(self, server: Server) -> None:
         session = self.client_session
         assert session is not None
+        compress = self._compress  # captured at handler-registration time
 
         @server.list_tools()
         async def list_tools() -> list:
             r = await session.list_tools()
-            return r.tools
+            backend_tools = list(r.tools or [])
+            if compress is None:
+                return backend_tools
+            # scope=global: refresh the catalog cache and substitute the
+            # wrapper tools. Empty prefix because /<name>/mcp consumers
+            # already know the backend by URL.
+            self._compressed_catalog = {t.name: t for t in backend_tools}
+            return compressed_tool_list(
+                prefix="", tools=backend_tools, level=compress.level
+            )
 
         @server.call_tool(validate_input=False)
         async def call_tool(name: str, arguments: dict[str, Any]):
+            from mcp.types import CallToolResult
+
+            if compress is not None and name in wrapper_tool_names(compress.level):
+                self._emit_log(f"call_tool (compressed): {name}")
+                return await handle_compressed_call(
+                    catalog=self._compressed_catalog,
+                    op=name,
+                    args=arguments,
+                    dispatch=session.call_tool,
+                    level=compress.level,
+                )
             self._emit_log(f"call_tool: {name}")
             r = await session.call_tool(name, arguments)
             # Pass through both content and structuredContent unchanged. The
@@ -237,8 +285,6 @@ class ProxyState:
             # (when set) and trip that validation for any tool with a
             # declared outputSchema (e.g. filesystem, anything
             # using FastMCP/SDK >=1.13 with auto-generated schemas).
-            from mcp.types import CallToolResult
-
             return CallToolResult(
                 content=r.content,
                 structuredContent=getattr(r, "structuredContent", None),

@@ -19,8 +19,9 @@ The built-in is a synthetic [`ProxyState`](../src/localmcp/proxy.py) — same at
 | `localmcp__start_server` | Wraps `ProxyManager.start_one(name)`. Refuses `name="localmcp"`. |
 | `localmcp__stop_server` | Wraps `ProxyManager.stop_one(name)`. Refuses `name="localmcp"`. |
 | `localmcp__reload_config` | Replaces the entire backend set; same JSON shape `POST /api/start` accepts. |
+| `localmcp__list_compressed_tools` | Returns the compressed catalog (one short line per tool) for any backend with a `compress` block configured. Independent of `compress.scope` — even `scope=catalog` backends surface here. Optional `backend` filter and `level` override (preview a different level without changing the live config). See [compression.md](compression.md). |
 
-All seven are reachable via `/localmcp/mcp` (unprefixed) or `/mcp` (prefixed `localmcp__`).
+All eight are reachable via `/localmcp/mcp` (unprefixed) or `/mcp` (prefixed `localmcp__`).
 
 ### `localmcp__generate_cursor_rule` in detail
 

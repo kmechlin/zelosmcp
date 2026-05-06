@@ -8,7 +8,10 @@ subscriptions across all servers.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +21,19 @@ from localmcp.aggregator import Aggregator
 from localmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
 from localmcp.config import ServerSpec, parse_config
 from localmcp.proxy import ProxyState
+
+
+# Default lookup order for the mandatory MCP set. First existing path wins.
+# - /app/configs is the root Dockerfile's runtime path.
+# - /opt/localmcp/configs is the cert-aware Dockerfile's runtime path.
+# - The repo-relative path lets developers run uvicorn directly from the
+#   working tree (tests can use ProxyManager(mandatory_config_path="") to
+#   skip mandatory entirely).
+_MANDATORY_PATH_CANDIDATES: tuple[str, ...] = (
+    "/app/configs/mandatory-localmcp.json",
+    "/opt/localmcp/configs/mandatory-localmcp.json",
+    str(Path(__file__).resolve().parent.parent.parent / "configs" / "mandatory-localmcp.json"),
+)
 
 
 # Hop-by-hop headers per RFC 7230 §6.1 plus a few headers httpx manages
@@ -44,7 +60,7 @@ _log = logging.getLogger("localmcp.manager")
 class ProxyManager:
     """Lifecycle owner for many ProxyStates plus the /mcp aggregator."""
 
-    def __init__(self) -> None:
+    def __init__(self, mandatory_config_path: str | None = None) -> None:
         # ``self.servers`` mixes user-configured ProxyStates with the
         # always-on BuiltinServer (under the reserved key "localmcp").
         # The builtin is ProxyState-shaped, so the dispatcher and
@@ -68,6 +84,17 @@ class ProxyManager:
         # pooling survives across config reloads. Tests can replace the
         # client by setting this attribute directly.
         self._http_client: httpx.AsyncClient | None = None
+        # Mandatory MCP set merged into every start_all() payload before
+        # parsing. ``None`` (default) auto-discovers from the runtime paths
+        # in _MANDATORY_PATH_CANDIDATES; ``""`` disables mandatory merging
+        # entirely (used by tests to avoid spawning real subprocesses);
+        # any other value is the literal path to the mandatory JSON.
+        self._mandatory_config_path = mandatory_config_path
+        # Cached parsed mandatory ``mcpServers`` dict (populated lazily on
+        # first read by _read_mandatory_servers; reused across start_all()
+        # invocations within a single ProxyManager lifetime).
+        self._mandatory_cache: dict[str, Any] | None = None
+        self._mandatory_cache_loaded = False
 
     @property
     def primary(self) -> str | None:
@@ -87,13 +114,15 @@ class ProxyManager:
     async def start_all(self, raw_config: Any) -> dict[str, Any]:
         """Replace the current set of servers with whatever ``raw_config`` defines.
 
-        Stops anything currently running, parses the config, concurrently starts
-        each backend, then brings up the aggregator at ``/mcp``. Returns a
-        per-server result map.
+        Stops anything currently running, parses the config (after merging
+        the mandatory MCP set on top of the user payload — user wins on
+        same-name collisions), concurrently starts each backend, then brings
+        up the aggregator at ``/mcp``. Returns a per-server result map.
         """
         await self.stop_all()
 
-        specs, primary = parse_config(raw_config)
+        merged = self._merge_mandatory(raw_config)
+        specs, primary = parse_config(merged)
         self._specs = {s.name: s for s in specs}
 
         if primary is not None:
@@ -132,6 +161,95 @@ class ProxyManager:
             "primary": None,
             "servers": results,
         }
+
+    def _merge_mandatory(self, raw_config: Any) -> Any:
+        """Merge the mandatory MCP set into ``raw_config``.
+
+        Returns a new dict (the input is left unmodified). Mandatory
+        backends fill in any names absent from the user's payload; if the
+        user's payload defines an entry with the same name, the user's
+        entry wins so they can override args/env/etc.
+
+        Returns the input unchanged when:
+        - ``mandatory_config_path`` is set to the empty string (test mode).
+        - The mandatory file doesn't exist or fails to parse.
+        - ``raw_config`` isn't a dict (parse_config will raise downstream).
+        """
+        mandatory = self._read_mandatory_servers()
+        if not mandatory or not isinstance(raw_config, dict):
+            return raw_config
+
+        merged = dict(raw_config)
+        user_servers = merged.get("mcpServers")
+        user_servers = dict(user_servers) if isinstance(user_servers, dict) else {}
+
+        injected: list[str] = []
+        for name, entry in mandatory.items():
+            if name not in user_servers:
+                user_servers[name] = entry
+                injected.append(name)
+
+        merged["mcpServers"] = user_servers
+        if injected:
+            self._broadcast(
+                f"[manager] merged mandatory backends: {', '.join(sorted(injected))}"
+            )
+        return merged
+
+    def _read_mandatory_servers(self) -> dict[str, Any] | None:
+        """Read and cache the mandatory file's ``mcpServers`` dict.
+
+        Returns ``None`` when mandatory is disabled, the file is missing,
+        or the file can't be parsed. Subsequent calls return the cached
+        result (positive or None) without re-reading the file.
+        """
+        if self._mandatory_cache_loaded:
+            return self._mandatory_cache
+
+        self._mandatory_cache_loaded = True
+        path = self._resolve_mandatory_path()
+        if path is None:
+            return None
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except FileNotFoundError:
+            _log.info("mandatory config not found at %s; skipping merge", path)
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            _log.warning("mandatory config %s failed to load: %s", path, exc)
+            return None
+
+        servers = payload.get("mcpServers") if isinstance(payload, dict) else None
+        if not isinstance(servers, dict):
+            _log.warning(
+                "mandatory config %s missing 'mcpServers' object; skipping merge",
+                path,
+            )
+            return None
+
+        self._mandatory_cache = servers
+        return servers
+
+    def _resolve_mandatory_path(self) -> str | None:
+        """Pick the actual mandatory-file path to read.
+
+        Honours the constructor's ``mandatory_config_path`` argument:
+        - ``""`` => disabled (test mode).
+        - non-empty string => use that path verbatim.
+        - ``None`` (default) => first existing path in
+          _MANDATORY_PATH_CANDIDATES, or ``None`` if none exist.
+        """
+        explicit = self._mandatory_config_path
+        if explicit == "":
+            return None
+        if isinstance(explicit, str) and explicit:
+            return explicit
+        for candidate in _MANDATORY_PATH_CANDIDATES:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     async def stop_all(self) -> None:
         """Stop every user-configured backend AND the aggregator. The
@@ -519,4 +637,5 @@ class ProxyManager:
             env=spec.env,
             cwd=spec.cwd,
             headers=spec.headers,
+            compress=spec.compress,
         )

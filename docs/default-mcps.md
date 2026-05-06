@@ -1,15 +1,18 @@
 # Default MCP backends
 
-[`configs/default-localmcp.json`](../configs/default-localmcp.json) ships with four MCP backends pre-wired. Each one is upstream open-source and well-maintained. This page covers what each does, what it needs at runtime, and where to find more info.
+LocalMCP ships with two layers of pre-wired MCP backends:
 
-| Backend | Upstream | Transport | Purpose |
-|---|---|---|---|
-| [`filesystem`](#filesystem) | [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) | stdio (npx) | Read/edit/list files in `/workspace`. |
-| [`pincher`](#pincher) | [`pincherMCP`](https://github.com/kwad77/pincherMCP) | stdio (binary, baked into image) | Codebase intelligence: AST symbols, FTS5 full-text search, Cypher graph queries, BPE token-savings accounting. |
-| [`docker`](#docker) | [`mcp-server-docker`](https://github.com/ckreiling/mcp-server-docker) | stdio (uvx) | Inspect / manage Docker containers, images, networks, volumes. |
-| [`kubernetes`](#kubernetes) | [`kubernetes-mcp-server`](https://github.com/manusa/kubernetes-mcp-server) | stdio (npx) | Inspect / manage Kubernetes resources. |
+- **Mandatory** ([`configs/mandatory-localmcp.json`](../configs/mandatory-localmcp.json)) — `filesystem` and `pincher` are merged into every `/api/start` payload before parsing. User configs can override their args/env (same-name entries win), but you don't have to copy them into your own config to get them running.
+- **Default** ([`configs/default-localmcp.json`](../configs/default-localmcp.json)) — `kubernetes` and `docker` ship in the file `make localmcp-load` POSTs by default. Drop them, change them, or replace the whole file by overriding `LOCALMCP_CONFIG`.
 
-The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `filesystem__read_text_file`, `pincher__search`).
+| Backend | Layer | Upstream | Transport | Purpose |
+|---|---|---|---|---|
+| [`filesystem`](#filesystem) | mandatory | [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) | stdio (npx) | Read/edit/list files in `/workspace`. |
+| [`pincher`](#pincher) | mandatory | [`pincherMCP`](https://github.com/kwad77/pincherMCP) | stdio (binary, baked into image) | Codebase intelligence: AST symbols, FTS5 full-text search, Cypher graph queries, BPE token-savings accounting. |
+| [`docker`](#docker) | default | [`mcp-server-docker`](https://github.com/ckreiling/mcp-server-docker) | stdio (uvx) | Inspect / manage Docker containers, images, networks, volumes. |
+| [`kubernetes`](#kubernetes) | default | [`kubernetes-mcp-server`](https://github.com/manusa/kubernetes-mcp-server) | stdio (npx) | Inspect / manage Kubernetes resources. |
+
+The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `filesystem__read_text_file`, `pincher__search`). Three of the four (filesystem, pincher, kubernetes) ship with `compress: { level: "medium" }` so the aggregator surfaces wrapper tools instead of the full schema; see [compression.md](compression.md) for what that means.
 
 ---
 
