@@ -63,7 +63,7 @@ LocalMCP's rule generator produces a comprehensive `.mdc` body listing every too
 
 ### Generate it
 
-The web UI has a **Cursor rule (.mdc)** panel that auto-refreshes whenever you toggle backends. Pick the access mode in the dropdown, click **Copy**, paste into a `.mdc` file. Or `curl` the same content from `/api/cursor-rule`:
+The web UI has a **Cursor rule (.mdc)** panel that auto-refreshes whenever you toggle backends. Pick the **Tool use** and **Access** modes in the dropdowns, click **Copy**, paste into a `.mdc` file. Or `curl` the same content from `/api/cursor-rule`:
 
 ```bash
 mkdir -p .cursor/rules
@@ -149,6 +149,24 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-write' \
 ```
 
 The body content (per-tool entries) is identical between modes — only the directive header changes. So an agent loading a read-write rule still has the same tool catalog; it's just allowed to use it.
+
+### `tool_use`: priority vs available
+
+The `tool_use` query param controls how aggressively the rule pushes the agent toward MCP tools.
+
+| Mode | What gets added | Use when |
+|---|---|---|
+| `priority` (default) | "Prefer MCP tools over shell" directive plus a curated **Mandatory backend playbook** section with detailed workflow guidance for `filesystem` and `pincher` (filtered by `access`). | Default — you actually want Cursor to lean on the MCP tools instead of shelling out, and you want the agent oriented toward the canonical pincher / filesystem workflow. |
+| `available` | Pure neutral catalog. No prioritization directive, no playbook, no "prefer these over shelling out" phrasing in the per-backend headers. | You want the rule to stay informational only — no opinion on which tools the agent should reach for first. |
+
+Toggle in the web UI dropdown, or pass `?tool_use=available`:
+
+```bash
+curl -fsSL 'http://localhost:8000/api/cursor-rule?tool_use=available' \
+  > .cursor/rules/localmcp.mdc
+```
+
+The mandatory backend playbook in `priority` mode is filtered by `access`: in `read-only` mode it lists only the inspection tools and explicitly forbids the mutating ones (`write_file`, `edit_file`, `pincher__index`, `pincher__fetch`, `pincher__adr` set/delete). In `read-write` mode it adds the full workflow including `edit_file` vs `write_file` guidance and the `adr`/`fetch` knowledge-store loop.
 
 ### `style`: always-apply vs scoped
 

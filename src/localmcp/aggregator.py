@@ -168,6 +168,7 @@ class Aggregator:
                         level=compress.level,
                     )
                 )
+            self._log(f"list_tools -> {len(tools)} tools")
             return tools
 
         @server.call_tool(validate_input=False)
@@ -233,6 +234,7 @@ class Aggregator:
                     continue
                 for p in getattr(r, "prompts", []) or []:
                     prompts.append(_qualified_copy(p, state.name))
+            self._log(f"list_prompts -> {len(prompts)} prompts")
             return prompts
 
         @server.get_prompt()
@@ -274,6 +276,7 @@ class Aggregator:
                 for res in getattr(r, "resources", []) or []:
                     self._resource_origin[str(res.uri)] = state.name
                     out.append(res)
+            self._log(f"list_resources -> {len(out)} resources")
             return out
 
         @server.list_resource_templates()
@@ -293,6 +296,7 @@ class Aggregator:
                     continue
                 for tmpl in getattr(r, "resourceTemplates", []) or []:
                     out.append(tmpl)
+            self._log(f"list_resource_templates -> {len(out)} templates")
             return out
 
         @server.read_resource()

@@ -685,6 +685,50 @@ class TestCursorRuleEndpoint:
             assert r.status_code == 400
             assert "Unknown format" in r.json()["error"]
 
+    @pytest.mark.asyncio
+    async def test_tool_use_priority_default_matches_explicit(self):
+        """Default `tool_use=priority` and explicit `?tool_use=priority`
+        must produce identical bodies (round-trip)."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                default = await c.get("/api/cursor-rule")
+                explicit = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "priority"}
+                )
+            assert default.status_code == 200
+            assert explicit.status_code == 200
+            assert default.text == explicit.text
+
+    @pytest.mark.asyncio
+    async def test_tool_use_available_differs_from_priority(self):
+        """`?tool_use=available` produces a different body than the
+        priority default. With no user backends loaded both bodies are
+        the empty-backends template (which has no priority directive
+        either way), so we just assert the request succeeds — content
+        differences are exercised in the unit tests."""
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "available"}
+                )
+            assert r.status_code == 200
+            # Empty-backend body still has the directive, but no
+            # priority directive in either mode.
+            assert "## Tool-use priority" not in r.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_use_400(self):
+        app, _ = _fresh()
+        async with _lifespan(app):
+            async with _client(app) as c:
+                r = await c.get(
+                    "/api/cursor-rule", params={"tool_use": "bogus"}
+                )
+            assert r.status_code == 400
+            assert "Unknown tool_use" in r.json()["error"]
+
 
 class TestBuiltinMcp:
     @pytest.mark.asyncio

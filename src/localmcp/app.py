@@ -405,13 +405,26 @@ def create_app(manager: ProxyManager | None = None):
             required: false
             schema: { type: string }
             description: Glob pattern when style=scoped (e.g. `**/*.py`).
+          - in: query
+            name: tool_use
+            required: false
+            schema:
+              type: string
+              enum: [available, priority]
+              default: priority
+            description: |
+              priority (default): rule body adds a "prefer MCP tools
+              over shell" directive plus a curated playbook for the
+              mandatory backends (`filesystem`, `pincher`) filtered by
+              access mode. available: neutral catalog with no
+              prioritization directive or playbook section.
         responses:
           200:
             description: Markdown body of the generated rule (frontmatter + body, or body-only for copilot-instructions).
             content:
               text/markdown: {}
           400:
-            description: Unknown `access`, `format`, or `style` value.
+            description: Unknown `access`, `format`, `style`, or `tool_use` value.
         """
         access = request.query_params.get("access", "read-only")
         if access not in ("read-only", "read-write"):
@@ -428,10 +441,21 @@ def create_app(manager: ProxyManager | None = None):
             return JSONResponse(
                 {"error": f"Unknown style: {style!r}"}, status_code=400
             )
+        tool_use = request.query_params.get("tool_use", "priority")
+        if tool_use not in ("available", "priority"):
+            return JSONResponse(
+                {"error": f"Unknown tool_use: {tool_use!r}"}, status_code=400
+            )
         globs = request.query_params.get("globs")
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
         body = render_comprehensive_rule(
-            catalog, access=access, style=style, globs=globs, fmt=fmt
+            catalog,
+            access=access,
+            style=style,
+            globs=globs,
+            fmt=fmt,
+            tool_use=tool_use,
+            mandatory_names=manager.mandatory_names(),
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 

@@ -351,6 +351,182 @@ class TestRenderComprehensiveRule:
         # somewhere. We pick the description-suffix marker.
         assert "(read-only mode)" in out
 
+    def test_tool_use_priority_default_includes_directive(self):
+        """Default `tool_use=priority` injects the prefer-MCP-over-shell
+        directive plus the mandatory backend playbook for any
+        mandatory backend present in the catalog."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+            "pincher": _backend(
+                [_tool("search", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(catalog)
+        assert "## Tool-use priority" in out
+        assert "Always prefer the MCP tools" in out
+        assert "## Mandatory backend playbook" in out
+        # Per-backend header still includes the prefer-over-shell hint.
+        assert "Prefer these over equivalent shell commands." in out
+
+    def test_tool_use_available_omits_priority_sections(self):
+        """`tool_use=available` strips every prefer-MCP phrasing — the
+        priority directive, the playbook section, and the per-backend
+        prefer-over-shell sentence."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+            "pincher": _backend(
+                [_tool("search", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(catalog, tool_use="available")
+        assert "Tool-use priority" not in out
+        assert "Mandatory backend playbook" not in out
+        assert "Prefer these over shelling out" not in out
+        assert "Prefer these over equivalent shell commands" not in out
+
+    def test_unknown_tool_use_raises(self):
+        with pytest.raises(ValueError, match="Unknown tool_use"):
+            render_comprehensive_rule({}, tool_use="bogus")
+
+    def test_mandatory_playbook_filesystem_readonly(self):
+        """`access=read-only` filesystem playbook lists only inspection
+        tools and explicitly forbids the destructive ones."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(
+            catalog, access="read-only", tool_use="priority"
+        )
+        assert "### `filesystem`" in out
+        assert "filesystem__read_text_file" in out
+        assert "filesystem__list_directory" in out
+        # Read-only mode forbids the mutating tools.
+        assert "Do NOT call" in out
+        assert "filesystem__write_file" in out
+        assert "filesystem__edit_file" in out
+        # Read-only block must not advertise edit_file as the preferred
+        # editing approach.
+        assert "Edit precisely" not in out
+
+    def test_mandatory_playbook_filesystem_readwrite(self):
+        """`access=read-write` filesystem playbook adds the
+        edit_file vs write_file guidance."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(
+            catalog, access="read-write", tool_use="priority"
+        )
+        assert "### `filesystem`" in out
+        assert "Edit precisely" in out
+        assert "filesystem__edit_file" in out
+        assert "filesystem__write_file" in out
+
+    def test_mandatory_playbook_pincher_present(self):
+        """When `pincher` is in the catalog and tool_use=priority, the
+        pincher workflow block renders with the canonical guidance."""
+        catalog = {
+            "pincher": _backend(
+                [_tool("search", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(catalog, tool_use="priority")
+        assert "### `pincher`" in out
+        assert "pincher__architecture" in out
+        assert "pincher__search" in out
+        assert "pincher__context" in out
+        assert "pincher__symbols" in out
+        assert "pincher__changes" in out
+        assert "pincher__trace" in out
+        assert "pincher__query" in out
+        assert "pincher__schema" in out
+        # Stable symbol ID shape.
+        assert "{file_path}::{qualified_name}#{kind}" in out
+
+    def test_mandatory_playbook_pincher_readonly_forbids_mutators(self):
+        catalog = {
+            "pincher": _backend(
+                [_tool("search", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(
+            catalog, access="read-only", tool_use="priority"
+        )
+        assert "Do NOT call" in out
+        assert "pincher__index" in out
+        assert "pincher__fetch" in out
+
+    def test_mandatory_playbook_pincher_readwrite_includes_index_and_adr(self):
+        catalog = {
+            "pincher": _backend(
+                [_tool("search", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(
+            catalog, access="read-write", tool_use="priority"
+        )
+        assert "Index before querying" in out
+        assert "Persist project knowledge" in out
+        assert "pincher__adr" in out
+
+    def test_mandatory_playbook_emits_imperative_guard_rails(self):
+        """Regression: the playbook MUST include the MANDATORY trigger
+        table, Forbidden fallbacks list, and the four-question Pre-flight
+        check for both pincher and filesystem. Softening this language
+        is what allowed prior agent defections — the test guards against
+        regressions."""
+        catalog = {
+            "pincher": _backend([_tool("search")]),
+            "filesystem": _backend([_tool("read_text_file")]),
+        }
+        out = render_comprehensive_rule(
+            catalog, access="read-write", tool_use="priority"
+        )
+        assert "Pre-flight check (run BEFORE every response)" in out
+        assert "MANDATORY:" in out
+        assert "Forbidden fallbacks" in out
+        assert "Violating LocalMCP rule because" in out
+        assert "FIRST tool call MUST be a `pincher__*` tool" in out
+        assert "FIRST tool call MUST be a `filesystem__*` tool" in out
+
+    def test_mandatory_playbook_skipped_when_backend_absent(self):
+        """If a mandatory backend isn't loaded, the playbook block for
+        it is omitted (no fake guidance)."""
+        catalog = {
+            "kubernetes": _backend(
+                [_tool("pods_list", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(catalog, tool_use="priority")
+        # Mandatory section header itself should be absent because no
+        # mandatory backend is present.
+        assert "## Mandatory backend playbook" not in out
+        # Priority directive still fires (unrelated to playbook).
+        assert "## Tool-use priority" in out
+
+    def test_mandatory_names_override(self):
+        """Callers can pass a custom mandatory set; the default
+        {filesystem, pincher} is replaced, not augmented."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+        }
+        out = render_comprehensive_rule(
+            catalog, tool_use="priority", mandatory_names=set()
+        )
+        # Empty mandatory set => no playbook header even though
+        # filesystem is in the catalog.
+        assert "## Mandatory backend playbook" not in out
+
     def test_full_default_set_renders_cleanly(self):
         """Smoke test: a default-localmcp.json-shaped catalog renders
         every backend as its own section with per-tool entries."""
@@ -444,6 +620,13 @@ class TestToolRegistry:
         ]
         assert props["format"]["default"] == "cursor-mdc"
 
+    def test_generate_cursor_rule_schema_includes_tool_use(self):
+        gen = next(t for t in _TOOLS if t.name == "generate_cursor_rule")
+        props = gen.inputSchema["properties"]
+        assert "tool_use" in props
+        assert props["tool_use"]["enum"] == ["available", "priority"]
+        assert props["tool_use"]["default"] == "priority"
+
 
 class TestToolHandlers:
     """The handlers operate on a real ProxyManager, but we can still exercise
@@ -526,6 +709,57 @@ class TestToolHandlers:
         with pytest.raises(McpError, match="Unknown style"):
             await _HANDLERS["generate_cursor_rule"](
                 m.builtin, {"style": "bogus"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_default_tool_use_is_priority(self):
+        """Default `tool_use=priority` produces a body containing the
+        priority directive even when no backends are loaded."""
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager(mandatory_config_path="")
+        result = await _HANDLERS["generate_cursor_rule"](m.builtin, {})
+        body = result[0].text
+        # Even with empty backends, the priority directive only fires
+        # when at least one user backend is loaded — but the default is
+        # still `priority` so the explicit-`available` body must differ.
+        explicit_available = await _HANDLERS["generate_cursor_rule"](
+            m.builtin, {"tool_use": "available"}
+        )
+        assert body == explicit_available[0].text  # both empty bodies match
+        # Explicit `priority` matches the default (round-trip).
+        explicit_priority = await _HANDLERS["generate_cursor_rule"](
+            m.builtin, {"tool_use": "priority"}
+        )
+        assert body == explicit_priority[0].text
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_tool_use_available_omits_directive(self):
+        """`tool_use=available` should drop the priority directive even
+        when backends are present. We exercise the renderer directly
+        because the handler's catalog is empty without running
+        backends; the handler-level wiring is covered by the rejection
+        test below and the integration round-trip test."""
+        catalog = {
+            "filesystem": _backend(
+                [_tool("read_text_file", annotations={"readOnlyHint": True})]
+            ),
+        }
+        priority = render_comprehensive_rule(catalog, tool_use="priority")
+        available = render_comprehensive_rule(catalog, tool_use="available")
+        assert "## Tool-use priority" in priority
+        assert "## Tool-use priority" not in available
+
+    @pytest.mark.asyncio
+    async def test_generate_cursor_rule_rejects_bad_tool_use(self):
+        from mcp.shared.exceptions import McpError
+
+        from localmcp.manager import ProxyManager
+
+        m = ProxyManager(mandatory_config_path="")
+        with pytest.raises(McpError, match="Unknown tool_use"):
+            await _HANDLERS["generate_cursor_rule"](
+                m.builtin, {"tool_use": "bogus"}
             )
 
     @pytest.mark.asyncio

@@ -33,6 +33,7 @@ The most-used tool. Synthesizes an agent-instructions document from the live cat
 | `format` | `cursor-mdc` | `cursor-mdc` (YAML frontmatter for `.cursor/rules/*.mdc`) or `copilot-instructions` (no frontmatter for `.github/copilot-instructions.md`). |
 | `style` | `always-apply` | `always-apply` or `scoped`. Only meaningful for `format=cursor-mdc`. |
 | `globs` | (none) | Glob pattern when `style=scoped`. Only meaningful for `format=cursor-mdc`. |
+| `tool_use` | `priority` | `priority` (rule body adds a "prefer MCP tools over shell" directive plus a curated playbook for the mandatory backends `filesystem` and `pincher`, filtered by `access`) or `available` (neutral catalog with no prioritization directive or playbook section). |
 
 The same generator also drives `GET /api/cursor-rule` — both surfaces are guaranteed-equivalent (covered by `test_aggregate_call_tool_round_trip` in [tests/test_app_integration.py](../tests/test_app_integration.py)).
 

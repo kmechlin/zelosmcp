@@ -76,7 +76,11 @@ _TOOLS: list[Tool] = [
             "still calls them out but allows them with confirmation. "
             "`format=cursor-mdc` (default) wraps with YAML frontmatter "
             "for `.cursor/rules/*.mdc`; `format=copilot-instructions` "
-            "returns the plain body for `.github/copilot-instructions.md`."
+            "returns the plain body for `.github/copilot-instructions.md`. "
+            "`tool_use=priority` (default) adds a 'prefer MCP tools "
+            "over shell' directive plus a curated playbook for the "
+            "mandatory backends; `tool_use=available` returns a neutral "
+            "catalog with no prioritization."
         ),
         inputSchema={
             "type": "object",
@@ -125,6 +129,19 @@ _TOOLS: list[Tool] = [
                         "style is always-apply or format is "
                         "copilot-instructions."
                     ),
+                },
+                "tool_use": {
+                    "type": "string",
+                    "enum": ["available", "priority"],
+                    "description": (
+                        "priority (default): adds a 'prefer MCP tools "
+                        "over shell' directive plus a detailed playbook "
+                        "for mandatory backends (filesystem, pincher) "
+                        "filtered by access mode. available: neutral "
+                        "catalog with no prioritization directive or "
+                        "playbook section."
+                    ),
+                    "default": "priority",
                 },
             },
             "additionalProperties": False,
@@ -345,14 +362,23 @@ def _format_args(input_schema: Any) -> str:
     return "(" + ", ".join(parts) + ")"
 
 
-def _backend_intro(server_name: str, tool_count: int) -> str:
-    """One-line per-backend header used right under each section title."""
-    return (
+def _backend_intro(
+    server_name: str, tool_count: int, *, tool_use: str = "priority"
+) -> str:
+    """One-line per-backend header used right under each section title.
+
+    ``tool_use="priority"`` (default) appends the prefer-over-shell hint;
+    ``tool_use="available"`` returns a neutral catalog header with no
+    prioritization phrasing.
+    """
+    base = (
         f"`{server_name}` exposes {tool_count} "
         f"tool{'s' if tool_count != 1 else ''} via the aggregator at "
-        f"`/mcp` (namespaced `{server_name}__<tool>`). Prefer these over "
-        f"equivalent shell commands."
+        f"`/mcp` (namespaced `{server_name}__<tool>`)."
     )
+    if tool_use == "priority":
+        return base + " Prefer these over equivalent shell commands."
+    return base
 
 
 def _frontmatter(*, style: str, globs: str | None, access: str) -> str:
@@ -396,6 +422,314 @@ _DIRECTIVE_READ_WRITE = (
 )
 
 
+_DIRECTIVE_TOOL_USE_PRIORITY = (
+    "## Tool-use priority\n\n"
+    "**Always prefer the MCP tools listed below over shell commands, "
+    "subprocess invocations, or local CLIs** when an MCP tool covers "
+    "the task. They return structured data, avoid subprocess cost, and "
+    "keep paths inside the sandboxed mounts. Reach for `bash` / "
+    "`python -c` / direct file reads only when no MCP tool fits, and "
+    "say so explicitly when you do.\n"
+)
+
+
+# Self-check gate: a 4-question pre-flight every code-related response
+# must run before reaching for native ``Shell`` / ``Read`` / ``Grep``
+# tools. Sits between the soft "tool-use priority" paragraph and the
+# per-backend mandatory playbooks so it's the first thing the agent
+# encounters in the priority section.
+_SELF_CHECK_GATE = (
+    "## Pre-flight check (run BEFORE every response)\n\n"
+    "Answer these four questions before issuing any tool call. The "
+    "first matching YES dictates your FIRST tool call:\n\n"
+    "1. **Code structure / symbols / behavior?** "
+    "(\"summarize / explain / understand / find / trace / impact / "
+    "blast radius\" of repo, module, function, class) → FIRST call "
+    "MUST be `pincher__*` (see Mandatory playbook → pincher).\n"
+    "2. **Files in the workspace?** "
+    "(\"read / edit / list / search / move / create\" a file or "
+    "directory) → FIRST call MUST be `filesystem__*` (see Mandatory "
+    "playbook → filesystem).\n"
+    "3. **Containers, kubernetes pods, networks, volumes?** → use "
+    "`docker__*` / `kubernetes__*`. Do NOT shell out for `docker ps`, "
+    "`kubectl get`, etc.\n"
+    "4. **None of the above?** You may use `Shell` / `Read` / `Grep`, "
+    "but only after stating which question you answered NO to and why "
+    "no MCP tool fits.\n"
+)
+
+
+# ── Mandatory backend playbook ──────────────────────────────────────────
+#
+# When ``tool_use=priority`` and a backend listed in
+# ``configs/mandatory-localmcp.json`` is present in the catalog, the
+# generator emits a curated instruction block with the canonical
+# workflow for that backend. Content is filtered by ``access`` so a
+# read-only rule only mentions inspection tools and explicitly forbids
+# the mutating ones.
+
+_PINCHER_PLAYBOOK_RO = (
+    "### `pincher` (codebase intelligence)\n\n"
+    "**MANDATORY: For any of the following user intents, your FIRST "
+    "tool call MUST be a `pincher__*` tool — before any `Shell`, "
+    "`Read`, or `Grep`:**\n\n"
+    "| User intent (any phrasing) | Required tool |\n"
+    "|---|---|\n"
+    "| summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |\n"
+    "| summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |\n"
+    "| find a function / class / method / symbol named X | `pincher__search` |\n"
+    "| show me function X / how does X work | `pincher__context` |\n"
+    "| what calls X / what does X call / impact of changing X | `pincher__trace` |\n"
+    "| what does my git diff break / blast radius | `pincher__changes` |\n"
+    "| recall stored architectural decisions / conventions | `pincher__adr` action=`get` or `list` |\n\n"
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `pytest --collect-only`, `find`, `tree`, "
+    "`wc -l`, `ls -R`, `git ls-files`, or pipelines that count or "
+    "enumerate symbols.\n"
+    "- `Grep` to find a symbol by name (use `pincher__search`).\n"
+    "- `Read` on 3+ files in sequence to understand one function "
+    "(use `pincher__context`).\n"
+    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "because <specific reason>.\" Silent violations are not acceptable.\n\n"
+    "Pincher indexes the repo into a byte-offset symbol store, a "
+    "knowledge graph, and FTS5 full-text search — every retrieval is "
+    "structured and ~90% cheaper than reading whole files. Canonical "
+    "read-only workflow:\n\n"
+    "- **Orient first.** Call `pincher__architecture` on any "
+    "unfamiliar project to get language breakdown, entry points, "
+    "hotspot functions, and graph stats. Cheaper than reading files.\n"
+    "- **Scope to the active project.** Always pass "
+    "`project=<basename of git toplevel>` (e.g. `localmcp` for this "
+    "repo) when calling pincher tools — omitting it falls through to "
+    "an empty `default` index. If the per-repo project isn't indexed, "
+    "fall back to `project=user_data_ro` (the full-tree warm-index "
+    "covering every repo under `/user_data_ro`). Run `pincher__list` "
+    "once if you need to confirm available project names.\n"
+    "- **Find symbols by name.** Use `pincher__search` (FTS5 BM25, "
+    "supports wildcards `auth*`, phrases `\"process order\"`, "
+    "`kind=Function`/`language=Go` filters). Always start here when "
+    "you don't know the exact symbol ID.\n"
+    "- **Read source efficiently.** Prefer `pincher__context` over "
+    "`pincher__symbol` whenever you need a function plus its direct "
+    "callees in one call (~90% token savings vs reading files).\n"
+    "- **Batch lookups.** Use `pincher__symbols` (plural, max **100** "
+    "IDs per call) instead of calling `pincher__symbol` in a loop.\n"
+    "- **Impact analysis.** Use `pincher__trace` to find inbound or "
+    "outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth "
+    "3, LOW=depth 4+).\n"
+    "- **Pre-commit safety.** Run `pincher__changes` before committing "
+    "for blast-radius analysis (git diff → affected symbols → impacted "
+    "callers with risk labels).\n"
+    "- **Graph queries.** Use `pincher__query` with the Cypher subset "
+    "for relationship questions; call `pincher__schema` first to see "
+    "what node/edge kinds are indexed.\n"
+    "- **Read persistent knowledge.** `pincher__adr` action=`get`/"
+    "`list` retrieves architectural decisions, conventions, and "
+    "gotchas the team has stored across sessions.\n"
+    "- **Stable IDs.** Symbol IDs follow "
+    "`{file_path}::{qualified_name}#{kind}` "
+    "(e.g. `internal/db/db.go::db.Open#Function`).\n"
+    "- **Do NOT call** `pincher__index` / `pincher__fetch` / "
+    "`pincher__adr` with action=`set` or `delete` — they mutate state "
+    "and the rule is configured for read-only access.\n"
+)
+
+_PINCHER_PLAYBOOK_RW = (
+    "### `pincher` (codebase intelligence)\n\n"
+    "**MANDATORY: For any of the following user intents, your FIRST "
+    "tool call MUST be a `pincher__*` tool — before any `Shell`, "
+    "`Read`, or `Grep`:**\n\n"
+    "| User intent (any phrasing) | Required tool |\n"
+    "|---|---|\n"
+    "| summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |\n"
+    "| summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |\n"
+    "| find a function / class / method / symbol named X | `pincher__search` |\n"
+    "| show me function X / how does X work | `pincher__context` |\n"
+    "| what calls X / what does X call / impact of changing X | `pincher__trace` |\n"
+    "| what does my git diff break / blast radius | `pincher__changes` |\n"
+    "| store / recall architectural decisions, conventions, gotchas | `pincher__adr` |\n"
+    "| ingest external docs (URL → searchable Document) | `pincher__fetch` |\n\n"
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `pytest --collect-only`, `find`, `tree`, "
+    "`wc -l`, `ls -R`, `git ls-files`, or pipelines that count or "
+    "enumerate symbols.\n"
+    "- `Grep` to find a symbol by name (use `pincher__search`).\n"
+    "- `Read` on 3+ files in sequence to understand one function "
+    "(use `pincher__context`).\n"
+    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "because <specific reason>.\" Silent violations are not acceptable.\n\n"
+    "Pincher indexes the repo into a byte-offset symbol store, a "
+    "knowledge graph, and FTS5 full-text search — every retrieval is "
+    "structured and ~90% cheaper than reading whole files. Canonical "
+    "workflow:\n\n"
+    "- **Orient first.** Call `pincher__architecture` on any "
+    "unfamiliar project to get language breakdown, entry points, "
+    "hotspot functions, and graph stats. Cheaper than reading files.\n"
+    "- **Scope to the active project.** Always pass "
+    "`project=<basename of git toplevel>` (e.g. `localmcp` for this "
+    "repo) when calling pincher tools — omitting it falls through to "
+    "an empty `default` index. If the per-repo project isn't indexed, "
+    "fall back to `project=user_data_ro` (the full-tree warm-index "
+    "covering every repo under `/user_data_ro`). Run `pincher__list` "
+    "once if you need to confirm available project names.\n"
+    "- **Index before querying.** Run `pincher__index` once per "
+    "project before using any other tool (incremental: xxh3 hashes "
+    "skip unchanged files; pass `force=true` to re-parse everything).\n"
+    "- **Find symbols by name.** Use `pincher__search` (FTS5 BM25, "
+    "supports wildcards `auth*`, phrases `\"process order\"`, "
+    "`kind=Function`/`language=Go` filters). Always start here when "
+    "you don't know the exact symbol ID.\n"
+    "- **Read source efficiently.** Prefer `pincher__context` over "
+    "`pincher__symbol` whenever you need a function plus its direct "
+    "callees in one call (~90% token savings vs reading files).\n"
+    "- **Batch lookups.** Use `pincher__symbols` (plural, max **100** "
+    "IDs per call) instead of calling `pincher__symbol` in a loop.\n"
+    "- **Impact analysis.** Use `pincher__trace` to find inbound or "
+    "outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth "
+    "3, LOW=depth 4+).\n"
+    "- **Pre-commit safety.** Run `pincher__changes` before committing "
+    "for blast-radius analysis (git diff → affected symbols → impacted "
+    "callers with risk labels).\n"
+    "- **Graph queries.** Use `pincher__query` with the Cypher subset "
+    "for relationship questions; call `pincher__schema` first to see "
+    "what node/edge kinds are indexed.\n"
+    "- **Persist project knowledge.** `pincher__adr` action=`set`/"
+    "`get`/`list`/`delete` survives across sessions — store "
+    "architectural decisions, conventions, gotchas. Ingest external "
+    "docs with `pincher__fetch` (URL → searchable Document) and "
+    "retrieve via `pincher__search` with `kind=Document`.\n"
+    "- **Stable IDs.** Symbol IDs follow "
+    "`{file_path}::{qualified_name}#{kind}` "
+    "(e.g. `internal/db/db.go::db.Open#Function`).\n"
+)
+
+_FILESYSTEM_PLAYBOOK_RO = (
+    "### `filesystem` (sandboxed file access)\n\n"
+    "**MANDATORY: For any of the following user intents, your FIRST "
+    "tool call MUST be a `filesystem__*` tool — before any `Shell`, "
+    "`Read`, or `Grep`:**\n\n"
+    "| User intent | Required tool |\n"
+    "|---|---|\n"
+    "| read this file / show me file X | `filesystem__read_text_file` |\n"
+    "| compare / diff / summarize multiple files | `filesystem__read_multiple_files` |\n"
+    "| list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |\n"
+    "| find files matching pattern X | `filesystem__search_files` |\n"
+    "| what's the size / mtime / permissions of X | `filesystem__get_file_info` |\n\n"
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
+    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
+    "- `Read` on a path under the workspace when "
+    "`filesystem__read_text_file` would work.\n"
+    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "because <specific reason>.\"\n\n"
+    "The `filesystem` backend is a sandboxed file server: every path "
+    "must live under one of the allowed directories returned by "
+    "`filesystem__list_allowed_directories`. Read-only workflow:\n\n"
+    "- **Read text.** Use `filesystem__read_text_file` (supports "
+    "`head`/`tail` for large files); use `filesystem__read_multiple_"
+    "files` to fetch several files in one round trip when comparing "
+    "or summarizing.\n"
+    "- **Browse structure.** `filesystem__list_directory` for a flat "
+    "listing, `filesystem__directory_tree` for a recursive JSON tree, "
+    "`filesystem__list_directory_with_sizes` when size matters.\n"
+    "- **Find files.** `filesystem__search_files` accepts glob "
+    "patterns relative to a starting directory (use `**/*.ext` for "
+    "recursive matches).\n"
+    "- **Inspect metadata.** `filesystem__get_file_info` returns "
+    "size / mtime / permissions without reading content.\n"
+    "- **Do NOT call** `filesystem__write_file`, `filesystem__edit_"
+    "file`, `filesystem__move_file`, or `filesystem__create_directory` "
+    "— they mutate state and the rule is configured for read-only "
+    "access.\n"
+)
+
+_FILESYSTEM_PLAYBOOK_RW = (
+    "### `filesystem` (sandboxed file access)\n\n"
+    "**MANDATORY: For any of the following user intents, your FIRST "
+    "tool call MUST be a `filesystem__*` tool — before any `Shell`, "
+    "`Read`, or `Grep`:**\n\n"
+    "| User intent | Required tool |\n"
+    "|---|---|\n"
+    "| read this file / show me file X | `filesystem__read_text_file` |\n"
+    "| compare / diff / summarize multiple files | `filesystem__read_multiple_files` |\n"
+    "| list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |\n"
+    "| find files matching pattern X | `filesystem__search_files` |\n"
+    "| edit / patch file X | `filesystem__edit_file` (preferred) or `filesystem__write_file` |\n"
+    "| create / move / rename file or directory | `filesystem__create_directory` / `filesystem__move_file` |\n"
+    "| what's the size / mtime / permissions of X | `filesystem__get_file_info` |\n\n"
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
+    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
+    "- `Read` on a path under the workspace when "
+    "`filesystem__read_text_file` would work.\n"
+    "- `sed`, `awk`, or `echo > file` for edits — use "
+    "`filesystem__edit_file`.\n"
+    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "because <specific reason>.\"\n\n"
+    "The `filesystem` backend is a sandboxed file server: every path "
+    "must live under one of the allowed directories returned by "
+    "`filesystem__list_allowed_directories`. Workflow:\n\n"
+    "- **Read text.** Use `filesystem__read_text_file` (supports "
+    "`head`/`tail` for large files); use `filesystem__read_multiple_"
+    "files` to fetch several files in one round trip when comparing "
+    "or summarizing.\n"
+    "- **Browse structure.** `filesystem__list_directory` for a flat "
+    "listing, `filesystem__directory_tree` for a recursive JSON tree, "
+    "`filesystem__list_directory_with_sizes` when size matters.\n"
+    "- **Find files.** `filesystem__search_files` accepts glob "
+    "patterns relative to a starting directory (use `**/*.ext` for "
+    "recursive matches).\n"
+    "- **Edit precisely.** Prefer `filesystem__edit_file` (line-based "
+    "edits, returns a git-style diff) over `filesystem__write_file` "
+    "(full overwrite) whenever you can — `write_file` is destructive "
+    "and silently replaces existing content.\n"
+    "- **Create / move.** `filesystem__create_directory` is "
+    "idempotent (safe to call on existing dirs); `filesystem__move_"
+    "file` fails if the destination exists, so it's safe for renames "
+    "and reorganizations.\n"
+    "- **Inspect metadata.** `filesystem__get_file_info` returns "
+    "size / mtime / permissions without reading content.\n"
+)
+
+_DEFAULT_MANDATORY_NAMES: frozenset[str] = frozenset({"filesystem", "pincher"})
+
+
+def _render_mandatory_playbook(
+    catalog: dict[str, dict[str, Any]],
+    mandatory_names: set[str] | frozenset[str],
+    *,
+    access: str,
+) -> str:
+    """Build the ``## Mandatory backend playbook`` section.
+
+    Only emits blocks for mandatory backends that are actually present
+    in ``catalog`` (so a rule generated when pincher is down doesn't
+    pretend it's available). Returns an empty string when no mandatory
+    backend is loaded — callers should skip the section header entirely
+    in that case.
+    """
+    blocks: list[str] = []
+    if "filesystem" in mandatory_names and "filesystem" in catalog:
+        blocks.append(
+            _FILESYSTEM_PLAYBOOK_RO if access == "read-only"
+            else _FILESYSTEM_PLAYBOOK_RW
+        )
+    if "pincher" in mandatory_names and "pincher" in catalog:
+        blocks.append(
+            _PINCHER_PLAYBOOK_RO if access == "read-only"
+            else _PINCHER_PLAYBOOK_RW
+        )
+    if not blocks:
+        return ""
+    header = (
+        "## Mandatory backend playbook\n\n"
+        "These backends ship by default with LocalMCP and have a "
+        "canonical workflow. Follow the guidance below before falling "
+        "back to generic catalog usage.\n\n"
+    )
+    return header + "\n".join(blocks)
+
+
 def render_comprehensive_rule(
     catalog: dict[str, dict[str, Any]],
     *,
@@ -403,6 +737,8 @@ def render_comprehensive_rule(
     style: str = "always-apply",
     globs: str | None = None,
     fmt: str = "cursor-mdc",
+    tool_use: str = "priority",
+    mandatory_names: set[str] | frozenset[str] | None = None,
 ) -> str:
     """Render a comprehensive agent-instructions document from the output
     of :func:`collect_backend_full_catalog`. Lists every tool from every
@@ -421,11 +757,30 @@ def render_comprehensive_rule(
         ``globs`` are ignored in this format because Copilot uses a
         different scoping mechanism (``.github/instructions/*.instructions.md``
         with an ``applyTo:`` frontmatter — out of scope here).
+
+    ``tool_use`` controls prioritization phrasing:
+      - ``"priority"`` (default): emits a "prefer MCP tools over shell"
+        directive plus a curated playbook for any mandatory backend
+        present in the catalog.
+      - ``"available"``: pure neutral catalog with no prioritization
+        directive or playbook section.
+
+    ``mandatory_names`` is the set of backends that get the curated
+    playbook block when ``tool_use=priority``. Defaults to the
+    canonical set ``{"filesystem", "pincher"}`` when ``None``.
     """
     if access not in ("read-only", "read-write"):
         raise ValueError(f"Unknown access mode: {access!r}")
     if fmt not in ("cursor-mdc", "copilot-instructions"):
         raise ValueError(f"Unknown format: {fmt!r}")
+    if tool_use not in ("available", "priority"):
+        raise ValueError(f"Unknown tool_use mode: {tool_use!r}")
+
+    effective_mandatory: set[str] | frozenset[str]
+    if mandatory_names is None:
+        effective_mandatory = _DEFAULT_MANDATORY_NAMES
+    else:
+        effective_mandatory = mandatory_names
 
     if fmt == "copilot-instructions":
         # Copilot consumes plain markdown — no YAML frontmatter. We keep
@@ -456,11 +811,8 @@ def render_comprehensive_rule(
         return fm + body
 
     backend_list = ", ".join(f"`{n}`" for n in user_backends)
-    lines: list[str] = [
-        "",
-        "# LocalMCP backend tool catalog",
-        "",
-        (
+    if tool_use == "priority":
+        intro_paragraph = (
             "Generated from the LocalMCP aggregator at "
             "`http://localhost:8000/mcp`. Every tool below is reachable "
             "as `<server>__<tool>` (double underscore) on that single "
@@ -468,28 +820,58 @@ def render_comprehensive_rule(
             "structured data and keep paths inside the container's "
             "`/user_data_rw` (read-write) and `/user_data_ro` "
             "(kernel-enforced read-only) mounts."
-        ),
+        )
+    else:
+        intro_paragraph = (
+            "Generated from the LocalMCP aggregator at "
+            "`http://localhost:8000/mcp`. Every tool below is reachable "
+            "as `<server>__<tool>` (double underscore) on that single "
+            "Cursor entry. Paths inside the container's `/user_data_rw` "
+            "(read-write) and `/user_data_ro` (kernel-enforced "
+            "read-only) mounts are addressable through the filesystem "
+            "backend."
+        )
+
+    lines: list[str] = [
+        "",
+        "# LocalMCP backend tool catalog",
+        "",
+        intro_paragraph,
         "",
         f"Currently-loaded backends: {backend_list}.",
         "",
         directive,
-        "## Mutability markers",
-        "",
-        "- `[readonly]` &mdash; pure inspection (server declares `readOnlyHint: true`).",
-        "- `[mutates]` &mdash; changes backend state (e.g. file edits, container start).",
-        "- `[destructive]` &mdash; irreversible mutation (e.g. delete pod, remove file).",
-        "- `[?]` &mdash; mutability not declared by the server; treat as mutating.",
-        "",
-        "## Tool naming convention",
-        "",
-        (
-            "Tool, prompt, and resource names at the aggregate `/mcp` "
-            "are `<server>__<original>` (double underscore). Don't strip "
-            "the prefix when calling — it's how the aggregator routes "
-            "the call back to the right backend."
-        ),
-        "",
     ]
+
+    if tool_use == "priority":
+        lines.append(_DIRECTIVE_TOOL_USE_PRIORITY)
+        lines.append(_SELF_CHECK_GATE)
+        playbook = _render_mandatory_playbook(
+            user_backends, effective_mandatory, access=access
+        )
+        if playbook:
+            lines.append(playbook)
+
+    lines.extend(
+        [
+            "## Mutability markers",
+            "",
+            "- `[readonly]` &mdash; pure inspection (server declares `readOnlyHint: true`).",
+            "- `[mutates]` &mdash; changes backend state (e.g. file edits, container start).",
+            "- `[destructive]` &mdash; irreversible mutation (e.g. delete pod, remove file).",
+            "- `[?]` &mdash; mutability not declared by the server; treat as mutating.",
+            "",
+            "## Tool naming convention",
+            "",
+            (
+                "Tool, prompt, and resource names at the aggregate `/mcp` "
+                "are `<server>__<original>` (double underscore). Don't strip "
+                "the prefix when calling — it's how the aggregator routes "
+                "the call back to the right backend."
+            ),
+            "",
+        ]
+    )
 
     for server_name, data in user_backends.items():
         tools = data.get("tools") or []
@@ -497,7 +879,7 @@ def render_comprehensive_rule(
             continue
         lines.append(f"## `{server_name}`")
         lines.append("")
-        lines.append(_backend_intro(server_name, len(tools)))
+        lines.append(_backend_intro(server_name, len(tools), tool_use=tool_use))
         lines.append("")
         if not tools:
             lines.append("- _(no tools advertised)_")
@@ -640,11 +1022,25 @@ async def _h_generate_cursor_rule(
         raise McpError(
             ErrorData(code=INVALID_PARAMS, message=f"Unknown style: {style!r}")
         )
+    tool_use = args.get("tool_use", "priority")
+    if tool_use not in ("available", "priority"):
+        raise McpError(
+            ErrorData(
+                code=INVALID_PARAMS, message=f"Unknown tool_use: {tool_use!r}"
+            )
+        )
     globs = args.get("globs")
     catalog = await collect_backend_full_catalog(self_.manager, skip_self=True)
+    mandatory = self_.manager.mandatory_names()
     return _text(
         render_comprehensive_rule(
-            catalog, access=access, style=style, globs=globs, fmt=fmt
+            catalog,
+            access=access,
+            style=style,
+            globs=globs,
+            fmt=fmt,
+            tool_use=tool_use,
+            mandatory_names=mandatory,
         )
     )
 

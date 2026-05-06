@@ -239,6 +239,17 @@ class ProxyManager:
         self._mandatory_cache = servers
         return servers
 
+    def mandatory_names(self) -> set[str]:
+        """Set of backend names declared in the mandatory config.
+
+        Used by the cursor-rule generator to decide which backends get
+        a curated playbook block. Returns an empty set when the
+        mandatory config is disabled, missing, or unreadable so callers
+        can treat "no mandatory backends" and "no playbook" identically.
+        """
+        servers = self._read_mandatory_servers() or {}
+        return set(servers.keys())
+
     def _resolve_mandatory_path(self) -> str | None:
         """Pick the actual mandatory-file path to read.
 

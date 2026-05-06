@@ -556,6 +556,24 @@ HTML_TEMPLATE = """\
     color: var(--mid);
   }
 
+  .log-filter {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.4;
+    outline: none;
+  }
+  .log-filter:focus {
+    border-color: var(--accent);
+  }
+
   .log-line {
     white-space: pre-wrap;
     word-break: break-all;
@@ -563,6 +581,10 @@ HTML_TEMPLATE = """\
 
   .log-line.error {
     color: var(--error);
+  }
+
+  .log-line.hidden {
+    display: none;
   }
 
   /* ── Snippet block ── */
@@ -730,6 +752,11 @@ HTML_TEMPLATE = """\
         <div class="section-label">
           <span>Cursor rule (.mdc)</span>
           <span class="rule-access-control">
+            <label for="rule-tool-use">Tool use:</label>
+            <select id="rule-tool-use" onchange="onRuleToolUseChange()">
+              <option value="priority" selected>Priority (encourage MCP tools)</option>
+              <option value="available">Available (neutral catalog)</option>
+            </select>
             <label for="rule-access">Access:</label>
             <select id="rule-access" onchange="onRuleAccessChange()">
               <option value="read-only" selected>Read-only (safe)</option>
@@ -741,6 +768,8 @@ HTML_TEMPLATE = """\
           <p class="intro" style="margin: 0 0 12px 0;">
             Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
             and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
+            <strong>Tool use</strong> &mdash; <em>Priority</em> (default) tells the agent to prefer MCP tools over shell commands and
+            includes a curated playbook for the mandatory backends; <em>Available</em> emits a neutral catalog with no prioritization.
             <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
             inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
             to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
@@ -781,6 +810,14 @@ HTML_TEMPLATE = """\
       <div class="section">
         <div class="section-label">Activity</div>
         <div class="card">
+          <input
+            type="text"
+            id="log-filter"
+            class="log-filter"
+            placeholder="Filter (substring, e.g. pincher_)"
+            autocomplete="off"
+            spellcheck="false"
+          />
           <div class="log-viewer" id="log-viewer"></div>
         </div>
       </div>
@@ -819,6 +856,33 @@ HTML_TEMPLATE = """\
   const actionBtn = document.getElementById("action-btn");
   const configInput = document.getElementById("config-input");
   const logViewer = document.getElementById("log-viewer");
+  const logFilter = document.getElementById("log-filter");
+  let currentLogFilter = "";
+
+  function logLineMatchesFilter(text) {
+    if (!currentLogFilter) return true;
+    return text.toLowerCase().indexOf(currentLogFilter) !== -1;
+  }
+
+  function applyLogFilter() {
+    const lines = logViewer.querySelectorAll(".log-line");
+    let lastVisible = null;
+    lines.forEach((el) => {
+      const match = logLineMatchesFilter(el.textContent || "");
+      el.classList.toggle("hidden", !match);
+      if (match) lastVisible = el;
+    });
+    if (lastVisible) {
+      logViewer.scrollTop = logViewer.scrollHeight;
+    }
+  }
+
+  if (logFilter) {
+    logFilter.addEventListener("input", () => {
+      currentLogFilter = logFilter.value.trim().toLowerCase();
+      applyLogFilter();
+    });
+  }
   const mcpSnippet = document.getElementById("mcp-snippet");
   const mcpSnippetAggregate = document.getElementById("mcp-snippet-aggregate");
   const cursorRule = document.getElementById("cursor-rule");
@@ -1108,19 +1172,21 @@ HTML_TEMPLATE = """\
   }
 
   // Refetch the generated Cursor rule from /api/cursor-rule whenever the
-  // running-backends set OR the access-mode selector changes. Signature
-  // includes `access:` so toggling the dropdown forces a refetch.
+  // running-backends set OR the access / tool-use selectors change. The
+  // signature includes both control values so toggling either dropdown
+  // forces a refetch.
   async function refreshCursorRule(status) {
     const access = ruleAccessValue();
+    const toolUse = ruleToolUseValue();
     const sig =
-      "access:" + access + "|" +
+      "access:" + access + "|tool_use:" + toolUse + "|" +
       (status.servers || [])
         .map((s) => s.name + ":" + (s.running ? "1" : "0"))
         .join(",");
     if (sig === lastRuleSig) return;
     lastRuleSig = sig;
     try {
-      const params = new URLSearchParams({ access });
+      const params = new URLSearchParams({ access, tool_use: toolUse });
       const r = await fetch("/api/cursor-rule?" + params.toString());
       cursorRule.textContent = await r.text();
     } catch (err) {
@@ -1133,10 +1199,23 @@ HTML_TEMPLATE = """\
     return sel && sel.value === "read-write" ? "read-write" : "read-only";
   }
 
+  function ruleToolUseValue() {
+    const sel = document.getElementById("rule-tool-use");
+    return sel && sel.value === "available" ? "available" : "priority";
+  }
+
   // Triggered by the `<select id="rule-access">`. Forces a re-fetch by
   // clearing the cached signature, then runs refreshCursorRule against
   // the latest status snapshot.
   function onRuleAccessChange() {
+    lastRuleSig = null;
+    cursorRule.textContent = "Loading...";
+    refreshCursorRule(currentStatus);
+  }
+
+  // Triggered by the `<select id="rule-tool-use">`. Same shape as
+  // onRuleAccessChange — clears the cached signature and refetches.
+  function onRuleToolUseChange() {
     lastRuleSig = null;
     cursorRule.textContent = "Loading...";
     refreshCursorRule(currentStatus);
@@ -1315,13 +1394,16 @@ HTML_TEMPLATE = """\
 
   function addLog(text) {
     const line = document.createElement("div");
-    line.className = "log-line" + (text.includes("ERROR") ? " error" : "");
+    let cls = "log-line" + (text.includes("ERROR") ? " error" : "");
+    const visible = logLineMatchesFilter(text);
+    if (!visible) cls += " hidden";
+    line.className = cls;
     line.textContent = text;
     logViewer.appendChild(line);
     while (logViewer.childElementCount > LOG_VIEWER_MAX_LINES) {
       logViewer.removeChild(logViewer.firstChild);
     }
-    logViewer.scrollTop = logViewer.scrollHeight;
+    if (visible) logViewer.scrollTop = logViewer.scrollHeight;
   }
 
   async function handleAction() {

@@ -253,14 +253,17 @@ class ProxyState:
             r = await session.list_tools()
             backend_tools = list(r.tools or [])
             if compress is None:
+                self._emit_log(f"list_tools -> {len(backend_tools)} tools")
                 return backend_tools
             # scope=global: refresh the catalog cache and substitute the
             # wrapper tools. Empty prefix because /<name>/mcp consumers
             # already know the backend by URL.
             self._compressed_catalog = {t.name: t for t in backend_tools}
-            return compressed_tool_list(
+            wrapped = compressed_tool_list(
                 prefix="", tools=backend_tools, level=compress.level
             )
+            self._emit_log(f"list_tools -> {len(wrapped)} tools (compressed)")
+            return wrapped
 
         @server.call_tool(validate_input=False)
         async def call_tool(name: str, arguments: dict[str, Any]):
@@ -294,11 +297,15 @@ class ProxyState:
         @server.list_resources()
         async def list_resources() -> list:
             r = await session.list_resources()
+            self._emit_log(f"list_resources -> {len(r.resources)} resources")
             return r.resources
 
         @server.list_resource_templates()
         async def list_resource_templates() -> list:
             r = await session.list_resource_templates()
+            self._emit_log(
+                f"list_resource_templates -> {len(r.resourceTemplates)} templates"
+            )
             return r.resourceTemplates
 
         @server.read_resource()
@@ -310,6 +317,7 @@ class ProxyState:
         @server.list_prompts()
         async def list_prompts() -> list:
             r = await session.list_prompts()
+            self._emit_log(f"list_prompts -> {len(r.prompts)} prompts")
             return r.prompts
 
         @server.get_prompt()
