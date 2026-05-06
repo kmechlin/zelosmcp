@@ -469,6 +469,58 @@ class TestLogsEndpoint:
         assert "integration-test-msg" in msg
         manager.unsubscribe_logs(q)
 
+    @pytest.mark.asyncio
+    async def test_logs_history_buffer_records_broadcasts(self):
+        _, manager = _fresh()
+        manager._broadcast("first-line")
+        manager._broadcast("second-line")
+        snapshot, q = manager.subscribe_logs_with_history()
+        try:
+            assert snapshot == ["first-line", "second-line"]
+            # New broadcasts after subscription land on the queue, NOT
+            # the snapshot, so a client draining snapshot-then-queue
+            # sees the full ordered sequence with no dups.
+            manager._broadcast("third-line")
+            assert q.get_nowait() == "third-line"
+            assert q.empty()
+        finally:
+            manager.unsubscribe_logs(q)
+
+    @pytest.mark.asyncio
+    async def test_logs_history_is_capped(self):
+        _, manager = _fresh()
+        cap = manager._log_history.maxlen
+        assert cap is not None
+        for i in range(cap + 50):
+            manager._broadcast(f"line-{i}")
+        snapshot, q = manager.subscribe_logs_with_history()
+        try:
+            assert len(snapshot) == cap
+            assert snapshot[0] == f"line-{50}"
+            assert snapshot[-1] == f"line-{cap + 50 - 1}"
+        finally:
+            manager.unsubscribe_logs(q)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_with_history_after_subscribe_does_not_dup(self):
+        # Subscribers that joined BEFORE a broadcast already saw the
+        # line in their queue; a later subscribe_logs_with_history call
+        # must replay history but the original subscriber must NOT see
+        # the same line a second time.
+        _, manager = _fresh()
+        existing_q = manager.subscribe_logs()
+        manager._broadcast("only-line")
+        assert existing_q.get_nowait() == "only-line"
+
+        snapshot, new_q = manager.subscribe_logs_with_history()
+        try:
+            assert snapshot == ["only-line"]
+            assert existing_q.empty()
+            assert new_q.empty()
+        finally:
+            manager.unsubscribe_logs(existing_q)
+            manager.unsubscribe_logs(new_q)
+
 
 # ── Full lifecycle ──────────────────────────────────────────────────────
 

@@ -9,7 +9,8 @@
 #
 # Build:    docker build -t localmcp .
 # Run:      docker run --rm -p 8000:8000 localmcp
-# Mount fs: docker run --rm -p 8000:8000 -v "$PWD:/workspace" localmcp
+# Mount fs: docker run --rm -p 8000:8000 \
+#               -v "$HOME:/user_data_rw" -v "$HOME:/user_data_ro:ro" localmcp
 
 # ── Stage 1: build the pincherMCP Go binary ───────────────────────────
 # pincherMCP — codebase intelligence MCP server. Single Go binary spoken

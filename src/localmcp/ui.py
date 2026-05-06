@@ -34,18 +34,128 @@ HTML_TEMPLATE = """\
     -webkit-font-smoothing: antialiased;
   }
 
-  .container {
-    max-width: 720px;
+  /* ── App shell (three-column landscape grid) ──
+     Designed for wide displays. Uses the full viewport up to 2000px so
+     the activity log and pincher dashboard get the room they need. The
+     right column is sized to fit a fully-formed MCP URL on one line
+     (`http://localhost:8000/<name>/mcp`) plus pills + a STOP button. */
+  .app-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 2000px;
     margin: 0 auto;
-    padding: 48px 24px;
+    padding: 24px 32px 0;
   }
 
-  /* ── Header ── */
+  .app-shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr) 480px;
+    gap: 32px;
+    max-width: 2000px;
+    margin: 0 auto;
+    padding: 24px 32px 32px;
+    align-items: start;
+  }
+
+  .left-col, .mid-col, .right-col { min-width: 0; }
+
+  .right-col {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ── Left nav ── */
+  .nav-group { margin-bottom: 24px; }
+
+  .nav-group-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 8px;
+  }
+
+  .nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--black);
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+  }
+  .nav-item:hover { background: var(--surface); }
+  .nav-item.active {
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+  }
+
+  /* ── Views (only one visible at a time) ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── Pincher dashboard iframe ── */
+  .dashboard-frame {
+    display: block;
+    width: 100%;
+    height: calc(100vh - 200px);
+    min-height: 480px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--white);
+  }
+  .dashboard-empty {
+    color: var(--mid);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .dashboard-empty code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--white);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .dashboard-meta {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mid);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* Below ~1240px the 220 + 480 columns leave the middle column too
+     narrow (the activity log starts wrapping awkwardly). Collapse to a
+     single column with the system actions floated up below the nav. */
+  @media (max-width: 1240px) {
+    .app-shell { grid-template-columns: 1fr; gap: 24px; padding: 24px; }
+    .app-topbar { padding: 24px 24px 0; }
+    .left-col { order: 1; }
+    .right-col { order: 2; position: static; top: auto; }
+    .mid-col { order: 3; }
+  }
+
+  /* ── Top bar ── */
   .header {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 24px;
+    flex: 1;
   }
 
   .wordmark {
@@ -254,6 +364,7 @@ HTML_TEMPLATE = """\
     font-size: 11px;
     width: auto;
     border-radius: 999px;
+    flex-shrink: 0;
   }
 
   /* ── Server list ── */
@@ -273,7 +384,8 @@ HTML_TEMPLATE = """\
   .server-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
     background: var(--white);
     border-radius: 12px;
     padding: 12px 16px;
@@ -281,7 +393,10 @@ HTML_TEMPLATE = """\
     cursor: pointer;
     transition: background 0.1s ease;
     user-select: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
+  .server-row > * { min-width: 0; }
   .server-row:hover {
     background: var(--surface);
   }
@@ -293,13 +408,24 @@ HTML_TEMPLATE = """\
     color: var(--black);
   }
 
-  .server-meta {
+  .server-row .grow { flex: 1; min-width: 0; }
+
+  /* Specificity override: the meta also carries the `.grow` class
+     (legacy from the old single-row layout), and `.server-row .grow`
+     would otherwise collapse it to `flex: 1 1 0%` and force a
+     character-per-line break-all when it lands on its own wrap line.
+     We pin it to a full-width line of its own with a real basis. */
+  .server-row .server-meta {
+    flex: 0 0 100%;
+    min-width: 0;
+    width: 100%;
+    margin-left: 24px;
+    font-family: var(--mono);
     font-size: 12px;
     color: var(--mid);
-    font-family: var(--mono);
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
-
-  .server-row .grow { flex: 1; }
 
   /* Caret indicating click-to-expand. Rotates 90deg when the row is open. */
   .caret {
@@ -401,6 +527,8 @@ HTML_TEMPLATE = """\
     padding: 3px 8px;
     border-radius: 999px;
     line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .pill.transport { background: var(--surface); color: var(--mid); }
@@ -414,7 +542,8 @@ HTML_TEMPLATE = """\
     background: var(--white);
     border-radius: 12px;
     padding: 16px;
-    max-height: 320px;
+    height: calc(100vh - 240px);
+    min-height: 480px;
     overflow-y: auto;
     font-family: var(--mono);
     font-size: 13px;
@@ -423,7 +552,7 @@ HTML_TEMPLATE = """\
   }
 
   .log-viewer:empty::before {
-    content: "Logs will appear here...";
+    content: "Waiting for events...";
     color: var(--mid);
   }
 
@@ -488,27 +617,53 @@ HTML_TEMPLATE = """\
 </style>
 </head>
 <body>
-<div class="container">
 
-  <!-- Header -->
+<!-- Top bar -->
+<div class="app-topbar">
   <div class="header">
     <span class="wordmark">LOCALMCP</span>
-    <span class="badge stopped" id="badge">STOPPED</span>
     <span class="header-spacer"></span>
     <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
+</div>
 
-  <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough), and the aggregate endpoint at <code>localhost:8000/mcp</code> exposes every running server's tools, prompts, and resources under the <code>&lt;server&gt;__&lt;name&gt;</code> namespace (resource URIs keep their original form). The aggregate is the recommended way to wire Cursor &mdash; one entry, every backend.</p>
+<div class="app-shell">
 
-  <!-- Config -->
-  <div class="section">
-    <div class="section-label">Configuration</div>
-    <div class="card">
-      <textarea
-        class="config-textarea"
-        id="config-input"
-        spellcheck="false"
-      >{
+  <!-- Left nav -->
+  <aside class="left-col">
+    <div class="nav-group">
+      <div class="nav-group-label">Configuration</div>
+      <button type="button" class="nav-item active" data-view="configuration">Servers config</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Rules generation</div>
+      <button type="button" class="nav-item" data-view="rules">Cursor rule (.mdc)</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Dashboards</div>
+      <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Event logging</div>
+      <button type="button" class="nav-item" data-view="logs">Activity</button>
+    </div>
+  </aside>
+
+  <!-- Middle content (only one .view is .active at a time) -->
+  <main class="mid-col">
+
+    <!-- Configuration view -->
+    <section class="view active" data-view="configuration">
+      <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough), and the aggregate endpoint at <code>localhost:8000/mcp</code> exposes every running server's tools, prompts, and resources under the <code>&lt;server&gt;__&lt;name&gt;</code> namespace (resource URIs keep their original form). The aggregate is the recommended way to wire Cursor &mdash; one entry, every backend.</p>
+
+      <div class="section">
+        <div class="section-label">Configuration</div>
+        <div class="card">
+          <textarea
+            class="config-textarea"
+            id="config-input"
+            spellcheck="false"
+          >{
   "mcpServers": {
     "pincher": {
       "command": "pincher",
@@ -516,44 +671,24 @@ HTML_TEMPLATE = """\
     }
   }
 }</textarea>
+        </div>
+      </div>
 
-      <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
-        START
-      </button>
-    </div>
-  </div>
-
-  <!-- Running servers -->
-  <div class="section hidden" id="servers-section">
-    <div class="servers-header">
-      <div class="section-label" style="margin: 0;">Servers</div>
-      <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        Click any row to inspect that backend's tools, prompts, and resources inline. The
-        <a href="/catalog" target="_blank" rel="noopener">full catalog</a> opens a searchable, print-friendly documentation page.
-      </p>
-      <div class="server-list" id="server-list"></div>
-    </div>
-  </div>
-
-  <!-- Cursor mcp.json — aggregated (recommended) -->
-  <div class="section">
-    <div class="section-label">
-      <span>Cursor mcp.json (aggregated)</span>
-      <span class="recommended-pill">Recommended</span>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        One Cursor entry, every running backend's tools and prompts. Names are
-        namespaced as <code>&lt;server&gt;__&lt;tool&gt;</code> so they don't collide.
-        Use this unless you have a specific reason to talk to a single backend
-        directly.
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
-        <pre id="mcp-snippet-aggregate">{
+      <div class="section">
+        <div class="section-label">
+          <span>Cursor mcp.json (aggregated)</span>
+          <span class="recommended-pill">Recommended</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One Cursor entry, every running backend's tools and prompts. Names are
+            namespaced as <code>&lt;server&gt;__&lt;tool&gt;</code> so they don't collide.
+            Use this unless you have a specific reason to talk to a single backend
+            directly.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
+            <pre id="mcp-snippet-aggregate">{
   "mcpServers": {
     "localmcp-aggregate": {
       "type": "streamable-http",
@@ -561,23 +696,22 @@ HTML_TEMPLATE = """\
     }
   }
 }</pre>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- Cursor mcp.json — full (per-backend passthrough + aggregate) -->
-  <div class="section">
-    <div class="section-label">Cursor full mcp.json</div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        One entry per running backend at <code>/&lt;name&gt;/mcp</code> (raw
-        passthrough, original tool names) plus the aggregate. Use when you need
-        a backend's tools to keep their unprefixed names, or to wire a single
-        backend into a separate Cursor profile.
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
-        <pre id="mcp-snippet">{
+      <div class="section">
+        <div class="section-label">Cursor full mcp.json</div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One entry per running backend at <code>/&lt;name&gt;/mcp</code> (raw
+            passthrough, original tool names) plus the aggregate. Use when you need
+            a backend's tools to keep their unprefixed names, or to wire a single
+            backend into a separate Cursor profile.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
+            <pre id="mcp-snippet">{
   "mcpServers": {
     "localmcp-aggregate": {
       "type": "streamable-http",
@@ -585,45 +719,98 @@ HTML_TEMPLATE = """\
     }
   }
 }</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Rules generation view -->
+    <section class="view" data-view="rules">
+      <div class="section">
+        <div class="section-label">
+          <span>Cursor rule (.mdc)</span>
+          <span class="rule-access-control">
+            <label for="rule-access">Access:</label>
+            <select id="rule-access" onchange="onRuleAccessChange()">
+              <option value="read-only" selected>Read-only (safe)</option>
+              <option value="read-write">Read-write (allows mutation)</option>
+            </select>
+          </span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
+            and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
+            <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
+            inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
+            to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
+            workspace (or <code>~/.cursor/rules/</code> for global).
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
+            <pre id="cursor-rule">Loading...</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pincher dashboard view -->
+    <section class="view" data-view="pincher-dashboard">
+      <div class="section">
+        <div class="section-label">
+          <span>Pincher dashboard</span>
+          <span class="dashboard-meta" id="pincher-dashboard-meta">&mdash;</span>
+        </div>
+        <div class="card dashboard-empty hidden" id="pincher-dashboard-empty">
+          Pincher isn't running. Start the <code>pincher</code> backend from the
+          Servers panel on the right to load its dashboard. The dashboard URL is
+          read from the live <code>reverseProxy.mount</code> (defaults to
+          <code>/pincher/v1/dashboard</code>).
+        </div>
+        <iframe
+          id="pincher-dashboard-frame"
+          class="dashboard-frame hidden"
+          title="Pincher dashboard"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </div>
+    </section>
+
+    <!-- Event logging view -->
+    <section class="view" data-view="logs">
+      <div class="section">
+        <div class="section-label">Activity</div>
+        <div class="card">
+          <div class="log-viewer" id="log-viewer"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Right column: status badge, global action, servers list -->
+  <aside class="right-col">
+    <div class="card" style="display: flex; align-items: center; gap: 12px; padding: 16px;">
+      <span class="badge stopped" id="badge">STOPPED</span>
+      <span style="flex: 1;"></span>
+    </div>
+    <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
+      START
+    </button>
+
+    <div class="section" id="servers-section" style="margin: 0;">
+      <div class="servers-header">
+        <div class="section-label" style="margin: 0;">Servers</div>
+        <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
+      </div>
+      <div class="card">
+        <p class="intro" style="margin: 0 0 12px 0; font-size: 13px;">
+          Click any row to inspect that backend's tools, prompts, and resources inline.
+        </p>
+        <div class="server-list" id="server-list"></div>
       </div>
     </div>
-  </div>
-
-  <!-- Cursor rule -->
-  <div class="section">
-    <div class="section-label">
-      <span>Cursor rule (.mdc)</span>
-      <span class="rule-access-control">
-        <label for="rule-access">Access:</label>
-        <select id="rule-access" onchange="onRuleAccessChange()">
-          <option value="read-only" selected>Read-only (safe)</option>
-          <option value="read-write">Read-write (allows mutation)</option>
-        </select>
-      </span>
-    </div>
-    <div class="card">
-      <p class="intro" style="margin: 0 0 12px 0;">
-        Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
-        and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
-        <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
-        inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
-        to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
-        workspace (or <code>~/.cursor/rules/</code> for global).
-      </p>
-      <div class="snippet">
-        <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
-        <pre id="cursor-rule">Loading...</pre>
-      </div>
-    </div>
-  </div>
-
-  <!-- Logs -->
-  <div class="section">
-    <div class="section-label">Activity</div>
-    <div class="card">
-      <div class="log-viewer" id="log-viewer"></div>
-    </div>
-  </div>
+  </aside>
 
 </div>
 
@@ -724,13 +911,21 @@ HTML_TEMPLATE = """\
 
   function renderServers(status) {
     const servers = status.servers || [];
-    if (servers.length === 0) {
-      serversSection.classList.add("hidden");
-      serverList.innerHTML = "";
-      return;
-    }
+    // The servers card lives in the right column now, so don't hide it
+    // when there are no backends — show a placeholder instead so the
+    // column doesn't collapse into an empty stub.
     serversSection.classList.remove("hidden");
     serverList.innerHTML = "";
+    if (servers.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.style.color = "var(--mid)";
+      empty.style.fontSize = "13px";
+      empty.style.fontStyle = "italic";
+      empty.textContent = "No servers running. Apply a config from the Configuration view to start backends.";
+      serverList.appendChild(empty);
+      return;
+    }
     for (const s of servers) {
       const entry = document.createElement("div");
       entry.className = "server-entry";
@@ -861,6 +1056,7 @@ HTML_TEMPLATE = """\
       refreshCursorRule(data);
       refreshCatalog(data);
       syncConfigInput(data);
+      refreshPincherDashboard(false);
       updateUI();
     } catch (err) {
       addLog("ERROR: " + err.message);
@@ -1111,11 +1307,20 @@ HTML_TEMPLATE = """\
     actionBtn.disabled = false;
   }
 
+  // Cap DOM growth on very long sessions. Server-side history is also
+  // capped (manager._log_history maxlen=2000), so the viewer can hold
+  // both the replayed history and ~3000 lines of live tail before the
+  // oldest entries fall off.
+  const LOG_VIEWER_MAX_LINES = 5000;
+
   function addLog(text) {
     const line = document.createElement("div");
     line.className = "log-line" + (text.includes("ERROR") ? " error" : "");
     line.textContent = text;
     logViewer.appendChild(line);
+    while (logViewer.childElementCount > LOG_VIEWER_MAX_LINES) {
+      logViewer.removeChild(logViewer.firstChild);
+    }
     logViewer.scrollTop = logViewer.scrollHeight;
   }
 
@@ -1193,6 +1398,59 @@ HTML_TEMPLATE = """\
   // SSE log stream
   const events = new EventSource("/api/logs");
   events.onmessage = (e) => addLog(e.data);
+
+  // ── Left-nav view switcher ──────────────────────────────────────────
+  // Toggle .active between .nav-item[data-view] and .view[data-view].
+  // Forces a pincher-dashboard reload when the user navigates to it
+  // (so a stale iframe from a previous session gets a fresh hit).
+  function setView(name) {
+    document.querySelectorAll(".nav-item").forEach((b) =>
+      b.classList.toggle("active", b.dataset.view === name));
+    document.querySelectorAll(".view").forEach((v) =>
+      v.classList.toggle("active", v.dataset.view === name));
+    if (name === "pincher-dashboard") refreshPincherDashboard(true);
+  }
+  document.querySelectorAll(".nav-item").forEach((b) =>
+    b.addEventListener("click", () => setView(b.dataset.view)));
+
+  // ── Pincher dashboard iframe ────────────────────────────────────────
+  // The dashboard is served by pincher itself on a loopback HTTP sidecar
+  // and reverse-proxied by LocalMCP under reverseProxy.mount (defaults
+  // to /pincher per configs/mandatory-localmcp.json). Read the live
+  // mount from /api/status so renaming the backend or moving the mount
+  // is handled transparently.
+  function pincherDashboardUrl(status) {
+    for (const s of (status && status.servers) || []) {
+      if (s.name !== "pincher" || !s.running || s.error) continue;
+      const m = s.spec && s.spec.reverseProxy && s.spec.reverseProxy.mount;
+      if (m) return m + "/v1/dashboard";
+    }
+    return null;
+  }
+
+  let lastDashboardUrl = null;
+  function refreshPincherDashboard(force) {
+    const frame = document.getElementById("pincher-dashboard-frame");
+    const empty = document.getElementById("pincher-dashboard-empty");
+    const meta = document.getElementById("pincher-dashboard-meta");
+    if (!frame || !empty || !meta) return;
+    const url = pincherDashboardUrl(currentStatus);
+    if (!url) {
+      frame.classList.add("hidden");
+      frame.removeAttribute("src");
+      empty.classList.remove("hidden");
+      meta.textContent = "pincher offline";
+      lastDashboardUrl = null;
+      return;
+    }
+    empty.classList.add("hidden");
+    frame.classList.remove("hidden");
+    meta.textContent = url;
+    if (force || url !== lastDashboardUrl) {
+      frame.src = url;
+      lastDashboardUrl = url;
+    }
+  }
 
   // Initial status
   refreshStatus();

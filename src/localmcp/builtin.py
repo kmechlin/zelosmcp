@@ -465,8 +465,9 @@ def render_comprehensive_rule(
             "`http://localhost:8000/mcp`. Every tool below is reachable "
             "as `<server>__<tool>` (double underscore) on that single "
             "Cursor entry. Prefer these over shelling out — they return "
-            "structured data and keep paths inside the `/workspace` "
-            "container mount."
+            "structured data and keep paths inside the container's "
+            "`/user_data_rw` (read-write) and `/user_data_ro` "
+            "(kernel-enforced read-only) mounts."
         ),
         "",
         f"Currently-loaded backends: {backend_list}.",

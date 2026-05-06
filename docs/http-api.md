@@ -164,7 +164,7 @@ User backends shut down; the built-in MCP at `/localmcp/mcp` (and its tools surf
         "name": "filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/user_data_rw"]
       }
     }
   ]

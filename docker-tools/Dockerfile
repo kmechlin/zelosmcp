@@ -86,6 +86,15 @@ FROM extra-os AS localmcp
 
   RUN pip install --no-cache-dir -e /opt/localmcp
 
-  WORKDIR /opt/localmcp
+  # Runtime CWD is deliberately an empty directory rather than
+  # /opt/localmcp. Pincher (spawned as a stdio child of localmcp)
+  # inherits this CWD, and the kmechlin pincher fork auto-indexes
+  # whatever it finds there — so leaving WORKDIR on /opt/localmcp
+  # produced a phantom "/opt/localmcp" project on the dashboard
+  # alongside the legit /user_data_ro/workspace/<repo> one. An empty
+  # CWD has nothing to index. The localmcp package was installed
+  # editable above and is importable from any working directory.
+  RUN mkdir -p /var/lib/default
+  WORKDIR /var/lib/default
   EXPOSE 8000
   CMD ["sh", "-c", "uvicorn localmcp.app:app --host 0.0.0.0 --port 8000"]

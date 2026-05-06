@@ -8,6 +8,7 @@ subscriptions across all servers.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -70,6 +71,12 @@ class ProxyManager:
         self._specs: dict[str, ServerSpec] = {}
         self._primary: str | None = None
         self._log_subscribers: list[asyncio.Queue[str]] = []
+        # Ring buffer of every line ever broadcast, capped to keep memory
+        # bounded. New SSE subscribers replay this snapshot before
+        # entering live-tail so the activity panel reflects the full
+        # session history (including startup banners that fired before
+        # the browser connected).
+        self._log_history: collections.deque[str] = collections.deque(maxlen=2000)
         self._log_pumps: dict[str, asyncio.Task] = {}
         self.aggregator = Aggregator(self)
         # The BuiltinServer is ProxyState-shaped and pre-seeded so the
@@ -598,6 +605,25 @@ class ProxyManager:
         self._log_subscribers.append(q)
         return q
 
+    def subscribe_logs_with_history(
+        self,
+    ) -> tuple[list[str], asyncio.Queue[str]]:
+        """Snapshot the buffered history and atomically register a new
+        subscriber queue.
+
+        Both operations are synchronous, so they run without any
+        ``await`` interleaving with ``_broadcast`` (the only writer of
+        history and queues). That means new lines emitted after this
+        call go to the queue, lines emitted before went to the
+        snapshot, and there is no window for duplicates or drops.
+        Callers should drain the snapshot first, then pull from the
+        queue.
+        """
+        snapshot = list(self._log_history)
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=512)
+        self._log_subscribers.append(q)
+        return snapshot, q
+
     def unsubscribe_logs(self, q: asyncio.Queue[str]) -> None:
         try:
             self._log_subscribers.remove(q)
@@ -605,6 +631,7 @@ class ProxyManager:
             pass
 
     def _broadcast(self, line: str) -> None:
+        self._log_history.append(line)
         for q in list(self._log_subscribers):
             try:
                 q.put_nowait(line)

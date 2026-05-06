@@ -445,10 +445,15 @@ def create_app(manager: ProxyManager | None = None):
             content:
               text/event-stream: {}
         """
-        q = manager.subscribe_logs()
+        snapshot, q = manager.subscribe_logs_with_history()
 
         async def event_stream():
             try:
+                # Replay the buffered history first so the client sees
+                # the full session timeline (including startup banners
+                # that fired before this SSE subscriber connected).
+                for line in snapshot:
+                    yield f"data: {line}\n\n"
                 while True:
                     msg = await q.get()
                     yield f"data: {msg}\n\n"

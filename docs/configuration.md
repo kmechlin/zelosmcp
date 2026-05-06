@@ -43,9 +43,9 @@ For an MCP server you spawn as a subprocess. Discriminated by the **presence of 
 {
   "filesystem": {
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/user_data_rw"],
     "env": { "DEBUG": "true" },
-    "cwd": "/workspace"
+    "cwd": "/user_data_rw"
   }
 }
 ```
