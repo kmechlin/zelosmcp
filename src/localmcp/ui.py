@@ -724,6 +724,219 @@ HTML_TEMPLATE = """\
     border-color: var(--accent);
   }
 
+  /* ── Documentation view ── */
+  /* Two modes share the same view: index (list of cards) and content
+     (rendered HTML). Switched by toggling .hidden on each container. */
+  .docs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .docs-toolbar .btn-back {
+    width: auto;
+    padding: 8px 18px;
+    font-size: 12px;
+    border-radius: 999px;
+  }
+  .docs-toolbar .docs-current {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .docs-index {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .docs-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    cursor: pointer;
+    font-family: var(--font);
+    color: var(--black);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  }
+  .docs-card:hover {
+    border-color: var(--black);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  }
+  .docs-card:active { transform: translateY(1px); }
+  .docs-card-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--black);
+  }
+  .docs-card-slug {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--mid);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .docs-content {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--black);
+    overflow-x: auto;
+    min-height: 240px;
+  }
+  .docs-content h1, .docs-content h2, .docs-content h3,
+  .docs-content h4, .docs-content h5, .docs-content h6 {
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1.4em 0 0.5em;
+  }
+  .docs-content h1 { font-size: 26px; margin-top: 0; }
+  .docs-content h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .docs-content h3 { font-size: 17px; }
+  .docs-content h4 { font-size: 15px; color: var(--mid); text-transform: uppercase; letter-spacing: 0.05em; }
+  .docs-content p { margin: 0 0 1em; }
+  .docs-content a { color: var(--accent); text-decoration: none; }
+  .docs-content a:hover { text-decoration: underline; }
+  .docs-content ul, .docs-content ol { margin: 0 0 1em 1.4em; }
+  .docs-content li { margin-bottom: 0.25em; }
+  .docs-content code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .docs-content pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 1em;
+  }
+  .docs-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .docs-content blockquote {
+    border-left: 3px solid var(--border);
+    color: var(--mid);
+    padding-left: 14px;
+    margin: 0 0 1em;
+  }
+  .docs-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 1em;
+    font-size: 14px;
+  }
+  .docs-content th, .docs-content td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .docs-content th {
+    background: var(--surface);
+    font-weight: 700;
+  }
+  .docs-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5em 0;
+  }
+  .docs-content img { max-width: 100%; height: auto; }
+  /* Mermaid blocks: rendered SVGs from mermaid.js. The library injects
+     SVGs directly into the .mermaid container; we just give them a
+     light frame consistent with the other code blocks. */
+  .docs-content .mermaid {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin: 0 0 1em;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .docs-content .mermaid svg { max-width: 100%; height: auto; }
+  .docs-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+
+  /* Stack the docs index on narrow viewports — single column, full
+     width in the middle pane. */
+  @media (max-width: 1240px) {
+    .docs-index { grid-template-columns: 1fr; }
+  }
+
+  /* ── Server details view (catalog rendered in the center pane) ── */
+  .details-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+  .details-body .cat-group { margin-bottom: 20px; }
+  .details-body .cat-group:last-child { margin-bottom: 0; }
+  .details-body .cat-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 10px;
+  }
+  .details-body ul { list-style: none; }
+  .details-body li {
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    border-left: 2px solid var(--border);
+    padding-left: 12px;
+    margin-bottom: 8px;
+  }
+  .details-body li code { font-weight: 700; }
+  .details-body li .desc {
+    font-family: var(--font);
+    color: var(--mid);
+    font-size: 13px;
+    margin-top: 3px;
+    white-space: pre-wrap;
+  }
+  .details-body li details { margin-top: 6px; }
+  .details-body li details summary {
+    cursor: pointer;
+    color: var(--mid);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .details-body li pre {
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-top: 6px;
+    overflow-x: auto;
+  }
+  .details-body .empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 13px;
+  }
+
   /* ── Utilities ── */
   .hidden { display: none !important; }
 </style>
@@ -759,6 +972,10 @@ HTML_TEMPLATE = """\
     <div class="nav-group">
       <div class="nav-group-label">Event logging</div>
       <button type="button" class="nav-item" data-view="logs">Activity</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Help</div>
+      <button type="button" class="nav-item" data-view="docs">Documentation</button>
     </div>
   </aside>
 
@@ -999,6 +1216,39 @@ HTML_TEMPLATE = """\
       </div>
     </section>
 
+    <!-- Documentation view -->
+    <section class="view" data-view="docs">
+      <div class="section">
+        <div class="section-label">
+          <span id="docs-section-title">Documentation</span>
+          <span class="dashboard-meta" id="docs-meta">&mdash;</span>
+        </div>
+        <div class="docs-toolbar hidden" id="docs-toolbar">
+          <button type="button" class="btn btn-outline btn-back" onclick="showDocsIndex()">&larr; All docs</button>
+          <span class="docs-current" id="docs-current">&mdash;</span>
+        </div>
+        <div id="docs-index" class="docs-index">
+          <span class="docs-empty">Loading...</span>
+        </div>
+        <article class="docs-content hidden" id="docs-content"></article>
+      </div>
+    </section>
+
+    <!-- Server details view (catalog rendered in the center pane) -->
+    <section class="view" data-view="server-details">
+      <div class="section">
+        <div class="section-label">
+          <span id="server-details-title">Server details</span>
+          <span class="dashboard-meta" id="server-details-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="details-body" id="server-details-body">
+            <p class="details-empty">Click <strong>Details</strong> on any server in the right column to inspect its tools, prompts, and resources here.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- Right column: status badge, global action, servers list -->
@@ -1026,6 +1276,18 @@ HTML_TEMPLATE = """\
   </aside>
 
 </div>
+
+<!-- Mermaid: rendered for fenced ```mermaid blocks inside loaded docs.
+     Loaded from a CDN so the page stays a single self-contained file
+     (no static asset pipeline). securityLevel:'loose' lets links inside
+     diagrams render normally; we never feed agent-supplied markdown
+     through this path, only repo-controlled docs/*.md. -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  if (window.mermaid && typeof mermaid.initialize === "function") {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
+  }
+</script>
 
 <script>
   const badge = document.getElementById("badge");
@@ -1076,6 +1338,12 @@ HTML_TEMPLATE = """\
   let currentCatalog = {};
   let lastCatalogSig = null;
   let catalogInFlight = false;
+  // Center-pane "Server details" selection. Cleared on page reload.
+  let currentDetailsServer = null;
+  // Documentation view state — index fetched lazily on first activation.
+  let docsIndex = null;
+  let currentDocSlug = null;
+  let docsLoadInflight = false;
 
   // Loose client-side validation. Server is the source of truth.
   function parseConfig(raw) {
@@ -1249,6 +1517,18 @@ HTML_TEMPLATE = """\
         row.appendChild(btn);
       }
 
+      // "Details" button — opens the same catalog payload in the center
+      // pane (wider than the inline expansion below the row). Available
+      // on every server, including the always-on builtin.
+      const detailsBtn = document.createElement("button");
+      detailsBtn.className = "btn btn-mini btn-outline";
+      detailsBtn.textContent = "Details";
+      detailsBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        showServerDetails(s.name);
+      };
+      row.appendChild(detailsBtn);
+
       // Click anywhere on the row toggles the inline catalog block.
       row.onclick = () => toggleServerCatalog(s.name);
       entry.appendChild(row);
@@ -1399,7 +1679,8 @@ HTML_TEMPLATE = """\
 
   // Refetch /api/catalog whenever the running-backends set changes (same
   // signature pattern as refreshCursorRule). On success, re-render any
-  // currently-expanded inline catalog blocks.
+  // currently-expanded inline catalog blocks AND the center-pane
+  // "Server details" view if one is currently selected.
   async function refreshCatalog(status) {
     const sig = (status.servers || [])
       .map((s) => s.name + ":" + (s.running ? "1" : "0"))
@@ -1412,6 +1693,7 @@ HTML_TEMPLATE = """\
       const r = await fetch("/api/catalog");
       currentCatalog = await r.json();
       for (const name of expandedRows) renderServerCatalog(name);
+      if (currentDetailsServer) renderServerDetails(currentDetailsServer);
     } catch (err) {
       // Don't blank existing data on a transient failure; just log.
       addLog("ERROR: /api/catalog: " + err.message);
@@ -1437,14 +1719,14 @@ HTML_TEMPLATE = """\
     }
   }
 
-  // Build the inline catalog block for one backend from currentCatalog.
-  function renderServerCatalog(name) {
-    const box = document.getElementById("catalog-" + cssEscape(name));
-    if (!box) return;
+  // Shared DOM builder used by BOTH the inline catalog box and the
+  // center-pane "Server details" view. Empties `target` and refills it
+  // with one .cat-group per non-empty kind.
+  function populateCatalogInto(target, name) {
     const data = currentCatalog[name];
-    box.innerHTML = "";
+    target.innerHTML = "";
     if (!data) {
-      box.textContent = "No catalog data available.";
+      target.textContent = "No catalog data available.";
       return;
     }
     const KINDS = [
@@ -1484,14 +1766,20 @@ HTML_TEMPLATE = """\
       } else {
         continue;
       }
-      box.appendChild(group);
+      target.appendChild(group);
     }
-    if (!any && box.childElementCount === 0) {
+    if (!any && target.childElementCount === 0) {
       const p = document.createElement("p");
       p.className = "empty";
       p.textContent = "Backend advertised no tools, prompts, or resources.";
-      box.appendChild(p);
+      target.appendChild(p);
     }
+  }
+
+  function renderServerCatalog(name) {
+    const box = document.getElementById("catalog-" + cssEscape(name));
+    if (!box) return;
+    populateCatalogInto(box, name);
   }
 
   function buildCatalogItem(kind, item) {
@@ -1535,6 +1823,49 @@ HTML_TEMPLATE = """\
       }
     }
     return li;
+  }
+
+  // ── Server details (center pane) ────────────────────────────────────
+  // Per-server "Details" button switches the center pane to this view
+  // and renders the catalog payload there. Survives /api/catalog
+  // refreshes via refreshCatalog -> renderServerDetails.
+  function showServerDetails(name) {
+    currentDetailsServer = name;
+    setView("server-details");
+    renderServerDetails(name);
+  }
+
+  function renderServerDetails(name) {
+    const body = document.getElementById("server-details-body");
+    const titleEl = document.getElementById("server-details-title");
+    const meta = document.getElementById("server-details-meta");
+    if (!body) return;
+    if (titleEl) titleEl.textContent = `Server: ${name}`;
+    const status = (currentStatus.servers || []).find((s) => s.name === name);
+    if (meta) {
+      const bits = [];
+      if (status) {
+        bits.push(status.transport || "unknown");
+        if (status.error) bits.push("error");
+        else if (status.running) bits.push("running");
+        else bits.push("stopped");
+        bits.push(makeUrl(name, false));
+      } else {
+        bits.push("not registered");
+      }
+      meta.textContent = bits.join(" • ");
+    }
+    if (!currentCatalog[name]) {
+      body.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "details-empty";
+      p.textContent = status && !status.running
+        ? "This server isn't running. Start it from the right column to load its catalog."
+        : "Loading catalog...";
+      body.appendChild(p);
+      return;
+    }
+    populateCatalogInto(body, name);
   }
 
   function setLoading(state) {
@@ -1671,9 +2002,215 @@ HTML_TEMPLATE = """\
       refreshSavings();
       ensureSavingsStream();
     }
+    if (name === "docs") loadDocsIndex();
   }
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
+
+  // ── Documentation view ──────────────────────────────────────────────
+  // Two modes share the same view:
+  //   1. Index — full-width grid of {title, slug} cards in the middle pane.
+  //   2. Content — rendered HTML for one doc, with a back button.
+  // setView('docs') always lands on the index unless a doc is already
+  // selected (re-entry preserves your last-read doc).
+  async function loadDocsIndex() {
+    // Show index mode (always). Fetch the index once per session unless
+    // it errored last time.
+    showDocsIndex();
+    if (docsLoadInflight) return;
+    if (Array.isArray(docsIndex) && docsIndex.length > 0) {
+      renderDocsCards();
+      return;
+    }
+    docsLoadInflight = true;
+    const meta = document.getElementById("docs-meta");
+    if (meta) meta.textContent = "loading...";
+    try {
+      const r = await fetch("/api/docs");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      docsIndex = await r.json();
+    } catch (err) {
+      docsIndex = null;
+      if (meta) meta.textContent = "error: " + err.message;
+      const list = document.getElementById("docs-index");
+      if (list) {
+        list.innerHTML = "";
+        const p = document.createElement("span");
+        p.className = "docs-empty";
+        p.textContent = "Failed to load docs index.";
+        list.appendChild(p);
+      }
+      docsLoadInflight = false;
+      return;
+    } finally {
+      docsLoadInflight = false;
+    }
+    if (meta) meta.textContent = `${docsIndex.length} document${docsIndex.length === 1 ? "" : "s"}`;
+    renderDocsCards();
+  }
+
+  function renderDocsCards() {
+    const list = document.getElementById("docs-index");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!Array.isArray(docsIndex) || docsIndex.length === 0) {
+      const p = document.createElement("span");
+      p.className = "docs-empty";
+      p.textContent = "No documentation files found.";
+      list.appendChild(p);
+      return;
+    }
+    for (const d of docsIndex) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "docs-card";
+      card.dataset.slug = d.slug;
+      card.onclick = () => loadDoc(d.slug);
+      const title = document.createElement("div");
+      title.className = "docs-card-title";
+      title.textContent = d.title;
+      card.appendChild(title);
+      const slug = document.createElement("div");
+      slug.className = "docs-card-slug";
+      slug.textContent = `docs/${d.slug}.md`;
+      card.appendChild(slug);
+      list.appendChild(card);
+    }
+  }
+
+  function showDocsIndex() {
+    currentDocSlug = null;
+    const list = document.getElementById("docs-index");
+    const content = document.getElementById("docs-content");
+    const toolbar = document.getElementById("docs-toolbar");
+    const title = document.getElementById("docs-section-title");
+    if (list) list.classList.remove("hidden");
+    if (content) content.classList.add("hidden");
+    if (toolbar) toolbar.classList.add("hidden");
+    if (title) title.textContent = "Documentation";
+  }
+
+  async function loadDoc(slug) {
+    const list = document.getElementById("docs-index");
+    const content = document.getElementById("docs-content");
+    const toolbar = document.getElementById("docs-toolbar");
+    const title = document.getElementById("docs-section-title");
+    const current = document.getElementById("docs-current");
+    if (!content) return;
+    // Make sure we land on the docs view in case we got here via a
+    // link from another tab.
+    setView("docs");
+    currentDocSlug = slug;
+    if (list) list.classList.add("hidden");
+    if (toolbar) toolbar.classList.remove("hidden");
+    if (content) content.classList.remove("hidden");
+    if (current) current.textContent = `docs/${slug}.md`;
+    content.innerHTML = '<p class="docs-empty">Loading...</p>';
+    try {
+      const r = await fetch("/api/docs/" + encodeURIComponent(slug));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      if (title) title.textContent = data.title || "Documentation";
+      content.innerHTML = data.html || "";
+      rewriteDocLinks(content);
+      await renderMermaidIn(content);
+      content.scrollTop = 0;
+    } catch (err) {
+      content.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "docs-empty";
+      p.textContent = "Failed to load: " + err.message;
+      content.appendChild(p);
+    }
+  }
+
+  // Markdown links to other docs (e.g. `[walkthrough](docs/quickstart.md)`)
+  // resolve to absolute browser paths once rendered (`/docs/quickstart.md`)
+  // — that 404s against the Swagger /docs endpoint. Walk every <a> in
+  // the rendered body and rewrite *.md targets to call loadDoc(slug)
+  // in-place. We deliberately don't gate on `docsIndex` membership: if
+  // the slug isn't shipped, loadDoc renders a clean "Failed to load:
+  // HTTP 404" inside the docs view, which is a far better UX than
+  // silently swallowing the click. External URLs and pure in-page
+  // anchors are left alone.
+  function rewriteDocLinks(container) {
+    if (!container) return;
+    const anchors = container.querySelectorAll("a[href]");
+    for (const a of anchors) {
+      const raw = a.getAttribute("href") || "";
+      if (!raw) continue;
+      // Pure in-page anchor — let the browser handle it.
+      if (raw.startsWith("#")) continue;
+      // Absolute URLs — open externally in a new tab.
+      if (/^[a-z][a-z0-9+.\\-]*:\\/\\//i.test(raw) || raw.startsWith("//")) {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener");
+        continue;
+      }
+      // mailto:, tel:, etc. — leave alone.
+      if (/^[a-z][a-z0-9+.\\-]*:/i.test(raw)) continue;
+      // Strip optional ./ or ../ prefixes and leading docs/ so we land
+      // at "<file>.md" and can derive the slug.
+      let path = raw;
+      let hash = "";
+      const hashIdx = path.indexOf("#");
+      if (hashIdx >= 0) {
+        hash = path.slice(hashIdx);
+        path = path.slice(0, hashIdx);
+      }
+      const cleaned = path.replace(/^\\.\\.?\\//, "").replace(/^docs\\//, "");
+      const m = cleaned.match(/^([A-Za-z0-9._\\-]+)\\.md$/);
+      if (m) {
+        const slug = m[1].toLowerCase();
+        a.setAttribute("href", "#" + slug);
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          loadDoc(slug);
+          if (hash) {
+            // Defer: wait for the new doc to land before scrolling.
+            setTimeout(() => {
+              const el = document.getElementById(hash.slice(1));
+              if (el) el.scrollIntoView({ behavior: "smooth" });
+            }, 250);
+          }
+        });
+        continue;
+      }
+      // Non-.md repo path (e.g. ../configs/foo.json). Leave the href
+      // untouched — the browser will visibly 404 against this server,
+      // which is more honest than silently swallowing the click. Mark
+      // it visually so the reader knows it can't be opened in-app.
+      a.title = "Repo path: " + raw + " (open from the source repo, not the in-app docs)";
+      a.style.textDecoration = "underline dotted";
+    }
+  }
+
+  // Replace every `<pre><code class="language-mermaid">` block produced
+  // by the python-markdown fenced_code extension with a `<div class=
+  // "mermaid">` and ask mermaid.js to render it. No-op when mermaid
+  // failed to load (e.g. offline) — the raw fenced block stays visible.
+  async function renderMermaidIn(container) {
+    if (!container || !window.mermaid) return;
+    const blocks = container.querySelectorAll("pre > code.language-mermaid");
+    if (blocks.length === 0) return;
+    const created = [];
+    for (const code of blocks) {
+      const pre = code.parentElement;
+      if (!pre || !pre.parentElement) continue;
+      const div = document.createElement("div");
+      div.className = "mermaid";
+      // textContent decodes the &gt;/&lt; the markdown renderer emitted.
+      div.textContent = code.textContent;
+      pre.parentElement.replaceChild(div, pre);
+      created.push(div);
+    }
+    if (created.length === 0) return;
+    try {
+      await mermaid.run({ nodes: created });
+    } catch (err) {
+      addLog("ERROR: mermaid render failed: " + (err && err.message ? err.message : err));
+    }
+  }
 
   // ── Pincher dashboard iframe ────────────────────────────────────────
   // The dashboard is served by pincher itself on a loopback HTTP sidecar

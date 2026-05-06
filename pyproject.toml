@@ -14,6 +14,7 @@ dependencies = [
     "pyyaml",
     "httpx>=0.25",
     "aiosqlite>=0.20",
+    "markdown>=3.5",
 ]
 
 [project.optional-dependencies]

@@ -12,6 +12,7 @@ import collections
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -151,9 +152,10 @@ class ProxyManager:
         self._specs = {s.name: s for s in specs}
 
         if primary is not None:
-            self._broadcast(
-                "[aggregator] primaryMCP is deprecated and ignored — "
-                "/mcp now aggregates all servers"
+            self._broadcast_tagged(
+                "aggregator",
+                "primaryMCP is deprecated and ignored — "
+                "/mcp now aggregates all servers",
             )
         self._primary = None
 
@@ -181,7 +183,7 @@ class ProxyManager:
             try:
                 await self.aggregator.start()
             except Exception as exc:
-                self._broadcast(f"[aggregator] failed to start: {exc}")
+                self._broadcast_tagged("aggregator", f"failed to start: {exc}")
 
         return {
             "primary": None,
@@ -217,8 +219,9 @@ class ProxyManager:
 
         merged["mcpServers"] = user_servers
         if injected:
-            self._broadcast(
-                f"[manager] merged mandatory backends: {', '.join(sorted(injected))}"
+            self._broadcast_tagged(
+                "manager",
+                f"merged mandatory backends: {', '.join(sorted(injected))}",
             )
         return merged
 
@@ -364,7 +367,7 @@ class ProxyManager:
             try:
                 await self.aggregator.start()
             except Exception as exc:
-                self._broadcast(f"[aggregator] failed to start: {exc}")
+                self._broadcast_tagged("aggregator", f"failed to start: {exc}")
 
     async def stop_builtin(self) -> None:
         """Tear down the builtin. Called from the lifespan shutdown hook."""
@@ -415,7 +418,7 @@ class ProxyManager:
             await store.open()
         except Exception as exc:
             _log.warning("savings store open failed (%s); disabling", exc)
-            self._broadcast(f"[savings] disabled: {exc}")
+            self._broadcast_tagged("savings", f"disabled: {exc}")
             return
         counter = TokenCounter()
         # Warmup is best-effort — heuristic fallback handles failures.
@@ -428,11 +431,12 @@ class ProxyManager:
         self._savings_store = store
         self.savings = SavingsRecorder(store=store, counter=counter)
         if counter.using_heuristic:
-            self._broadcast(
-                "[savings] tiktoken unavailable; using char/4 heuristic"
+            self._broadcast_tagged(
+                "savings",
+                "tiktoken unavailable; using char/4 heuristic",
             )
         else:
-            self._broadcast("[savings] token counter ready (cl100k_base)")
+            self._broadcast_tagged("savings", "token counter ready (cl100k_base)")
         if self._pincher_poll_interval > 0:
             self._pincher_poll_task = asyncio.create_task(self._pincher_poll_loop())
 
@@ -757,6 +761,18 @@ class ProxyManager:
                 q.put_nowait(line)
             except asyncio.QueueFull:
                 pass
+
+    def _broadcast_tagged(self, tag: str, message: str) -> None:
+        """Broadcast an activity-log line in the canonical
+        ``[HH:MM:SS] [<tag>] <message>`` format.
+
+        Use this for manager-/aggregator-/savings-level events that
+        don't originate from a per-backend ``_emit_log`` (which already
+        timestamps). Keeps every line in the ``/api/logs`` SSE stream
+        and the home-page activity panel uniformly parseable.
+        """
+        ts = time.strftime("%H:%M:%S")
+        self._broadcast(f"[{ts}] [{tag}] {message}")
 
     def _attach_log_pump(self, state: ProxyState) -> None:
         """Forward a child state's logs into the manager's subscriber set."""

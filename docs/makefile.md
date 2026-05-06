@@ -174,6 +174,7 @@ $DOCKER_SOCK_FILE:/var/run/docker.sock            # docker daemon socket
 localmcp-npm:/root/.npm                           # npx cache (named volume)
 localmcp-cache:/root/.cache                       # uv/pip cache (named volume)
 localmcp-pincher:/tmp/pincher                     # pincher SQLite index DB (named volume)
+localmcp-savings:/root/.localmcp                  # savings SQLite store (named volume)
 ```
 
 ### Variables expanded at runtime

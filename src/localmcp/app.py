@@ -23,6 +23,7 @@ from localmcp.builtin import (
     render_comprehensive_rule,
 )
 from localmcp.config import ConfigError
+from localmcp.docs import list_docs, read_doc
 from localmcp.manager import ProxyManager
 from localmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
 
@@ -350,6 +351,60 @@ def create_app(manager: ProxyManager | None = None):
         catalog = await collect_backend_full_catalog(manager, skip_self=False)
         return JSONResponse(catalog)
 
+    async def api_docs_index(request: Request) -> JSONResponse:
+        """
+        summary: List the markdown documents available to the in-app Docs view.
+        tags: [introspection]
+        responses:
+          200:
+            description: |
+              Ordered list of ``{slug, title}`` entries. The top-level
+              ``README.md`` (when present) is exposed under the slug
+              ``readme`` and surfaced first; subsequent entries come from
+              ``docs/*.md`` and are alphabetised by slug. The same
+              whitelist gates ``GET /api/docs/{slug}`` reads.
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      slug:  { type: string }
+                      title: { type: string }
+        """
+        return JSONResponse(list_docs())
+
+    async def api_docs_get(request: Request) -> JSONResponse:
+        """
+        summary: Read one markdown document by slug, rendered to HTML.
+        tags: [introspection]
+        parameters:
+          - in: path
+            name: slug
+            required: true
+            schema: { type: string }
+        responses:
+          200:
+            description: |
+              ``{slug, title, markdown, html}``. ``html`` is rendered
+              with the ``markdown`` package (extensions: ``fenced_code``,
+              ``tables``, ``toc``, ``sane_lists``) and post-processed to
+              strip ``<script>`` tags and inline ``on*`` handlers
+              defensively.
+            content:
+              application/json: {}
+          404:
+            description: Slug isn't in the docs whitelist.
+        """
+        slug = request.path_params["slug"]
+        doc = read_doc(slug)
+        if doc is None:
+            return JSONResponse(
+                {"error": f"Unknown doc slug: {slug!r}"}, status_code=404
+            )
+        return JSONResponse(doc)
+
     async def catalog_page(request: Request) -> HTMLResponse:
         """
         summary: Standalone, searchable documentation page for every running backend.
@@ -596,6 +651,8 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/stop", api_stop, methods=["POST"]),
             Route("/api/cursor-rule", api_cursor_rule),
             Route("/api/catalog", api_catalog),
+            Route("/api/docs", api_docs_index),
+            Route("/api/docs/{slug}", api_docs_get),
             Route("/catalog", catalog_page),
             Route("/api/logs", api_logs),
             Route("/api/savings", api_savings),

@@ -310,6 +310,7 @@ localmcp-clean-kubeconfig:
 #   - localmcp-npm               -> /root/.npm               (npx cache)
 #   - localmcp-cache             -> /root/.cache             (uv/pip cache)
 #   - localmcp-pincher           -> /tmp/pincher             (pincher SQLite DB)
+#   - localmcp-savings           -> /root/.localmcp          (savings SQLite DB)
 # We expose USER_DATA_ROOT through both an rw and a ro mount so writes go
 # through the rw mount and pincher indexes via the kernel-enforced ro
 # mount. `localmcp-warm-index` (auto-chained from `localmcp-load` when
@@ -558,8 +559,8 @@ clean: localmcp-down
 # Volumes removed: every Docker volume whose name contains
 # `localmcp-`. That covers the named volumes pinned in
 # configs/default-volumes.conf (`localmcp-npm`, `localmcp-cache`,
-# `localmcp-pincher`) plus any code-index / buildx state volumes
-# (`localmcp-code-index`, `buildx_buildkit_localmcp-*_state`).
+# `localmcp-pincher`, `localmcp-savings`) plus any code-index / buildx
+# state volumes (`localmcp-code-index`, `buildx_buildkit_localmcp-*_state`).
 nuke: clean
 	@echo "==> stopping any leftover buildx containers for $(BUILDX_BUILDER_NAME)"
 	-@cids=$$(docker ps -aq -f name=buildx_buildkit_$(BUILDX_BUILDER_NAME) 2>/dev/null); \

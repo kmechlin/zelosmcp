@@ -63,6 +63,7 @@ COPY --from=pincher-build /pincher /usr/local/bin/pincher
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY docs ./docs
 COPY src ./src
 # Mandatory MCP set merged into every /api/start payload by ProxyManager.
 # See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.

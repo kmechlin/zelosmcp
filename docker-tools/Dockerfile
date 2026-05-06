@@ -79,6 +79,10 @@ FROM extra-os AS localmcp
   # COPY localmcp source from the build context (= repo root).
   # `.dockerignore` excludes .venv, .git, .pytest_cache, etc.
   COPY pyproject.toml README.md /opt/localmcp/
+  # docs/*.md powers the in-app Documentation view (/api/docs[/{slug}]).
+  # `.dockerignore` re-includes docs/**/*.md so the markdown files
+  # actually ship in the image.
+  COPY docs /opt/localmcp/docs
   COPY src /opt/localmcp/src
   # Mandatory MCP set merged into every /api/start payload by ProxyManager.
   # See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.

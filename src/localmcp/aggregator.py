@@ -85,7 +85,7 @@ class Aggregator:
 
     def _log(self, message: str) -> None:
         logger.info("[aggregator] %s", message)
-        self.manager._broadcast(f"[aggregator] {message}")
+        self.manager._broadcast_tagged("aggregator", message)
 
     def _running_states(self) -> list["ProxyState"]:
         return [

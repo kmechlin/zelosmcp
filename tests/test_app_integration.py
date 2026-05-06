@@ -108,6 +108,24 @@ class TestUIRoute:
             r = await c.get("/")
         assert 'href="/docs"' in r.text
 
+    @pytest.mark.asyncio
+    async def test_index_has_documentation_view(self):
+        """Documentation nav item + center-pane view ship in HTML_TEMPLATE."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/")
+        assert 'data-view="docs"' in r.text
+        assert "loadDocsIndex" in r.text
+
+    @pytest.mark.asyncio
+    async def test_index_has_server_details_view(self):
+        """Per-server "Details" button + center-pane view ship in HTML_TEMPLATE."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/")
+        assert 'data-view="server-details"' in r.text
+        assert "showServerDetails" in r.text
+
 
 # ── OpenAPI explorer ────────────────────────────────────────────────────
 
@@ -922,6 +940,72 @@ class TestCatalogEndpoint:
                 )
             mcp_text = r.json()["result"]["content"][0]["text"]
             assert json.loads(mcp_text) == http_payload
+
+
+# ── Docs API ────────────────────────────────────────────────────────────
+
+class TestDocsRoutes:
+    """Reads the project's own docs/ + README.md, so these tests assume
+    the suite runs from a checkout (or the Docker image — both ship the
+    files). If the discovery falls back to an empty index the assertions
+    will fail loudly, which is the signal we want for a misconfigured
+    image."""
+
+    @pytest.mark.asyncio
+    async def test_api_docs_index_lists_known_slugs(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs")
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        slugs = {d["slug"] for d in data}
+        # Only docs/*.md is surfaced — README is intentionally excluded
+        # so the in-app Documentation view stays focused on docs.
+        assert "readme" not in slugs
+        assert "quickstart" in slugs
+        for entry in data:
+            assert "title" in entry and entry["title"]
+
+    @pytest.mark.asyncio
+    async def test_api_docs_does_not_expose_readme(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/readme")
+        assert r.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_api_docs_get_returns_rendered_html(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/quickstart")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["slug"] == "quickstart"
+        assert data["title"]
+        assert data["html"].startswith("<")
+        assert "<h1" in data["html"] or "<h2" in data["html"]
+        assert data["markdown"]
+
+    @pytest.mark.asyncio
+    async def test_api_docs_get_unknown_slug_404(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/api/docs/does-not-exist")
+        assert r.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_api_docs_rejects_path_traversal(self):
+        """Slug values that would resolve outside the docs root must
+        404, never expose arbitrary files."""
+        app, _ = _fresh()
+        async with _client(app) as c:
+            # Starlette path-converters reject `..` segments outright at
+            # routing time, so this lands as 404 before the handler even
+            # runs — but we still assert the *behaviour* (no 200, no
+            # /etc/passwd-shaped payload) end-to-end.
+            r = await c.get("/api/docs/..%2Fpyproject")
+        assert r.status_code == 404
 
 
 # ── Reverse-proxy dispatch ──────────────────────────────────────────────

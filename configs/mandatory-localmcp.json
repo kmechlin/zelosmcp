@@ -1,16 +1,5 @@
 {
   "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/user_data_rw"
-      ],
-      "compress": {
-        "level": "medium"
-      }
-    },
     "pincher": {
       "command": "pincher",
       "args": [
