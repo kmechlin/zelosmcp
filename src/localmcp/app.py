@@ -25,6 +25,13 @@ from localmcp.builtin import (
 from localmcp.config import ConfigError
 from localmcp.docs import list_docs, read_doc
 from localmcp.manager import ProxyManager
+from localmcp.repos import (
+    RULE_RELATIVE_PATHS,
+    discover_repos,
+    is_under_scan_root,
+    rule_target,
+    to_rw_path,
+)
 from localmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -100,6 +107,57 @@ _REDOC_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def _flatten_call_result(result) -> dict | list | str | None:
+    """Best-effort extraction of a single JSON payload from a
+    ``CallToolResult``. Pincher returns a single ``TextContent`` whose
+    ``.text`` is the JSON dump of its response; we parse that and return
+    the dict so callers don't have to. Falls back to a list of strings or
+    ``None`` if the response can't be JSON-parsed.
+    """
+    import json as _json
+
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        return structured
+    content = getattr(result, "content", None) or []
+    texts: list[str] = []
+    for item in content:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            texts.append(text)
+    if not texts:
+        return None
+    if len(texts) == 1:
+        try:
+            return _json.loads(texts[0])
+        except (ValueError, TypeError):
+            return texts[0]
+    return texts
+
+
+def _extract_pincher_indexed_paths(result) -> set[str]:
+    """Pull the absolute repo paths out of a ``pincher__list`` response.
+
+    Pincher returns ``{"projects": [{"name", "path", "files", ...}]}``.
+    We map those paths back to whatever the scanner reports so the UI can
+    flag already-indexed repos. Anything unparseable -> empty set, since
+    a missing pincher_indexed flag is preferable to a 500 in /api/repos.
+    """
+    payload = _flatten_call_result(result)
+    if not isinstance(payload, dict):
+        return set()
+    projects = payload.get("projects") or []
+    if not isinstance(projects, list):
+        return set()
+    out: set[str] = set()
+    for p in projects:
+        if isinstance(p, dict):
+            path = p.get("path") or p.get("Path")
+            if isinstance(path, str):
+                out.add(path)
+    return out
 
 
 def create_app(manager: ProxyManager | None = None):
@@ -609,6 +667,179 @@ def create_app(manager: ProxyManager | None = None):
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    async def api_repos_list(request: Request) -> JSONResponse:
+        """
+        summary: List git repositories discovered under the read-only mount.
+        description: |
+          Walks ``/user_data_ro`` (or whatever ``LOCALMCP_REPO_SCAN_ROOT``
+          points at) shallowly, returning every directory containing a
+          ``.git`` entry. Each result includes the read-only path, the
+          read-write twin under ``/user_data_rw`` (used by the filesystem
+          MCP for writes), whether a ``.cursor/rules/localmcp.mdc`` already
+          exists, and whether pincher has indexed the repo as a project.
+          Results are cached for 30 s; pass ``refresh=1`` to bust the cache.
+        tags: [introspection]
+        parameters:
+          - in: query
+            name: refresh
+            required: false
+            schema: { type: string, enum: ["1"] }
+            description: When set, ignore the in-process cache and rescan.
+        responses:
+          200:
+            description: |
+              ``{"repos": [{"name", "path_ro", "path_rw", "has_rule",
+              "pincher_indexed"}]}``. Sorted by lower-case basename.
+            content:
+              application/json: {}
+        """
+        refresh = request.query_params.get("refresh") == "1"
+        repos = discover_repos(refresh=refresh)
+        indexed: set[str] = set()
+        pi = manager.servers.get("pincher")
+        if pi is not None and pi.running and pi.client_session is not None:
+            try:
+                result = await pi.client_session.call_tool("list", {})
+                indexed = _extract_pincher_indexed_paths(result)
+            except Exception as exc:
+                logging.getLogger("localmcp").info(
+                    "pincher__list failed during /api/repos: %s", exc
+                )
+        out = []
+        for r in repos:
+            d = r.to_dict()
+            d["pincher_indexed"] = r.path_ro in indexed
+            out.append(d)
+        return JSONResponse({"repos": out})
+
+    async def api_repo_write_rule(request: Request) -> JSONResponse:
+        """
+        summary: Generate a Cursor rule and write it into a discovered repo.
+        description: |
+          Builds the rule body via the same code path as
+          ``GET /api/cursor-rule``, then forwards a ``write_file`` call to
+          the running ``filesystem`` MCP backend. The target directory is
+          computed by swapping the read-only mount prefix for the
+          read-write one (e.g. ``/user_data_ro/foo`` ->
+          ``/user_data_rw/foo/.cursor/rules/localmcp.mdc``). Filesystem's
+          own sandbox refuses writes outside ``/user_data_rw``, so this
+          handler trusts that gate after a single prefix check.
+        tags: [introspection]
+        responses:
+          200: { description: "Rule written. Returns ``{ok, path, bytes}``." }
+          400: { description: Invalid path or unknown enum value. }
+          503: { description: filesystem backend not running. }
+        """
+        try:
+            body = await request.json()
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": f"invalid JSON: {exc}"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
+
+        path = body.get("path")
+        if not isinstance(path, str) or not is_under_scan_root(path):
+            return JSONResponse(
+                {"ok": False, "error": "path must be under /user_data_ro"},
+                status_code=400,
+            )
+        access = body.get("access", "read-only")
+        if access not in ("read-only", "read-write"):
+            return JSONResponse({"ok": False, "error": f"Unknown access: {access!r}"}, status_code=400)
+        fmt = body.get("format", "cursor-mdc")
+        if fmt not in RULE_RELATIVE_PATHS:
+            return JSONResponse({"ok": False, "error": f"Unknown format: {fmt!r}"}, status_code=400)
+        style = body.get("style", "always-apply")
+        if style not in ("always-apply", "scoped"):
+            return JSONResponse({"ok": False, "error": f"Unknown style: {style!r}"}, status_code=400)
+        tool_use = body.get("tool_use", "priority")
+        if tool_use not in ("available", "priority"):
+            return JSONResponse({"ok": False, "error": f"Unknown tool_use: {tool_use!r}"}, status_code=400)
+        globs = body.get("globs")
+        if globs is not None and not isinstance(globs, str):
+            return JSONResponse({"ok": False, "error": "globs must be a string"}, status_code=400)
+
+        fs = manager.servers.get("filesystem")
+        if fs is None or not fs.running or fs.client_session is None:
+            return JSONResponse(
+                {"ok": False, "error": "filesystem backend not running"},
+                status_code=503,
+            )
+
+        catalog = await collect_backend_full_catalog(manager, skip_self=True)
+        rule_body = render_comprehensive_rule(
+            catalog,
+            access=access,
+            style=style,
+            globs=globs,
+            fmt=fmt,
+            tool_use=tool_use,
+            mandatory_names=manager.mandatory_names(),
+        )
+
+        target = rule_target(path, fmt)
+        parent = os.path.dirname(target)
+        try:
+            await fs.client_session.call_tool("create_directory", {"path": parent})
+            await fs.client_session.call_tool(
+                "write_file", {"path": target, "content": rule_body}
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"filesystem write failed: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {"ok": True, "path": target, "bytes": len(rule_body.encode("utf-8"))}
+        )
+
+    async def api_repo_index(request: Request) -> JSONResponse:
+        """
+        summary: Index a discovered repository in pincher.
+        description: |
+          Forwards the request to ``pincher__index`` so the repo becomes
+          a queryable project. The path must live under the read-only
+          scan root; pincher does the actual filesystem work against its
+          own ``/user_data_ro`` mount.
+        tags: [introspection]
+        responses:
+          200: { description: Indexed. Returns pincher's structured response. }
+          400: { description: Path is not under /user_data_ro. }
+          503: { description: pincher backend not running. }
+        """
+        try:
+            body = await request.json()
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": f"invalid JSON: {exc}"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
+        path = body.get("path")
+        if not isinstance(path, str) or not is_under_scan_root(path):
+            return JSONResponse(
+                {"ok": False, "error": "path must be under /user_data_ro"},
+                status_code=400,
+            )
+        pi = manager.servers.get("pincher")
+        if pi is None or not pi.running or pi.client_session is None:
+            return JSONResponse(
+                {"ok": False, "error": "pincher backend not running"},
+                status_code=503,
+            )
+        try:
+            result = await pi.client_session.call_tool("index", {"path": path})
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"pincher index failed: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "ok": not bool(getattr(result, "isError", False)),
+                "path": path,
+                "result": _flatten_call_result(result),
+            }
+        )
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
         # Start the always-on builtin MCP before serving any traffic so
@@ -660,6 +891,9 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/servers/{name}", api_server_get),
             Route("/api/servers/{name}/start", api_server_start, methods=["POST"]),
             Route("/api/servers/{name}/stop", api_server_stop, methods=["POST"]),
+            Route("/api/repos", api_repos_list),
+            Route("/api/repos/write-rule", api_repo_write_rule, methods=["POST"]),
+            Route("/api/repos/index", api_repo_index, methods=["POST"]),
         ],
     )
 

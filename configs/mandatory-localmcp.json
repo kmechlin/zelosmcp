@@ -16,6 +16,14 @@
       "compress": {
         "level": "medium"
       }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/user_data_rw"
+      ]
     }
   }
 }

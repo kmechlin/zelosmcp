@@ -609,6 +609,186 @@ HTML_TEMPLATE = """\
   }
   .snippet-link:hover { background: var(--surface); }
 
+  /* ── Repositories panel (right column, collapsible) ── */
+  .repos-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .section-label-toggle {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--black);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    text-align: left;
+  }
+  .section-label-toggle .caret {
+    font-size: 12px;
+    color: var(--mid);
+    width: 10px;
+    display: inline-block;
+    text-align: center;
+  }
+  .repos-count {
+    color: var(--mid);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+    margin-left: 4px;
+  }
+  .repos-refresh-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    line-height: 1;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .repos-refresh-btn:hover { background: var(--surface); }
+  .repos-filter {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-bottom: 8px;
+    background: var(--white);
+  }
+  .repos-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    background: none;
+    border: 1px solid transparent;
+    text-align: left;
+    width: 100%;
+    font: inherit;
+    color: var(--black);
+    min-width: 0;
+  }
+  .repo-row:hover {
+    background: var(--surface);
+    border-color: var(--border);
+  }
+  .repo-row.active {
+    background: var(--surface);
+    border-color: var(--black);
+  }
+  .repo-row .repo-name {
+    font-weight: 700;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+  .repo-row .repo-path {
+    color: var(--mid);
+    font-family: var(--mono);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .repo-pill {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--mid);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .repo-pill.on {
+    color: var(--success);
+    border-color: var(--success);
+  }
+  .repos-empty {
+    color: var(--mid);
+    font-size: 12px;
+    font-style: italic;
+    padding: 8px 4px;
+  }
+
+  /* ── Repo details (middle pane) ── */
+  .rule-write-form {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 8px 16px;
+    align-items: center;
+    margin: 12px 0;
+  }
+  .rule-write-form label {
+    display: contents;
+    font-size: 13px;
+    color: var(--black);
+  }
+  .rule-write-form select,
+  .rule-write-form input {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--font);
+    font-size: 13px;
+    background: var(--white);
+  }
+  .rule-write-form input[disabled] {
+    background: var(--surface);
+    color: var(--mid);
+  }
+  .rule-write-actions {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+  }
+  .rule-write-status {
+    font-size: 13px;
+    color: var(--mid);
+    min-height: 1.2em;
+    margin-top: 8px;
+  }
+  .rule-write-status.ok { color: var(--success); }
+  .rule-write-status.err { color: var(--error); }
+  .repo-paths {
+    font-size: 12px;
+    color: var(--mid);
+    font-family: var(--mono);
+    margin: 0 0 12px 0;
+  }
+  .repo-paths code {
+    color: var(--black);
+  }
+
   .pill {
     font-size: 10px;
     font-weight: 700;
@@ -1249,6 +1429,59 @@ HTML_TEMPLATE = """\
       </div>
     </section>
 
+    <!-- Repo details view: rule editor + pincher index button for one repo -->
+    <section class="view" data-view="repo-details">
+      <div class="section">
+        <div class="section-label">
+          <span id="repo-details-title">Repository</span>
+          <span class="dashboard-meta" id="repo-details-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <p class="repo-paths" id="repo-details-paths">&mdash;</p>
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Generate a Cursor rule and write it to <code>.cursor/rules/localmcp.mdc</code> in the selected repo, or register the repo with pincher so its tools are queryable. The rule body is identical to the one produced by <strong>Cursor rule (.mdc)</strong> in the left nav &mdash; same generator, same knobs.
+          </p>
+
+          <div class="rule-write-form">
+            <label for="repo-rule-format">Format</label>
+            <select id="repo-rule-format">
+              <option value="cursor-mdc" selected>cursor-mdc (.cursor/rules/localmcp.mdc)</option>
+              <option value="copilot-instructions">copilot-instructions (.github/copilot-instructions.md)</option>
+            </select>
+            <label for="repo-rule-tool-use">Tool use</label>
+            <select id="repo-rule-tool-use">
+              <option value="priority" selected>Priority (encourage MCP tools)</option>
+              <option value="available">Available (neutral catalog)</option>
+            </select>
+            <label for="repo-rule-access">Access</label>
+            <select id="repo-rule-access">
+              <option value="read-only" selected>Read-only (safe)</option>
+              <option value="read-write">Read-write (allows mutation)</option>
+            </select>
+            <label for="repo-rule-style">Style</label>
+            <select id="repo-rule-style" onchange="onRepoStyleChange()">
+              <option value="always-apply" selected>Always apply</option>
+              <option value="scoped">Scoped (uses globs)</option>
+            </select>
+            <label for="repo-rule-globs">Globs</label>
+            <input type="text" id="repo-rule-globs" placeholder="**/*.py" disabled>
+          </div>
+
+          <div class="rule-write-actions">
+            <button type="button" class="btn btn-outline" onclick="previewRepoRule()">Preview</button>
+            <button type="button" class="btn btn-primary" onclick="saveRepoRule()">Save rule to repo</button>
+            <button type="button" class="btn btn-outline" onclick="indexRepo()">Index in pincher</button>
+          </div>
+
+          <div class="rule-write-status" id="repo-rule-status"></div>
+
+          <div class="snippet" style="margin-top: 12px;">
+            <pre id="repo-rule-preview">Click <strong>Preview</strong> to render the rule body that will be saved.</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- Right column: status badge, global action, servers list -->
@@ -1271,6 +1504,40 @@ HTML_TEMPLATE = """\
           Click any row to inspect that backend's tools, prompts, and resources inline.
         </p>
         <div class="server-list" id="server-list"></div>
+      </div>
+    </div>
+
+    <div class="section" id="repos-section" style="margin: 0;">
+      <div class="repos-header">
+        <button type="button"
+                class="section-label-toggle"
+                id="repos-toggle"
+                aria-expanded="false"
+                aria-controls="repos-collapse"
+                onclick="toggleReposPanel()">
+          <span class="caret" id="repos-caret">&#9656;</span>
+          <span>Repositories</span>
+          <span class="repos-count" id="repos-count">&mdash;</span>
+        </button>
+        <button type="button" class="repos-refresh-btn"
+                id="repos-refresh-btn"
+                title="Rescan /user_data_ro"
+                onclick="refreshRepos()">&#x21bb;</button>
+      </div>
+      <div class="card" id="repos-collapse" hidden>
+        <p class="intro" style="margin: 0 0 8px 0; font-size: 12px;">
+          Git repos under <code>/user_data_ro</code>. Click a row to open the rule editor for that repo.
+        </p>
+        <input type="text"
+               id="repos-filter"
+               class="repos-filter"
+               placeholder="Filter (substring of name or path)"
+               autocomplete="off"
+               spellcheck="false"
+               oninput="onReposFilter()">
+        <div class="repos-list" id="repos-list">
+          <div class="repos-empty">Loading...</div>
+        </div>
       </div>
     </div>
   </aside>
@@ -1987,6 +2254,342 @@ HTML_TEMPLATE = """\
   // SSE log stream
   const events = new EventSource("/api/logs");
   events.onmessage = (e) => addLog(e.data);
+
+  // ── Repositories panel (right column, collapsible) ─────────────────
+  // Discovers git repos under /user_data_ro and lets the user open one in
+  // the middle-pane "repo-details" view. State (collapsed flag, filter
+  // value) is persisted in localStorage so the panel remembers itself
+  // across reloads. The list is server-cached for 30 s; clicking the
+  // refresh button (?) busts that cache and re-loads.
+  let currentRepos = [];
+  let currentDetailsRepo = null;
+  let reposLoadInflight = null;
+  let reposFilterDebounce = null;
+  const REPOS_LS_EXPANDED = "localmcp:repos:expanded";
+  const REPOS_LS_FILTER = "localmcp:repos:filter";
+
+  function setReposCollapsed(collapsed, persist = true) {
+    const collapse = document.getElementById("repos-collapse");
+    const toggle = document.getElementById("repos-toggle");
+    const caret = document.getElementById("repos-caret");
+    if (!collapse || !toggle) return;
+    if (collapsed) {
+      collapse.setAttribute("hidden", "");
+      toggle.setAttribute("aria-expanded", "false");
+      if (caret) caret.innerHTML = "&#9656;";
+    } else {
+      collapse.removeAttribute("hidden");
+      toggle.setAttribute("aria-expanded", "true");
+      if (caret) caret.innerHTML = "&#9662;";
+    }
+    if (persist) {
+      try { localStorage.setItem(REPOS_LS_EXPANDED, collapsed ? "0" : "1"); } catch (_) {}
+    }
+  }
+
+  function reposIsExpanded() {
+    const toggle = document.getElementById("repos-toggle");
+    return !!(toggle && toggle.getAttribute("aria-expanded") === "true");
+  }
+
+  function toggleReposPanel() {
+    const expanding = !reposIsExpanded();
+    setReposCollapsed(!expanding);
+    if (expanding) loadRepos({ silent: false });
+  }
+
+  async function loadRepos({ force = false, silent = true } = {}) {
+    if (reposLoadInflight) return reposLoadInflight;
+    const list = document.getElementById("repos-list");
+    if (!silent && list && currentRepos.length === 0) {
+      list.innerHTML = '<div class="repos-empty">Loading...</div>';
+    }
+    const url = force ? "/api/repos?refresh=1" : "/api/repos";
+    reposLoadInflight = (async () => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        currentRepos = Array.isArray(data.repos) ? data.repos : [];
+        renderReposList();
+      } catch (err) {
+        if (list) {
+          list.innerHTML = "";
+          const p = document.createElement("div");
+          p.className = "repos-empty";
+          p.textContent = "Failed to load repos: " + err.message;
+          list.appendChild(p);
+        }
+      } finally {
+        reposLoadInflight = null;
+      }
+    })();
+    return reposLoadInflight;
+  }
+
+  function refreshRepos() {
+    if (!reposIsExpanded()) setReposCollapsed(false);
+    loadRepos({ force: true, silent: false });
+  }
+
+  function reposFilterValue() {
+    const input = document.getElementById("repos-filter");
+    return (input && input.value || "").trim().toLowerCase();
+  }
+
+  function onReposFilter() {
+    const input = document.getElementById("repos-filter");
+    if (input) {
+      try { localStorage.setItem(REPOS_LS_FILTER, input.value); } catch (_) {}
+    }
+    if (reposFilterDebounce) clearTimeout(reposFilterDebounce);
+    reposFilterDebounce = setTimeout(renderReposList, 80);
+  }
+
+  function renderReposList() {
+    const list = document.getElementById("repos-list");
+    const count = document.getElementById("repos-count");
+    if (!list) return;
+    const q = reposFilterValue();
+    const filtered = q
+      ? currentRepos.filter((r) => {
+          const hay = (r.name + " " + r.path_ro).toLowerCase();
+          return hay.includes(q);
+        })
+      : currentRepos;
+    list.innerHTML = "";
+    if (count) {
+      if (q) count.textContent = `${filtered.length} / ${currentRepos.length}`;
+      else count.textContent = String(currentRepos.length);
+    }
+    if (filtered.length === 0) {
+      const p = document.createElement("div");
+      p.className = "repos-empty";
+      p.textContent = currentRepos.length === 0
+        ? "No git repos under /user_data_ro."
+        : "No repos match the filter.";
+      list.appendChild(p);
+      return;
+    }
+    for (const repo of filtered) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "repo-row";
+      if (currentDetailsRepo && currentDetailsRepo.path_ro === repo.path_ro) {
+        row.classList.add("active");
+      }
+      row.onclick = () => showRepoDetails(repo);
+
+      const name = document.createElement("span");
+      name.className = "repo-name";
+      name.textContent = repo.name;
+      row.appendChild(name);
+
+      const path = document.createElement("span");
+      path.className = "repo-path";
+      path.textContent = repo.path_ro;
+      path.title = repo.path_ro;
+      row.appendChild(path);
+
+      const rulePill = document.createElement("span");
+      rulePill.className = "repo-pill" + (repo.has_rule ? " on" : "");
+      rulePill.textContent = "rule";
+      rulePill.title = repo.has_rule
+        ? "localmcp.mdc already exists"
+        : "no localmcp.mdc yet";
+      row.appendChild(rulePill);
+
+      const piPill = document.createElement("span");
+      piPill.className = "repo-pill" + (repo.pincher_indexed ? " on" : "");
+      piPill.textContent = "pincher";
+      piPill.title = repo.pincher_indexed
+        ? "indexed in pincher"
+        : "not yet indexed";
+      row.appendChild(piPill);
+
+      list.appendChild(row);
+    }
+  }
+
+  // ── Repo details (middle pane) ──────────────────────────────────────
+  function showRepoDetails(repo) {
+    currentDetailsRepo = repo;
+    setView("repo-details");
+    renderRepoDetails(repo);
+    renderReposList(); // re-paint to mark the active row
+  }
+
+  function renderRepoDetails(repo) {
+    const title = document.getElementById("repo-details-title");
+    const meta = document.getElementById("repo-details-meta");
+    const paths = document.getElementById("repo-details-paths");
+    const status = document.getElementById("repo-rule-status");
+    const preview = document.getElementById("repo-rule-preview");
+    if (title) title.textContent = `Repository: ${repo.name}`;
+    if (meta) {
+      const bits = [];
+      bits.push(repo.has_rule ? "rule present" : "no rule");
+      bits.push(repo.pincher_indexed ? "indexed" : "not indexed");
+      meta.textContent = bits.join(" • ");
+    }
+    if (paths) {
+      paths.innerHTML =
+        "Read-only: <code>" + escapeHtml(repo.path_ro) + "</code><br>" +
+        "Read-write: <code>" + escapeHtml(repo.path_rw) + "</code>";
+    }
+    if (status) { status.textContent = ""; status.className = "rule-write-status"; }
+    if (preview) {
+      preview.textContent = "Click Preview to render the rule body that will be saved.";
+    }
+    onRepoStyleChange();
+  }
+
+  function onRepoStyleChange() {
+    const style = document.getElementById("repo-rule-style");
+    const globs = document.getElementById("repo-rule-globs");
+    if (!style || !globs) return;
+    const scoped = style.value === "scoped";
+    globs.disabled = !scoped;
+    if (!scoped) globs.value = "";
+  }
+
+  function repoRuleQueryString() {
+    const params = new URLSearchParams();
+    const fmt = document.getElementById("repo-rule-format");
+    const tu = document.getElementById("repo-rule-tool-use");
+    const access = document.getElementById("repo-rule-access");
+    const style = document.getElementById("repo-rule-style");
+    const globs = document.getElementById("repo-rule-globs");
+    if (fmt) params.set("format", fmt.value);
+    if (tu) params.set("tool_use", tu.value);
+    if (access) params.set("access", access.value);
+    if (style) params.set("style", style.value);
+    if (globs && globs.value) params.set("globs", globs.value);
+    return params.toString();
+  }
+
+  function repoRuleBody() {
+    const fmt = document.getElementById("repo-rule-format");
+    const tu = document.getElementById("repo-rule-tool-use");
+    const access = document.getElementById("repo-rule-access");
+    const style = document.getElementById("repo-rule-style");
+    const globs = document.getElementById("repo-rule-globs");
+    return {
+      path: currentDetailsRepo ? currentDetailsRepo.path_ro : null,
+      format: fmt ? fmt.value : "cursor-mdc",
+      tool_use: tu ? tu.value : "priority",
+      access: access ? access.value : "read-only",
+      style: style ? style.value : "always-apply",
+      globs: globs && globs.value ? globs.value : undefined,
+    };
+  }
+
+  async function previewRepoRule() {
+    const status = document.getElementById("repo-rule-status");
+    const preview = document.getElementById("repo-rule-preview");
+    if (preview) preview.textContent = "Loading...";
+    if (status) { status.textContent = ""; status.className = "rule-write-status"; }
+    try {
+      const r = await fetch("/api/cursor-rule?" + repoRuleQueryString());
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const text = await r.text();
+      if (preview) preview.textContent = text;
+    } catch (err) {
+      if (preview) preview.textContent = "";
+      if (status) {
+        status.className = "rule-write-status err";
+        status.textContent = "Preview failed: " + err.message;
+      }
+    }
+  }
+
+  async function saveRepoRule() {
+    if (!currentDetailsRepo) return;
+    const status = document.getElementById("repo-rule-status");
+    if (status) { status.className = "rule-write-status"; status.textContent = "Saving..."; }
+    try {
+      const r = await fetch("/api/repos/write-rule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(repoRuleBody()),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) {
+        throw new Error(data.error || ("HTTP " + r.status));
+      }
+      if (status) {
+        status.className = "rule-write-status ok";
+        status.textContent = `Saved ${data.bytes} bytes to ${data.path}`;
+      }
+      // Reflect "rule present" on the row without a full rescan.
+      currentDetailsRepo.has_rule = true;
+      const idx = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+      if (idx >= 0) currentRepos[idx] = { ...currentRepos[idx], has_rule: true };
+      renderReposList();
+      renderRepoDetailsMetaOnly();
+    } catch (err) {
+      if (status) {
+        status.className = "rule-write-status err";
+        status.textContent = "Save failed: " + err.message;
+      }
+    }
+  }
+
+  async function indexRepo() {
+    if (!currentDetailsRepo) return;
+    const status = document.getElementById("repo-rule-status");
+    if (status) { status.className = "rule-write-status"; status.textContent = "Indexing..."; }
+    try {
+      const r = await fetch("/api/repos/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: currentDetailsRepo.path_ro }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.ok) {
+        throw new Error(data.error || ("HTTP " + r.status));
+      }
+      if (status) {
+        status.className = "rule-write-status ok";
+        status.textContent = "Indexed in pincher.";
+      }
+      currentDetailsRepo.pincher_indexed = true;
+      const idx = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+      if (idx >= 0) currentRepos[idx] = { ...currentRepos[idx], pincher_indexed: true };
+      renderReposList();
+      renderRepoDetailsMetaOnly();
+    } catch (err) {
+      if (status) {
+        status.className = "rule-write-status err";
+        status.textContent = "Index failed: " + err.message;
+      }
+    }
+  }
+
+  function renderRepoDetailsMetaOnly() {
+    if (!currentDetailsRepo) return;
+    const meta = document.getElementById("repo-details-meta");
+    if (!meta) return;
+    const bits = [];
+    bits.push(currentDetailsRepo.has_rule ? "rule present" : "no rule");
+    bits.push(currentDetailsRepo.pincher_indexed ? "indexed" : "not indexed");
+    meta.textContent = bits.join(" • ");
+  }
+
+  // Restore persisted panel state on load. If the user had it expanded
+  // last session, re-expand and load eagerly; otherwise stay collapsed
+  // and defer the network call until the user opens it.
+  (function initReposPanel() {
+    let expanded = false;
+    try {
+      expanded = localStorage.getItem(REPOS_LS_EXPANDED) === "1";
+      const savedFilter = localStorage.getItem(REPOS_LS_FILTER) || "";
+      const filterInput = document.getElementById("repos-filter");
+      if (filterInput) filterInput.value = savedFilter;
+    } catch (_) {}
+    setReposCollapsed(!expanded, false);
+    if (expanded) loadRepos({ silent: true });
+  })();
 
   // ── Left-nav view switcher ──────────────────────────────────────────
   // Toggle .active between .nav-item[data-view] and .view[data-view].

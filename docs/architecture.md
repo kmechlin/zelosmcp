@@ -23,7 +23,7 @@ flowchart LR
     starlette["Starlette router\n(web UI + /api/*)"]
     agg["Aggregator (/mcp)"]
     builtin["BuiltinServer\n(/localmcp/mcp)"]
-    other["pincher / docker / kubernetes /\nfilesystem (optional) / ...\n(/<name>/mcp)"]
+    other["pincher / filesystem / docker /\nkubernetes / ...\n(/<name>/mcp)"]
     api["HTTP API\n/api/cursor-rule\n/api/catalog\n/api/status\n..."]
     ui["Web UI :8000"]
     catalogPage["/catalog HTML"]
@@ -188,7 +188,8 @@ See [cursor-integration.md](cursor-integration.md) and [vscode-integration.md](v
 
 - [quickstart.md](quickstart.md) — get up and running in five minutes.
 - [configuration.md](configuration.md) — the `mcpServers` config schema LocalMCP accepts.
-- [default-mcps.md](default-mcps.md) — what the default backends do (mandatory `pincher` plus `kubernetes` and `docker`; optional `filesystem`) and what mounts they need.
+- [default-mcps.md](default-mcps.md) — what the default backends do (mandatory `pincher` and `filesystem`; default-config `kubernetes` and `docker`) and what mounts they need.
+- [repositories.md](repositories.md) — the right-column Repositories panel and `/api/repos` endpoints (discover git repos under `/user_data_ro`, write rules, index in pincher).
 - [built-in-mcp.md](built-in-mcp.md) — the always-on `/localmcp/mcp` and its tools.
 - [http-api.md](http-api.md) — full reference for `/api/*` and the MCP routes.
 - [makefile.md](makefile.md) — every Make target, including the volumes-config customization.
