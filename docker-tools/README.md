@@ -39,10 +39,10 @@ The full target list is in [`../Makefile`](../Makefile). Targets that drive this
 | `make get-corp-root-authority-cert` | Exports `docker-tools/cert.pem` from the macOS keychain. CN is parameterized via `CORP_ROOT_AUTHORITY_CERT_NAME` (default `Nike Root Authority NG`). |
 | `make build-buildx-image` | Builds the corp-cert-aware `buildx` builder image (`localmcp-buildx`). Called by `setup-buildx`. |
 | `make setup-buildx` | Creates the `localmcp-builder` buildx instance using `buildx.Dockerfile`. |
-| `make localmcp-image-build` | Builds the LocalMCP image (target `localmcp`) and loads it into the local Docker daemon as `localmcp:dev`. |
-| `make localmcp-image-rebuild` | Same with `--no-cache`. Use when localmcp's `pyproject.toml` deps change or you want to pick up new commits on the same branch. |
+| `make build` | Builds the LocalMCP image (target `localmcp`) and loads it into the local Docker daemon as `localmcp:dev`. |
+| `make rebuild` | Same with `--no-cache`. Use when localmcp's `pyproject.toml` deps change or you want to pick up new commits on the same branch. |
 
-After build, the LocalMCP container is run via `make localmcp-up` (which uses the resulting image, not anything in this directory). See the [main Makefile](../Makefile) for the full lifecycle.
+After build, the LocalMCP container is run via `make up` (which uses the resulting image, not anything in this directory). See the [main Makefile](../Makefile) for the full lifecycle.
 
 ## Why this is separate from the upstream Dockerfile
 

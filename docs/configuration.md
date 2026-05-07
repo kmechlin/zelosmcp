@@ -7,7 +7,7 @@ LocalMCP accepts the same `mcpServers` JSON shape Cursor uses in its own `mcp.js
 The config is **POST**-ed to `/api/start` — it's not a config file LocalMCP reads from disk on startup. There are two common ways to send it:
 
 1. **Web UI** (`http://localhost:8000`) — paste into the Configuration textarea, click START.
-2. **`make localmcp-load`** — POSTs the file at `$(LOCALMCP_CONFIG)` (default: [`configs/default-localmcp.json`](../configs/default-localmcp.json)).
+2. **`make load`** — POSTs the file at `$(LOCALMCP_CONFIG)` (default: [`configs/default-localmcp.json`](../configs/default-localmcp.json)).
 3. **`curl`**:
 
    ```bash
@@ -223,8 +223,8 @@ All of these come back as 400-status JSON: `{"ok": false, "error": "<message>"}`
 
 ## See also
 
-- [default-mcps.md](default-mcps.md) — what the four blessed backends in `default-localmcp.json` do.
+- [default-mcps.md](default-mcps.md) — what the default backends in `default-localmcp.json` do (mandatory `pincher` plus `kubernetes` and `docker`; optional `filesystem`).
 - [reverse-proxy.md](reverse-proxy.md) — full reference for the optional `reverseProxy` block.
 - [compression.md](compression.md) — full reference for the optional `compress` block.
 - [http-api.md](http-api.md) — full HTTP API reference for `/api/start` and friends.
-- [makefile.md](makefile.md) — `make localmcp-load LOCALMCP_CONFIG=...` to push your own config.
+- [makefile.md](makefile.md) — `make load LOCALMCP_CONFIG=...` to push your own config.

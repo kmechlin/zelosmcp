@@ -8,40 +8,18 @@ LocalMCP runs a single web server that fronts any number of MCP servers — stdi
 
 ## Quickstart
 
-```bash
-# Run as a Python process
-pip install -e . && localmcp
-
-# Or as a Docker container (recommended on macOS — bundles Node.js + uv + persistent caches)
-make localmcp-up && make localmcp-load
-```
-
-Then open `http://localhost:8000`. Wire your IDE in:
-
-```json
-// Cursor — ~/.cursor/mcp.json or .cursor/mcp.json
-{ "mcpServers": { "localmcp-aggregate": {
-    "type": "streamable-http", "url": "http://localhost:8000/mcp" } } }
-
-// VSCode + Copilot — Cmd+Shift+P → "MCP: Open User Configuration", or .vscode/mcp.json
-{ "servers": { "localmcp-aggregate": {
-    "type": "http",            "url": "http://localhost:8000/mcp" } } }
-```
-
-Generate the dynamic agent-instructions file once your backends are loaded:
+If you have Docker available:
 
 ```bash
-# Cursor
-mkdir -p .cursor/rules && \
-  curl -fsSL 'http://localhost:8000/api/cursor-rule' > .cursor/rules/localmcp.mdc
-
-# VSCode + Copilot
-mkdir -p .github && \
-  curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
-    > .github/copilot-instructions.md
+make init-env       # optional one-time wizard: writes .env (USER_DATA_ROOT, ports, etc.)
+make up             # build image (if missing) + start container + load default backends
 ```
 
-Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
+That's it. `make up` is idempotent — re-running on a healthy container just re-applies the config. Skip `make init-env` if you're happy with defaults; the Makefile falls back to them.
+
+Open [http://localhost:8000](http://localhost:8000) for the web UI, then wire your IDE — see [docs/quickstart.md](docs/quickstart.md) for Cursor and VSCode + Copilot snippets and the dynamic rule-file generator.
+
+Don't have Docker? See [docs/quickstart-no-docker.md](docs/quickstart-no-docker.md) for the Python pip install path.
 
 ## Architecture in 60 seconds
 
@@ -55,7 +33,7 @@ flowchart LR
     dispatch["dispatcher"]
     agg["Aggregator (/mcp)"]
     builtin["BuiltinServer (/localmcp/mcp)"]
-    other["filesystem / pincher /\ndocker / kubernetes / ..."]
+    other["pincher / docker / kubernetes /\n(filesystem optional, your own ...)"]
     api["HTTP API + Web UI"]
   end
   cursor -->|"streamable-http"| dispatch
@@ -87,7 +65,7 @@ Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequ
 | `mcpServers` config schema and `/api/start` lifecycle | [docs/configuration.md](docs/configuration.md) |
 | Reverse-proxy backend HTTP sidecars under LocalMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
 | Tool-list compression (`get_tool_schema` / `invoke_tool` wrappers) | [docs/compression.md](docs/compression.md) |
-| Default MCP backends (filesystem / pincher / docker / kubernetes) | [docs/default-mcps.md](docs/default-mcps.md) |
+| Default MCP backends (pincher / docker / kubernetes; filesystem optional) | [docs/default-mcps.md](docs/default-mcps.md) |
 | Cursor integration + dynamic `.mdc` rule generation | [docs/cursor-integration.md](docs/cursor-integration.md) |
 | VSCode + GitHub Copilot integration + `copilot-instructions.md` | [docs/vscode-integration.md](docs/vscode-integration.md) |
 | Built-in MCP at `/localmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |
@@ -115,17 +93,17 @@ src/localmcp/
   app.py                    # Starlette app, ASGI dispatcher, OpenAPI routes
   aggregator.py             # Aggregator: union of tools/prompts at /mcp
   builtin.py                # Always-on built-in MCP at /localmcp/mcp + rule generator
+  compression.py            # tool-list compression wrappers (get_tool_schema/invoke_tool)
   config.py                 # Cursor-compatible config parser + ServerSpec
+  docs.py                   # in-app /api/docs markdown viewer
   manager.py                # ProxyManager: many ProxyStates + the aggregator
   proxy.py                  # ProxyState: single backend lifecycle + MCP forwarding
+  savings.py                # per-call token-savings recorder
+  savings_db.py             # SQLite store backing the savings dashboard
   ui.py                     # Web UI (single-page HTML/CSS/JS)
-tests/
-  test_aggregator_unit.py
-  test_app_integration.py
-  test_builtin_unit.py
-  test_config_unit.py
-  test_manager_unit.py
-  test_proxy_unit.py
+scripts/
+  init_env.py               # interactive .env wizard (`make init-env`)
+tests/                      # pytest suite (no Docker required)
 ```
 
 ## Enterprise / corporate-proxy deploy
@@ -140,3 +118,5 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/ -q
 ```
 
 The test suite covers the dispatcher, aggregator fan-out, in-memory built-in transport, rule generator (both `cursor-mdc` and `copilot-instructions` formats), config parsing, and per-server lifecycle. CI-friendly — no Docker daemon required.
+
+For the Python (non-Docker) install path see [docs/quickstart-no-docker.md](docs/quickstart-no-docker.md).

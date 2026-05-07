@@ -107,7 +107,7 @@ LocalMCP runs in **bridge networking** with explicit port publishing (`docker ru
 Check the actual bind from inside the container — pincher should appear once, on loopback:
 
 ```bash
-docker exec rancher-localmcp \
+docker exec localmcp \
   awk '$2 ~ /:1F90$/ { print }' /proc/net/tcp
 # Expect: ... 0100007F:1F90 ... LISTEN
 # (0100007F = 127.0.0.1 byte-reversed; 1F90 = 8080)
@@ -117,7 +117,7 @@ If you see `00000000:1F90` in that list, pincher is bound to all interfaces and 
 
 ## Worked example: pincher
 
-The default config wires pincher's REST + dashboard at `http://localhost:8000/pincher/v1/...`. After `make localmcp-up && make localmcp-load`:
+The default config wires pincher's REST + dashboard at `http://localhost:8000/pincher/v1/...`. After `make up`:
 
 | Original (direct, blocked) | Through LocalMCP |
 |---|---|
@@ -156,8 +156,8 @@ If the backend is running but its HTTP sidecar isn't reachable (wrong port, cras
 Shouldn't happen with the current bridge-networking setup. If it does, you're probably still on an older container started with `--network host`. Stop and rebuild:
 
 ```bash
-make localmcp-down
-make localmcp-up
+make down
+make up
 ```
 
 The Makefile's `docker run` should now include `-p 127.0.0.1:8000:8000` and **not** `--network host`. If you've customized the run line, that's the regression to look for.

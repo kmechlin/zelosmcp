@@ -1,34 +1,29 @@
 # Quickstart
 
-Get LocalMCP running and wired into your IDE in five minutes. Two parallel paths below — pick the one that matches your IDE.
+Get LocalMCP running and wired into your IDE in five minutes.
 
 ## Step 1 — Start LocalMCP
 
-Two ways to run it; pick whichever matches your environment.
-
-**As a Python process** (works anywhere with Python 3.10+):
+If you have Docker, this is a single command:
 
 ```bash
-pip install -e .
-localmcp
+make init-env       # optional one-time wizard: writes .env (USER_DATA_ROOT, ports, etc.)
+make up             # build image (if missing) + start container + load default backends
 ```
 
-**As a Docker container** (recommended on macOS — bundles Node.js, `uv`, `git`, and persistent volumes for the npx/uv caches):
+`make up` chains image build (if missing) → container start → `load` (POSTs the default backend config) → `index` (warms pincher's index for the current repo) → `rule` (writes the Cursor `.mdc` rule file). The result: open [http://localhost:8000](http://localhost:8000) and the web UI shows three default backends running ([pincher](default-mcps.md#pincher), [docker](default-mcps.md#docker), [kubernetes](default-mcps.md#kubernetes)).
 
-```bash
-make localmcp-up        # starts the container
-make localmcp-load      # POSTs configs/default-localmcp.json into it
-```
+`make init-env` is optional — `make up` works against the Makefile defaults if you skip it.
 
-Either way, open `http://localhost:8000` to confirm the web UI is up. The four default backends ([kubernetes, filesystem, pincher, docker](default-mcps.md)) should be running.
+> Behind a corporate TLS-intercepting proxy on macOS? `make init-env` auto-detects the corp cert in your keychain and points `DOCKERFILE` at the cert-aware multi-stage build. See [setup-rancher-desktop.md](setup-rancher-desktop.md) for the full detail.
 
-> Behind a corporate TLS-intercepting proxy on macOS? See [setup-rancher-desktop.md](setup-rancher-desktop.md) for the cert-aware build path.
+> No Docker available? See [quickstart-no-docker.md](quickstart-no-docker.md) for the Python pip install path.
 
-## Step 2 — Wire your IDE into LocalMCP
+## Step 2 — Wire your IDE
 
-### Path A — Cursor
+### Cursor
 
-In the LocalMCP web UI, find the **Cursor mcp.json (aggregated)** panel and click **Copy**. The snippet looks like:
+In the LocalMCP web UI, copy the **Cursor mcp.json (aggregated)** snippet into `.cursor/mcp.json` (per-project) or `~/.cursor/mcp.json` (global):
 
 ```json
 {
@@ -41,28 +36,13 @@ In the LocalMCP web UI, find the **Cursor mcp.json (aggregated)** panel and clic
 }
 ```
 
-Paste it into:
+The Cursor `.mdc` rule was already written for you by `make up` (at the path you picked in `make init-env`, default `.cursor/rules/localmcp.mdc`). It teaches the agent about every tool LocalMCP's aggregator exposes — so the agent picks `pincher__search` over recursive `grep`, `filesystem__edit_file` over `sed`, etc. Reload Cursor and you're done.
 
-- **Per-project**: `.cursor/mcp.json` in your repo root, or
-- **Globally**: `~/.cursor/mcp.json`
+Full reference (rule generator parameters, scoped rules, IDE specifics): [cursor-integration.md](cursor-integration.md).
 
-Cursor picks it up on next reload.
+### VSCode + GitHub Copilot
 
-Now scroll to the **Cursor rule (.mdc)** panel, leave the access dropdown on **Read-only (safe)**, and click **Copy**. Save the body to your project as `.cursor/rules/localmcp.mdc`:
-
-```bash
-mkdir -p .cursor/rules
-curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only' \
-  > .cursor/rules/localmcp.mdc
-```
-
-This rule tells the Cursor agent every tool the aggregator exposes, with arg summaries and mutability markers — so it knows to prefer `filesystem__edit_file` over `sed`, `pincher__search` over recursive `grep`, etc.
-
-Full walkthrough: [cursor-integration.md](cursor-integration.md).
-
-### Path B — VSCode + GitHub Copilot
-
-VSCode uses a slightly different MCP config shape (`servers` key, `type: "http"`):
+VSCode uses a slightly different MCP config shape. Place this in `.vscode/mcp.json` (per-project) or via Command Palette → `MCP: Open User Configuration`:
 
 ```json
 {
@@ -75,62 +55,34 @@ VSCode uses a slightly different MCP config shape (`servers` key, `type: "http"`
 }
 ```
 
-Place it in:
-
-- **Per-project**: `.vscode/mcp.json` in your repo root, or
-- **Globally**: Command Palette → `MCP: Open User Configuration`
-
-VSCode will prompt you to trust the server the first time it connects. Confirm and Copilot has access to every tool LocalMCP exposes.
-
-For agent guidance, generate a Copilot custom-instructions file (same body as the Cursor rule, no YAML frontmatter):
+For Copilot agent guidance, generate a `copilot-instructions.md`:
 
 ```bash
 mkdir -p .github
-curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only&format=copilot-instructions' \
+curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
   > .github/copilot-instructions.md
 ```
 
-Full walkthrough: [vscode-integration.md](vscode-integration.md).
+Reload VSCode (Cmd+Shift+P → `Developer: Reload Window`) and Copilot has access to every LocalMCP tool plus the rule guiding which to use.
+
+Full reference: [vscode-integration.md](vscode-integration.md).
 
 ## Step 3 — Try it out
 
 Open a new chat in your IDE. Ask:
 
-- **"Show me every container running on my Docker daemon."** Agent should call `docker__list_containers` (or `list_containers` in raw passthrough mode).
-- **"Find every Python file that imports `asyncio`."** Agent should reach for `pincher__search` (FTS5 query against the pre-built symbol index).
-- **"Read the contents of the README and summarize."** Agent should use `filesystem__read_text_file`.
+- **"Show me every container running on my Docker daemon."** — agent calls `docker__list_containers`.
+- **"Find every Python file that imports `asyncio` in this repo."** — agent calls `pincher__search` against the pre-built symbol index.
+- **"Summarize this codebase."** — agent calls `pincher__architecture`.
 
-If it doesn't pick the MCP tool, the rule may not be loaded — verify the file lives in `.cursor/rules/` (Cursor) or `.github/` (VSCode) and reload the IDE.
+If the agent doesn't pick the MCP tool, the rule may not have loaded — check the file lives at the path you configured (`.cursor/rules/localmcp.mdc` per-project or `~/.cursor/rules/localmcp.mdc` global) and reload the IDE.
 
-## Step 4 — Re-generate the rule when backends change
+## When to refresh the rule
 
-The rule is a snapshot of the catalog at the time you generated it. When you start/stop backends or add new ones, regenerate:
+The `.mdc` is a snapshot of the catalog at generation time. It auto-refreshes whenever you `make load` (or `make up`, which chains `load`). For ad-hoc regeneration after editing config or toggling backends manually, run `make rule` standalone.
 
-```bash
-# Cursor users
-curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only' \
-  > .cursor/rules/localmcp.mdc
-
-# VSCode users
-curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only&format=copilot-instructions' \
-  > .github/copilot-instructions.md
-```
-
-Or just reopen the **Cursor rule (.mdc)** panel in the web UI — it auto-refreshes whenever you toggle backends, so re-clicking Copy is enough.
-
-## Step 5 — When to switch to read-write mode
-
-Read-only is the default because it's safe: the rule body explicitly forbids the agent from calling tools that may mutate state (file edits, container starts, pod deletes, etc.). Switch the dropdown (or `?access=read-write`) when you actively want the agent making changes — for example, when pair-programming a feature where the agent should be editing files freely.
-
-[cursor-integration.md](cursor-integration.md) and [vscode-integration.md](vscode-integration.md) walk through the access modes in detail.
+To switch between read-only and read-write tool access (controls whether the agent is allowed to call `[mutates]` and `[destructive]` tools), re-run `make init-env` — or set `LOCALMCP_RULE_ACCESS=read-only` in `.env` and `make rule` again. See [cursor-integration.md](cursor-integration.md#access-read-only-vs-read-write) for the access-mode reference.
 
 ## Where next
 
-| You want to... | Read |
-|---|---|
-| Understand what's happening under the hood | [architecture.md](architecture.md) |
-| Set up Rancher Desktop for the Docker socket | [setup-rancher-desktop.md](setup-rancher-desktop.md) |
-| Customize the volume mounts on the LocalMCP container | [makefile.md](makefile.md) |
-| Add your own MCP backends to the loaded set | [configuration.md](configuration.md) |
-| Learn what the four default backends do | [default-mcps.md](default-mcps.md) |
-| Inspect the live tool catalog | [built-in-mcp.md](built-in-mcp.md) (the `/catalog` page) |
+Open issues you might hit (Docker socket on Rancher Desktop without admin, kubeconfig + bridge networking, etc.) live in [setup-rancher-desktop.md](setup-rancher-desktop.md). The README's [Documentation table](../README.md#documentation) indexes everything else.

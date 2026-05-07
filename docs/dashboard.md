@@ -58,7 +58,7 @@ process-local (counters reset on every restart). If the home directory
 isn't writable, the proxy falls back to in-memory automatically — the
 dashboard still works, but won't carry totals across restarts.
 
-When LocalMCP runs in Docker (`make localmcp-up`), `~/.localmcp`
+When LocalMCP runs in Docker (`make up`), `~/.localmcp`
 resolves to `/root/.localmcp` inside the container. That directory is
 backed by the named volume `localmcp-savings` (see
 [`configs/default-volumes.conf`](../configs/default-volumes.conf)), so
