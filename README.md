@@ -33,7 +33,7 @@ flowchart LR
     dispatch["dispatcher"]
     agg["Aggregator (/mcp)"]
     builtin["BuiltinServer (/localmcp/mcp)"]
-    other["pincher / docker / kubernetes /\n(filesystem optional, your own ...)"]
+    other["pincher / filesystem / docker /\nkubernetes / (your own ...)"]
     api["HTTP API + Web UI"]
   end
   cursor -->|"streamable-http"| dispatch
@@ -65,7 +65,8 @@ Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequ
 | `mcpServers` config schema and `/api/start` lifecycle | [docs/configuration.md](docs/configuration.md) |
 | Reverse-proxy backend HTTP sidecars under LocalMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
 | Tool-list compression (`get_tool_schema` / `invoke_tool` wrappers) | [docs/compression.md](docs/compression.md) |
-| Default MCP backends (pincher / docker / kubernetes; filesystem optional) | [docs/default-mcps.md](docs/default-mcps.md) |
+| Default MCP backends (pincher + filesystem mandatory; docker / kubernetes default) | [docs/default-mcps.md](docs/default-mcps.md) |
+| Repositories panel (discover git repos + write rules + index in pincher) | [docs/repositories.md](docs/repositories.md) |
 | Cursor integration + dynamic `.mdc` rule generation | [docs/cursor-integration.md](docs/cursor-integration.md) |
 | VSCode + GitHub Copilot integration + `copilot-instructions.md` | [docs/vscode-integration.md](docs/vscode-integration.md) |
 | Built-in MCP at `/localmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |

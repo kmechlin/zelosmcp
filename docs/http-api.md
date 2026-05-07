@@ -18,6 +18,9 @@ LocalMCP exposes a small REST control plane plus the MCP routes themselves. The 
 | GET | `/api/logs` | SSE stream of activity logs (each line tagged `[<name>]`) |
 | GET | `/api/catalog` | JSON snapshot of every backend's tools / prompts / resources / templates with full payloads (`inputSchema`, etc.). Same shape as `localmcp__get_aggregated_tool_catalog`. |
 | GET | `/api/cursor-rule` | Comprehensive agent-instructions body. Query params: `access`, `format`, `style`, `globs`. Returns `text/markdown`. |
+| GET | `/api/repos` | List git repos discovered under `/user_data_ro`. Query param `refresh=1` busts the 30 s cache. See [docs/repositories.md](repositories.md). |
+| POST | `/api/repos/write-rule` | Generate a Cursor / Copilot rule and write it into a discovered repo via the `filesystem` MCP. |
+| POST | `/api/repos/index` | Forward a repo path to `pincher__index` so its symbols are queryable. |
 | ANY | `/<name>/mcp` | Streamable-HTTP MCP endpoint for a named backend (raw passthrough) |
 | ANY | `/localmcp/mcp` | Always-on built-in MCP (raw passthrough) — self-introspection + rule-generation tools |
 | ANY | `/mcp` | **Recommended.** Aggregated Streamable-HTTP MCP — union of every running backend (incl. the built-in), namespaced as `<server>__<tool>` |

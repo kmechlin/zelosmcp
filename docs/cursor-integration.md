@@ -93,7 +93,7 @@ alwaysApply: true
 
 Generated from the LocalMCP aggregator at `http://localhost:8000/mcp`. Every tool below is reachable as `<server>__<tool>` (double underscore) on that single Cursor entry. ...
 
-Currently-loaded backends: `pincher`, `docker`, `kubernetes`. (Plus `filesystem` and any others you've added to your config.)
+Currently-loaded backends: `pincher`, `filesystem`, `docker`, `kubernetes`. (Plus any others you've added to your config.)
 
 ## Access mode: READ-ONLY
 
@@ -240,8 +240,13 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only' \
 
 …or just reopen the **Cursor rule (.mdc)** panel in the web UI — it auto-refreshes whenever the backend set changes.
 
+## Bulk-installing the rule into discovered repos
+
+The web UI's **Repositories** panel (right column, collapsed by default) walks `/user_data_ro` for git repos and lets you write `.cursor/rules/localmcp.mdc` directly into any of them with one click — same generator, same dropdowns, just persisted to disk via the running `filesystem` MCP. The same panel also exposes a `Index in pincher` button so the repo's symbols become queryable straight away. See [docs/repositories.md](repositories.md).
+
 ## See also
 
 - [built-in-mcp.md](built-in-mcp.md) — the `localmcp__generate_cursor_rule` MCP tool (same generator, called via MCP), the inline catalog UI, the `/catalog` standalone page.
+- [repositories.md](repositories.md) — write the generated rule into any discovered git repo without leaving the UI.
 - [vscode-integration.md](vscode-integration.md) — same workflow for VSCode + GitHub Copilot.
 - [http-api.md](http-api.md) — full reference for `/api/cursor-rule`.

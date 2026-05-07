@@ -223,7 +223,8 @@ All of these come back as 400-status JSON: `{"ok": false, "error": "<message>"}`
 
 ## See also
 
-- [default-mcps.md](default-mcps.md) — what the default backends in `default-localmcp.json` do (mandatory `pincher` plus `kubernetes` and `docker`; optional `filesystem`).
+- [default-mcps.md](default-mcps.md) — what the default backends do (mandatory `pincher` and `filesystem`; default-config `kubernetes` and `docker`).
+- [repositories.md](repositories.md) — Repositories UI panel and `/api/repos*` endpoints (write rules into discovered repos, index them in pincher).
 - [reverse-proxy.md](reverse-proxy.md) — full reference for the optional `reverseProxy` block.
 - [compression.md](compression.md) — full reference for the optional `compress` block.
 - [http-api.md](http-api.md) — full HTTP API reference for `/api/start` and friends.
