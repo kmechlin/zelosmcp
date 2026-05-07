@@ -1,9 +1,0 @@
-{
-  "content": [
-    {
-      "text": "{\n  \"_meta\": {\n    \"cost_avoided\": \"$0.0000\",\n    \"latency_ms\": 0,\n    \"tokens_saved\": 0,\n    \"tokens_used\": 244\n  },\n  \"count\": 4,\n  \"projects\": [\n    {\n      \"edges\": 0,\n      \"files\": 27,\n      \"id\": \"/user_data_ro/localmcp\",\n      \"indexed_at\": \"2026-05-07T07:41:23Z\",\n      \"name\": \"localmcp\",\n      \"path\": \"/user_data_ro/localmcp\",\n      \"symbols\": 430\n    },\n    {\n      \"edges\": 0,\n      \"files\": 25,\n      \"id\": \"/user_data_ro/nike.automation_abstraction_infra\",\n      \"indexed_at\": \"2026-05-07T07:43:52Z\",\n      \"name\": \"nike.automation_abstraction_infra\",\n      \"path\": \"/user_data_ro/nike.automation_abstraction_infra\",\n      \"symbols\": 101\n    },\n    {\n      \"edges\": 0,\n      \"files\": 0,\n      \"id\": \"/user_data_ro/nike.qre_datacenter_tools\",\n      \"indexed_at\": \"2026-05-07T08:10:13Z\",\n      \"name\": \"nike.qre_datacenter_tools\",\n      \"path\": \"/user_data_ro/nike.qre_datacenter_tools\",\n      \"symbols\": 0\n    },\n    {\n      \"edges\": 4777,\n      \"files\": 38058,\n      \"id\": \"/user_data_ro\",\n      \"indexed_at\": \"2026-05-06T22:12:12Z\",\n      \"name\": \"user_data_ro\",\n      \"path\": \"/user_data_ro\",\n      \"symbols\": 226469\n    }\n  ]\n}",
-      "type": "text"
-    }
-  ],
-  "isError": false
-}

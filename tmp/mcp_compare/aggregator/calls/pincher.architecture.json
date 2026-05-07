@@ -1,9 +1,0 @@
-{
-  "content": [
-    {
-      "text": "{\n  \"_meta\": {\n    \"cost_avoided\": \"$6.8547\",\n    \"latency_ms\": 1,\n    \"tokens_saved\": 2284903,\n    \"tokens_used\": 97\n  },\n  \"edge_kinds\": {},\n  \"entry_points\": null,\n  \"hotspots\": null,\n  \"languages\": {\n    \"Python\": 457\n  },\n  \"node_kinds\": {\n    \"Class\": 86,\n    \"Function\": 142,\n    \"Method\": 229\n  },\n  \"project\": {\n    \"ID\": \"/user_data_ro/localmcp\",\n    \"Path\": \"/user_data_ro/localmcp\",\n    \"Name\": \"localmcp\",\n    \"IndexedAt\": \"2026-05-07T16:26:22Z\",\n    \"FileCount\": 28,\n    \"SymCount\": 457,\n    \"EdgeCount\": 0\n  }\n}",
-      "type": "text"
-    }
-  ],
-  "isError": false
-}
