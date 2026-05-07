@@ -124,7 +124,7 @@ See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the c
 
 ### Compression (`compress`)
 
-Any backend can declare an optional `compress` block. When set, LocalMCP swaps the backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair — `<backend>__get_tool_schema` and `<backend>__invoke_tool` — slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`.
+Every backend is compressed by default — LocalMCP automatically swaps each backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair on the aggregator at `/mcp` (`<backend>__get_tool_schema` and `<backend>__invoke_tool`), slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`. Add a `compress` block only when you want to override the default level/scope, or set `"compress": null` to opt the backend out entirely.
 
 ```json
 "kubernetes": {

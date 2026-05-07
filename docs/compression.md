@@ -1,6 +1,6 @@
 # Tool-list compression
 
-LLMs see every MCP tool's full description and JSON schema in `tools/list`. With several backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. LocalMCP's optional `compress` block on each backend swaps a backend's full tool surface for a small two-tool wrapper pair, slashing the schema-fetch token cost without losing functionality.
+LLMs see every MCP tool's full description and JSON schema in `tools/list`. With several backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. LocalMCP **compresses every backend by default** — swapping each backend's full tool surface for a small two-tool wrapper pair on the aggregator (`/mcp`) — so the schema-fetch token cost stays small without losing functionality. The `compress` block on a backend lets you override or disable that default.
 
 The agent flow becomes a two-step lookup:
 
@@ -13,15 +13,15 @@ For very large backends, level=`max` collapses the wrapper pair into a single `l
 
 ## Schema
 
-Add a `compress` block to any `mcpServers.<name>` entry:
+Every backend gets `compress: { level: "medium", scope: "aggregator" }` automatically. Add a `compress` block to any `mcpServers.<name>` entry only when you want to override the default or disable it:
 
 ```json
 "kubernetes": {
   "command": "npx",
   "args": ["-y", "kubernetes-mcp-server@latest"],
   "compress": {
-    "level": "medium",
-    "scope": "aggregator"
+    "level": "high",
+    "scope": "global"
   }
 }
 ```
@@ -31,7 +31,17 @@ Add a `compress` block to any `mcpServers.<name>` entry:
 | `level` | no | string | `"medium"` | One of `"low"`, `"medium"`, `"high"`, `"max"`. Controls how aggressively the catalog is summarised. |
 | `scope` | no | string | `"aggregator"` | One of `"catalog"`, `"aggregator"`, `"global"`. Controls which endpoints surface the wrappers (vs. the full tool list). |
 
-An empty `"compress": {}` block is fine — it expands to the defaults.
+The `compress` value can take any of these forms:
+
+| Value | Effect |
+|---|---|
+| key omitted | Default — `level: "medium"`, `scope: "aggregator"` (compressed at `/mcp`). |
+| `"compress": {}` | Same as omitting the key — fills in all defaults. |
+| `"compress": {"level": "high"}` | Override one field; remaining fields take their defaults. |
+| `"compress": null` | Opt **out** entirely. The backend's full tool surface flows through `/mcp` unchanged. |
+| `"compress": false` | Same as `null` — convenience opt-out. |
+
+The always-on builtin (`localmcp__*`) is never compressed — those tools are tiny and self-documenting, and compressing them would hide the discovery surface.
 
 ## Levels
 
@@ -98,9 +108,9 @@ The same catalog feeds the cursor-rule generator (`/api/cursor-rule` and `localm
 
 ## Defaults shipped with LocalMCP
 
-The mandatory backends in [configs/mandatory-localmcp.json](../configs/mandatory-localmcp.json) ship with `compress: { level: "medium" }` (scope omitted, defaults to `aggregator`). The default-config kubernetes entry in [configs/default-localmcp.json](../configs/default-localmcp.json) does the same. Override per-backend by editing those files or POSTing your own config to `/api/start`.
+Every backend (mandatory or user-supplied) gets `compress: { level: "medium", scope: "aggregator" }` automatically — no per-backend `compress` block is required. The explicit blocks you'll see in [configs/mandatory-localmcp.json](../configs/mandatory-localmcp.json) and [configs/default-localmcp.json](../configs/default-localmcp.json) are kept only as documentation; removing them does not change behavior.
 
-To turn compression off for a specific backend, drop the `compress` block (it's optional) or set `level: "low"`.
+To opt **out** for a specific backend, set `"compress": null` in its `mcpServers` entry. To keep the wrapper but stop summarising descriptions, set `"compress": { "level": "low" }` (full descriptions, no wrapper substitution at the wire).
 
 ## Token-savings sanity check
 

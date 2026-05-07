@@ -416,25 +416,45 @@ class TestReverseProxy:
         }
 
 
-def _stdio_with_compress(rp: dict | None) -> dict:
+_OMITTED = object()  # sentinel: do not set the key at all
+
+
+def _stdio_with_compress(rp) -> dict:
     """Build a single-server config wrapping ``rp`` as the compress block.
 
-    Pass ``None`` to omit the block entirely and exercise the "no
-    compression configured" path.
+    Pass the ``_OMITTED`` sentinel to omit the key entirely (exercises
+    the default-on path); pass ``None`` / ``False`` / a dict to set it
+    explicitly.
     """
     entry: dict = {"command": "echo", "args": ["a"]}
-    if rp is not None:
+    if rp is not _OMITTED:
         entry["compress"] = rp
     return {"mcpServers": {"alpha": entry}}
 
 
 class TestCompressSpec:
-    def test_block_absent_means_no_compress(self):
+    def test_block_absent_defaults_to_medium_aggregator(self):
+        # Omitting the block is the recommended path: every backend
+        # gets `medium` compression at the aggregator unless it opts
+        # out explicitly.
+        specs, _ = parse_config(_stdio_with_compress(_OMITTED))
+        c = specs[0].compress
+        assert c is not None
+        assert c.level == "medium"
+        assert c.scope == "aggregator"
+
+    def test_explicit_null_disables_compress(self):
+        # `compress: null` is the documented opt-out form.
         specs, _ = parse_config(_stdio_with_compress(None))
         assert specs[0].compress is None
 
+    def test_explicit_false_disables_compress(self):
+        # JSON booleans are accepted as a convenience opt-out form.
+        specs, _ = parse_config(_stdio_with_compress(False))
+        assert specs[0].compress is None
+
     def test_empty_block_uses_defaults(self):
-        # `compress: {}` means "default everything".
+        # `compress: {}` is equivalent to omitting the block.
         specs, _ = parse_config(_stdio_with_compress({}))
         c = specs[0].compress
         assert c is not None

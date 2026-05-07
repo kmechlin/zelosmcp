@@ -1,0 +1,18 @@
+[
+  {
+    "arguments": [
+      {
+        "description": "Unique name of the project",
+        "name": "name",
+        "required": true
+      },
+      {
+        "description": "Describe containers you want",
+        "name": "containers",
+        "required": true
+      }
+    ],
+    "description": "Treat the LLM like a Docker Compose manager",
+    "name": "docker_compose"
+  }
+]
