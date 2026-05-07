@@ -3,7 +3,7 @@
 LocalMCP ships with two layers of pre-wired MCP backends:
 
 - **Mandatory** ([`configs/mandatory-localmcp.json`](../configs/mandatory-localmcp.json)) — `pincher` is merged into every `/api/start` payload before parsing. User configs can override its args/env (same-name entries win), but you don't have to copy it into your own config to get it running.
-- **Default** ([`configs/default-localmcp.json`](../configs/default-localmcp.json)) — `kubernetes` and `docker` ship in the file `make localmcp-load` POSTs by default. Drop them, change them, or replace the whole file by overriding `LOCALMCP_CONFIG`.
+- **Default** ([`configs/default-localmcp.json`](../configs/default-localmcp.json)) — `kubernetes` and `docker` ship in the file `make load` POSTs by default. Drop them, change them, or replace the whole file by overriding `LOCALMCP_CONFIG`.
 - **Optional** — `filesystem` is documented below for reference. It is no longer auto-merged into every payload; add it to your own user config (or to `configs/default-localmcp.json`) when you want file access exposed to the agent.
 
 | Backend | Layer | Upstream | Transport | Purpose |
@@ -126,7 +126,7 @@ docker build --build-arg PINCHER_VERSION=v0.3.0 -t localmcp .
 - `$USER_DATA_ROOT -> /user_data_ro` read-only (the host tree being indexed)
 - `localmcp-pincher -> /tmp/pincher` (named volume — persists the SQLite index DB plus its WAL/SHM siblings across container restarts)
 
-`make localmcp-warm-index` calls `pincher__index` with `path=/user_data_ro/<rel-to-USER_DATA_ROOT>` (the current git repo) post-startup so the index DB is ready by the first agent call. Subsequent runs are fast (skipped via xxh3 content-hash). Use `make localmcp-warm-index-full` to index the whole `/user_data_ro` mount instead.
+Pincher's WORKDIR is set to `/user_data_ro` in the container, so the kmechlin fork auto-indexes the entire user tree in the background a few minutes after spawn — no manual warm-up required. For the active git repo, `make load` chains `make index` so the current repo is queryable in seconds (toggle via `LOCALMCP_WARM_ON_LOAD=0`). Use `make index-full` on demand to force a re-scan of the whole `/user_data_ro` mount; pincher's auto-scan covers the same ground asynchronously.
 
 ### Stable symbol IDs
 
@@ -146,7 +146,7 @@ Pincher's MCP server doesn't currently ship `readOnlyHint` / `destructiveHint` a
 
 ### Gotchas
 
-- **First call needs `index`.** Pincher's tools (`search`, `symbol`, `query`, ...) return empty until you've called `index path=/user_data_ro/<rel>` (or `path=/user_data_ro`) at least once. `make localmcp-warm-index` does this for you; otherwise the agent has to call `pincher__index` itself before anything else.
+- **First call needs `index`.** Pincher's tools (`search`, `symbol`, `query`, ...) return empty until at least one `pincher__index` call has populated the DB. With WORKDIR set to `/user_data_ro` the auto-scan handles this on its own a few minutes after spawn; `make load` (chained from `make up`) also calls `pincher__index` for the current repo so it's hot in seconds. Otherwise the agent has to call `pincher__index` itself before anything else.
 - **Language coverage is uneven.** Go gets full AST extraction (confidence 1.0). Python / TypeScript / JavaScript / Rust / Java / Kotlin use stable regex (0.85). Ruby / PHP / C / C++ / C# use approximate regex (0.70). See [the README's language-support table](https://github.com/kwad77/pincherMCP#language-support) for the per-language list.
 - **SQLite serializes writes.** Pincher uses `SetMaxOpenConns(1)` for the writer pool. Concurrent re-indexes (e.g. running `pincher index` from two terminals) will queue rather than collide; healthy default but worth knowing for large-repo workflows.
 
@@ -213,7 +213,7 @@ Reads the kubeconfig at `/root/.kube/config` (mounted from your host).
 
 LocalMCP runs in bridge networking, so the container's `127.0.0.1` is the container itself, not your Mac. Reaching Rancher Desktop / Docker Desktop's K8s API at `https://127.0.0.1:6443` from inside the container won't work directly.
 
-`make localmcp-up` solves this by adding a **`localmcp`** cluster + context to your `~/.kube/config` (idempotent host-side `kubectl config set-cluster/set-context`) that points at `https://host.docker.internal:6443`. Your existing contexts and `current-context` are unchanged.
+`make up` solves this by adding a **`localmcp`** cluster + context to your `~/.kube/config` (idempotent host-side `kubectl config set-cluster/set-context`) that points at `https://host.docker.internal:6443`. Your existing contexts and `current-context` are unchanged.
 
 The agent then uses the localmcp context for in-cluster work:
 
@@ -224,7 +224,7 @@ The agent then uses the localmcp context for in-cluster work:
 
 For remote clusters (EKS, AKS, GKE, …) just pass that cluster's context name instead. You can verify the localmcp context from the host first: `kubectl --context localmcp get nodes`.
 
-To remove the auto-added entries: `make localmcp-clean-kubeconfig`.
+To remove the auto-added entries: `make clean-kubeconfig`.
 
 ### Tool surface (19 tools)
 

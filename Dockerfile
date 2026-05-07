@@ -71,6 +71,16 @@ COPY configs/mandatory-localmcp.json /app/configs/mandatory-localmcp.json
 
 RUN pip install --no-cache-dir -e .
 
+# Pincher (kmechlin fork) auto-indexes its CWD shortly after spawn. Point
+# CWD at /user_data_ro so the mounted user source tree gets indexed in
+# the background — no manual `make index-full` needed. localmcp itself
+# was installed editable above and is importable from any CWD, so this
+# doesn't affect uvicorn startup. /user_data_ro is created here so
+# spawned subprocesses have a valid CWD even when no volume is mounted
+# (in that case pincher's auto-scan no-ops on the empty in-image dir).
+RUN mkdir -p /user_data_ro
+WORKDIR /user_data_ro
+
 EXPOSE 8000
 
 CMD ["sh", "-c", "uvicorn localmcp.app:app --host ${HOST} --port ${PORT}"]

@@ -93,7 +93,7 @@ alwaysApply: true
 
 Generated from the LocalMCP aggregator at `http://localhost:8000/mcp`. Every tool below is reachable as `<server>__<tool>` (double underscore) on that single Cursor entry. ...
 
-Currently-loaded backends: `filesystem`, `pincher`, `docker`, `kubernetes`.
+Currently-loaded backends: `pincher`, `docker`, `kubernetes`. (Plus `filesystem` and any others you've added to your config.)
 
 ## Access mode: READ-ONLY
 

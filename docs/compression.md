@@ -1,6 +1,6 @@
 # Tool-list compression
 
-LLMs see every MCP tool's full description and JSON schema in `tools/list`. With four backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. LocalMCP's optional `compress` block on each backend swaps a backend's full tool surface for a small two-tool wrapper pair, slashing the schema-fetch token cost without losing functionality.
+LLMs see every MCP tool's full description and JSON schema in `tools/list`. With several backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. LocalMCP's optional `compress` block on each backend swaps a backend's full tool surface for a small two-tool wrapper pair, slashing the schema-fetch token cost without losing functionality.
 
 The agent flow becomes a two-step lookup:
 

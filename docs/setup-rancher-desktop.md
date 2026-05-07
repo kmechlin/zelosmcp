@@ -75,7 +75,7 @@ docker context use rancher-desktop
 
 ## How LocalMCP picks up your daemon
 
-The LocalMCP container is started by `make localmcp-up`. It uses two daemons in different ways:
+The LocalMCP container is started by `make up`. It uses two daemons in different ways:
 
 1. **`docker run` itself** uses whichever daemon your **active `docker context`** points at. That's the daemon the LocalMCP container runs on.
 2. **The `docker` MCP backend inside the container** talks to the daemon via the Unix socket bind-mounted into the container. The host path of that socket is configurable via the `DOCKER_SOCK_FILE` Make variable; container path is always `/var/run/docker.sock`.
@@ -90,7 +90,7 @@ For Rancher Desktop without admin access:
 
 ```bash
 docker context use rancher-desktop
-make localmcp-up DOCKER_SOCK_FILE=$HOME/.rd/docker.sock
+make up DOCKER_SOCK_FILE=$HOME/.rd/docker.sock
 ```
 
 The mismatch case (running the container on Docker Desktop while bind-mounting Rancher Desktop's socket) fails with:
@@ -115,14 +115,14 @@ $KUBERNETES_CONFIG_FILE:/root/.kube/config:ro
 Override the host path if your kubeconfig lives elsewhere:
 
 ```bash
-make localmcp-up KUBERNETES_CONFIG_FILE=/path/to/your/kubeconfig
+make up KUBERNETES_CONFIG_FILE=/path/to/your/kubeconfig
 ```
 
 ### Bridge networking + the `localmcp` context
 
 LocalMCP runs in bridge networking (only `:8000` is published to the host — see [reverse-proxy.md](reverse-proxy.md)). That means `127.0.0.1` inside the container is the container itself, not your Mac. A kubeconfig pointing at `https://127.0.0.1:6443` is unreachable from inside the container as written.
 
-Rather than rewriting your kubeconfig destructively, `make localmcp-up` runs **`localmcp-kubeconfig`** as a prerequisite. It uses host-side `kubectl` to add a single new cluster + context to your existing kubeconfig:
+Rather than rewriting your kubeconfig destructively, `make up` runs **`make kubeconfig`** as a prerequisite. It uses host-side `kubectl` to add a single new cluster + context to your existing kubeconfig:
 
 ```bash
 kubectl config set-cluster localmcp \
@@ -133,7 +133,7 @@ kubectl config set-context localmcp \
   --user=<the-user-from-your-current-context>
 ```
 
-These commands are idempotent — running `make localmcp-up` repeatedly is safe and does nothing on the second run. Your existing contexts and `current-context` are untouched.
+These commands are idempotent — running `make up` repeatedly is safe and does nothing on the second run. Your existing contexts and `current-context` are untouched.
 
 `kubernetes-mcp-server` is multi-cluster aware by default, so every tool call accepts an optional `context` argument. The agent passes `context: "localmcp"` to talk to your local cluster:
 
@@ -180,14 +180,14 @@ The `tls-server-name=127.0.0.1` makes the TLS handshake validate against `127.0.
 If you want to remove the auto-added entries (e.g. before uninstalling LocalMCP):
 
 ```bash
-make localmcp-clean-kubeconfig
+make clean-kubeconfig
 ```
 
 ## Common gotchas
 
-- **`mcp-server-docker` returns nothing or 503 errors.** The Docker MCP isn't running, or the socket bind-mount didn't connect. Verify with `make localmcp-status` (showing the docker backend as `running`) and that the mount in the `docker run` command points at a valid socket file on your host. See [makefile.md](makefile.md) for `make localmcp-status` output details.
-- **`kubectl` works on the host but `kubernetes__pods_list` fails inside the container.** Probably a kubeconfig auth that uses a credential helper or local certs the container can't reach. Check `make localmcp-shell` then `cat /root/.kube/config` from inside.
-- **`docker context use rancher-desktop` sticks across reboots but `make localmcp-up` still uses Docker Desktop.** Make sure you're not exporting `DOCKER_HOST` in your shell rc (it overrides the active context). Also: each `make` invocation reads the active context fresh, so once `docker context use` succeeds, the next `make localmcp-up` does the right thing.
+- **`mcp-server-docker` returns nothing or 503 errors.** The Docker MCP isn't running, or the socket bind-mount didn't connect. Verify with `make status` (showing the docker backend as `running`) and that the mount in the `docker run` command points at a valid socket file on your host. See [makefile.md](makefile.md) for `make status` output details.
+- **`kubectl` works on the host but `kubernetes__pods_list` fails inside the container.** Probably a kubeconfig auth that uses a credential helper or local certs the container can't reach. Check `make shell` then `cat /root/.kube/config` from inside.
+- **`docker context use rancher-desktop` sticks across reboots but `make up` still uses Docker Desktop.** Make sure you're not exporting `DOCKER_HOST` in your shell rc (it overrides the active context). Also: each `make` invocation reads the active context fresh, so once `docker context use` succeeds, the next `make up` does the right thing.
 - **Random `Operation not supported` on stdout from heredoc-using shell wrappers.** Cosmetic — your shell's `$TMPDIR` is missing/read-only. Doesn't affect the actual commands. Set `TMPDIR=/tmp` if it bothers you.
 
 ## See also

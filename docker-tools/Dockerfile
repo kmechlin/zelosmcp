@@ -90,15 +90,15 @@ FROM extra-os AS localmcp
 
   RUN pip install --no-cache-dir -e /opt/localmcp
 
-  # Runtime CWD is deliberately an empty directory rather than
-  # /opt/localmcp. Pincher (spawned as a stdio child of localmcp)
-  # inherits this CWD, and the kmechlin pincher fork auto-indexes
-  # whatever it finds there — so leaving WORKDIR on /opt/localmcp
-  # produced a phantom "/opt/localmcp" project on the dashboard
-  # alongside the legit /user_data_ro/workspace/<repo> one. An empty
-  # CWD has nothing to index. The localmcp package was installed
-  # editable above and is importable from any working directory.
-  RUN mkdir -p /var/lib/default
-  WORKDIR /var/lib/default
+  # Pincher (kmechlin fork) auto-indexes its CWD shortly after spawn.
+  # Point CWD at /user_data_ro so the mounted user source tree gets
+  # indexed in the background — no manual `make index-full` needed.
+  # localmcp itself was installed editable above and is importable
+  # from any CWD, so this doesn't affect uvicorn startup.
+  # /user_data_ro is created here so spawned subprocesses have a valid
+  # CWD even when no volume is mounted (in that case pincher's
+  # auto-scan no-ops on the empty in-image dir).
+  RUN mkdir -p /user_data_ro
+  WORKDIR /user_data_ro
   EXPOSE 8000
   CMD ["sh", "-c", "uvicorn localmcp.app:app --host 0.0.0.0 --port 8000"]
