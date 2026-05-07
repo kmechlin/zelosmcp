@@ -1,0 +1,26 @@
+{
+  "calls": {
+    "docker.list_networks": {
+      "bytes": 1992,
+      "tokens": 738
+    }
+  },
+  "label": "docker",
+  "prompts": {
+    "bytes": 377,
+    "count": 1,
+    "tokens": 94
+  },
+  "resources": {
+    "bytes": 6094,
+    "count": 16,
+    "tokens": 2506
+  },
+  "tokenizer": "tiktoken/cl100k_base",
+  "tools": {
+    "bytes": 27562,
+    "count": 19,
+    "tokens": 5798
+  },
+  "url": "http://localhost:8000/docker/mcp"
+}

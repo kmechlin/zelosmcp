@@ -326,8 +326,21 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     if "reverseProxy" in raw and raw["reverseProxy"] is not None:
         reverse_proxy = _parse_reverse_proxy(name, raw["reverseProxy"])
 
-    compress: CompressSpec | None = None
-    if "compress" in raw and raw["compress"] is not None:
+    # Default-on: every backend gets `medium` compression scoped to the
+    # aggregator unless it explicitly opts out. Opt-out forms:
+    #   "compress": null        # disable entirely
+    #   "compress": false       # disable entirely (legacy convenience)
+    # Opt-in / override forms:
+    #   (key omitted)           # CompressSpec(level=medium, scope=aggregator)
+    #   "compress": {}          # same as omitted — dataclass defaults
+    #   "compress": {"level": "high"}             # override one field
+    #   "compress": {"level": "low", "scope": "global"}
+    compress: CompressSpec | None
+    if "compress" not in raw:
+        compress = CompressSpec()
+    elif raw["compress"] is None or raw["compress"] is False:
+        compress = None
+    else:
         compress = _parse_compress(name, raw["compress"])
 
     # Stdio: presence of `command` (matches Cursor's discrimination rule).

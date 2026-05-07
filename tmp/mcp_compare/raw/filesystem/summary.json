@@ -1,0 +1,26 @@
+{
+  "calls": {
+    "filesystem.list_allowed_directories": {
+      "bytes": 211,
+      "tokens": 61
+    }
+  },
+  "label": "filesystem",
+  "prompts": {
+    "bytes": 2,
+    "count": 0,
+    "tokens": 1
+  },
+  "resources": {
+    "bytes": 2,
+    "count": 0,
+    "tokens": 1
+  },
+  "tokenizer": "tiktoken/cl100k_base",
+  "tools": {
+    "bytes": 17282,
+    "count": 14,
+    "tokens": 4052
+  },
+  "url": "http://localhost:8000/filesystem/mcp"
+}

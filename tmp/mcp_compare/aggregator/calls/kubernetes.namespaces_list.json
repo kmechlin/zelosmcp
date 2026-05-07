@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "failed to list namespaces: Get \"https://127.0.0.1:6443/api\": dial tcp 127.0.0.1:6443: connect: connection refused",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

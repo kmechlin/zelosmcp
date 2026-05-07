@@ -1,0 +1,166 @@
+[
+  {
+    "description": "Generate a comprehensive agent-instructions body listing every tool from every currently-loaded backend, with per-tool description, arg summary, and a [readonly]/[mutates]/[destructive]/[?] mutability marker. `access=read-only` (default) appends a directive forbidding the agent from calling mutating tools; `access=read-write` still calls them out but allows them with confirmation. `format=cursor-mdc` (default) wraps with YAML frontmatter for `.cursor/rules/*.mdc`; `format=copilot-instructions` returns the plain body for `.github/copilot-instructions.md`. `tool_use=priority` (default) adds a 'prefer MCP tools over shell' directive plus a curated playbook for the mandatory backends; `tool_use=available` returns a neutral catalog with no prioritization.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "default": "read-only",
+          "description": "read-only: rule explicitly forbids the agent from calling tools tagged `[mutates]`, `[destructive]`, or `[?]`. read-write: tools are listed without prohibition; destructive tools still flagged for user confirmation.",
+          "enum": [
+            "read-only",
+            "read-write"
+          ],
+          "type": "string"
+        },
+        "format": {
+          "default": "cursor-mdc",
+          "description": "cursor-mdc: YAML frontmatter wrapper for `.cursor/rules/*.mdc` (Cursor IDE). copilot-instructions: plain markdown body for `.github/copilot-instructions.md` (VSCode + GitHub Copilot). `style` and `globs` are ignored when `format=copilot-instructions`.",
+          "enum": [
+            "cursor-mdc",
+            "copilot-instructions"
+          ],
+          "type": "string"
+        },
+        "globs": {
+          "description": "Glob pattern(s) for `style=scoped` (e.g. `**/*.py` or `src/**/*.{ts,tsx}`). Ignored when style is always-apply or format is copilot-instructions.",
+          "type": "string"
+        },
+        "style": {
+          "default": "always-apply",
+          "description": "always-apply: rule applies to every Cursor session (`alwaysApply: true`). scoped: applies only when files matching `globs` are open. Only meaningful for `format=cursor-mdc`.",
+          "enum": [
+            "always-apply",
+            "scoped"
+          ],
+          "type": "string"
+        },
+        "tool_use": {
+          "default": "priority",
+          "description": "priority (default): adds a 'prefer MCP tools over shell' directive plus a detailed playbook for mandatory backends (filesystem, pincher) filtered by access mode. available: neutral catalog with no prioritization directive or playbook section.",
+          "enum": [
+            "available",
+            "priority"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "generate_cursor_rule"
+  },
+  {
+    "description": "Compact view of every backend currently registered with localmcp: name, transport, running state, error, and spec/backend-info.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_loaded_servers"
+  },
+  {
+    "description": "Snapshot every running backend's full capability catalog: tools, prompts, resources, and resource templates with their `name` / `description` / `inputSchema` (or equivalent) payload. Names are returned WITHOUT the `<server>__` prefix. Equivalent to `GET /api/catalog` over HTTP.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_aggregated_tool_catalog"
+  },
+  {
+    "description": "Return a copy-pasteable `~/.cursor/mcp.json` snippet. Default shape is one aggregated entry pointing at /mcp; pass `shape='per-backend'` for one entry per running backend at /<name>/mcp.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "default": "localhost:8000",
+          "description": "Hostname:port (default `localhost:8000`).",
+          "type": "string"
+        },
+        "shape": {
+          "default": "aggregate",
+          "enum": [
+            "aggregate",
+            "per-backend"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "generate_cursor_mcp_json"
+  },
+  {
+    "description": "Start a single (already configured) backend by name. Refuses `localmcp` (the builtin can't be stopped/started).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "start_server"
+  },
+  {
+    "description": "Stop a single backend by name. Refuses `localmcp` (the builtin can't be stopped).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "stop_server"
+  },
+  {
+    "description": "Replace the entire backend set with the supplied Cursor-style config. Same JSON shape as POST /api/start.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "description": "Cursor `mcp.json`-shape object with an `mcpServers` map. Reserved names (`localmcp`, `mcp`, `api`, ...) are rejected.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "type": "object"
+    },
+    "name": "reload_config"
+  },
+  {
+    "description": "Return the compressed catalog for backends that have a `compress` block configured. Independent of compression scope: even a backend running with `scope=catalog` (which leaves the wire format uncompressed) still surfaces a compressed view here, since this tool is the documentation / discovery affordance. Each entry's render level defaults to whatever the backend was configured with; pass `level` to re-render at a different level.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Limit output to a single backend by name. Omit to return every backend with `compress` set.",
+          "type": "string"
+        },
+        "level": {
+          "description": "Re-render the catalog at this level instead of the per-backend configured level. Useful for previewing what `level=high` would look like without changing the live config.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_compressed_tools"
+  }
+]

@@ -1,0 +1,26 @@
+{
+  "calls": {
+    "kubernetes.namespaces_list": {
+      "bytes": 207,
+      "tokens": 72
+    }
+  },
+  "label": "kubernetes",
+  "prompts": {
+    "bytes": 620,
+    "count": 1,
+    "tokens": 132
+  },
+  "resources": {
+    "bytes": 2,
+    "count": 0,
+    "tokens": 1
+  },
+  "tokenizer": "tiktoken/cl100k_base",
+  "tools": {
+    "bytes": 25834,
+    "count": 20,
+    "tokens": 6132
+  },
+  "url": "http://localhost:8000/kubernetes/mcp"
+}
