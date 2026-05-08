@@ -69,6 +69,17 @@ _HOP_BY_HOP: frozenset[str] = frozenset({
     "content-length",
 })
 
+# Response headers that prevent the zelosMCP UI from embedding a
+# reverse-proxied dashboard in an iframe. Backends like pincher correctly set
+# these for direct exposure, but zelosMCP's reverseProxy feature is explicitly a
+# trusted same-origin embedding surface (e.g. /pincher/v1/dashboard in the
+# dashboard view). Strip them at the proxy boundary so the browser doesn't
+# block the iframe with a blank/broken frame.
+_FRAME_DENY_HEADERS: frozenset[str] = frozenset({
+    "x-frame-options",
+    "content-security-policy",
+})
+
 
 _log = logging.getLogger("zelosmcp.manager")
 
@@ -831,7 +842,7 @@ class ProxyManager:
         response_headers: list[tuple[bytes, bytes]] = []
         for raw_name, raw_value in upstream_resp.headers.raw:
             name_lower = raw_name.decode("latin-1").lower()
-            if name_lower in _HOP_BY_HOP:
+            if name_lower in _HOP_BY_HOP or name_lower in _FRAME_DENY_HEADERS:
                 continue
             # httpx auto-decompresses the upstream's body (gzip / br /
             # deflate) when we read .content, so a forwarded
@@ -923,6 +934,7 @@ class ProxyManager:
         # by setting a config-level one.
         outbound_headers: list[tuple[str, str]] = []
         seen_authorization = False
+        inbound_authorization_value: str | None = None
         seen_accept = False
         for raw_name, raw_value in scope.get("headers", []):
             hname = raw_name.decode("latin-1")
@@ -935,9 +947,43 @@ class ProxyManager:
                 continue
             if lower == "authorization":
                 seen_authorization = True
+                inbound_authorization_value = raw_value.decode("latin-1")
             if lower == "accept":
                 seen_accept = True
             outbound_headers.append((hname, raw_value.decode("latin-1")))
+
+        # Broker-mode provider: if this backend references an auth provider
+        # and that provider can mint a token for the current user, the
+        # minted token wins over any inbound Authorization header. This keeps
+        # /<name>/mcp aligned with the aggregator path: users authenticate in
+        # the zelosMCP GUI, then both raw passthrough and /mcp aggregate calls
+        # forward the brokered upstream token.
+        if spec.auth_provider:
+            provider = self.auth_registry.get_for_backend(
+                spec.name, spec.auth_provider
+            )
+            if provider is not None:
+                try:
+                    from zelosmcp.passthrough_pool import hash_authorization
+
+                    user_key = hash_authorization(inbound_authorization_value)
+                    minted = await provider.mint_token(
+                        user_key, spec.auth_audience
+                    )
+                except Exception as exc:
+                    _log.info(
+                        "provider %s mint_token for %s failed: %s",
+                        spec.auth_provider, spec.name, exc,
+                    )
+                    minted = None
+                if minted is not None:
+                    outbound_headers = [
+                        (k, v)
+                        for k, v in outbound_headers
+                        if k.lower() != "authorization"
+                    ]
+                    outbound_headers.append(("Authorization", minted))
+                    seen_authorization = True
 
         # Static fallback bearer (only when the caller didn't supply one).
         if not seen_authorization and spec.auth_bearer:
@@ -1005,7 +1051,7 @@ class ProxyManager:
                 response_headers: list[tuple[bytes, bytes]] = []
                 for raw_name, raw_value in upstream_resp.headers.raw:
                     name_lower = raw_name.decode("latin-1").lower()
-                    if name_lower in _HOP_BY_HOP:
+                    if name_lower in _HOP_BY_HOP or name_lower in _FRAME_DENY_HEADERS:
                         continue
                     response_headers.append((raw_name, raw_value))
 
@@ -1074,18 +1120,25 @@ class ProxyManager:
                 entry["transport"] = state.backend_info.get("transport")
                 entry["spec"] = dict(state.backend_info)
             # Passthrough surfacing: explicit per-row flag + auth_state +
-            # pool stats so the UI can render a "passthrough" badge and
-            # the agent (via `zelosmcp__list_loaded_servers`) can see
-            # whether a static fallback is configured. The pool stats
-            # come from the running state, so they reflect the live
-            # session count rather than configured caps.
+            # pool stats so the UI can render the right badge and the
+            # agent (via `zelosmcp__list_loaded_servers`) can see which
+            # auth mode is active. Provider-backed passthrough is broker
+            # mode (GUI device flow + token injection), not the legacy
+            # "needs inbound Authorization" mode.
             if getattr(state, "is_passthrough", False):
                 entry["passthrough"] = True
-                entry["auth_state"] = (
-                    "static_bearer"
-                    if getattr(state, "passthrough_auth_bearer", None)
-                    else "needs_inbound_token"
-                )
+                provider_name = getattr(spec, "auth_provider", None) if spec else None
+                if provider_name:
+                    provider = self.auth_registry.get(provider_name)
+                    entry["auth_state"] = (
+                        "provider_ready" if provider is not None
+                        else "provider_missing"
+                    )
+                    entry["auth_provider"] = provider_name
+                elif getattr(state, "passthrough_auth_bearer", None):
+                    entry["auth_state"] = "static_bearer"
+                else:
+                    entry["auth_state"] = "needs_inbound_token"
                 pool = getattr(state, "passthrough_pool", None)
                 if pool is not None:
                     try:

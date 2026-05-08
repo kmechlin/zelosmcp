@@ -43,7 +43,7 @@ FROM base-os AS extra-os
 # so we can install the corp cert (Alpine variant doesn't share the Debian
 # extra-os stage's update-ca-certificates plumbing). Source is controlled
 # by the PINCHER_REPO / PINCHER_REF global ARGs.
-FROM golang:1.24-bookworm AS pincher-build
+FROM golang:1.25-bookworm AS pincher-build
   ARG CERT
   ARG PINCHER_REPO
   ARG PINCHER_REF

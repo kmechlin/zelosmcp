@@ -1,32 +1,4 @@
 {
-  "_doc": [
-    "Auth-provider definitions for zelosMCP. Decoupled from the MCP",
-    "server catalog (configs/default-zelosmcp.json) so the two have",
-    "different sensitivity classes in remote deploys: this file is the",
-    "ConfigMap-vs-Secret 'Secret' half (provider IDs + scopes), the",
-    "server catalog is the ConfigMap half (URLs + commands).",
-    "",
-    "Top-level key is 'providers' — name -> spec. Each provider type",
-    "has its own required field set; see docs/oauth-passthrough.md.",
-    "",
-    "Default file ships ONE provider — github_oauth_app — to match the",
-    "default mcp catalog's single 'github' entry. Override by mounting",
-    "your own file at /etc/zelosmcp/auth-providers.json (k8s) or",
-    "pointing ZELOSMCP_AUTH_PROVIDERS_FILE at it (local).",
-    "",
-    "Field semantics by 'type':",
-    "  github_device_flow — public OAuth client, RFC 8628 device flow",
-    "      against github.com. Requires client_id (the public OAuth",
-    "      App identifier; safe to commit).",
-    "  okta_device_flow — public OAuth client against an Okta tenant.",
-    "      Requires issuer + client_id. Optional membership_hint",
-    "      surfaces in the GUI as 'Membership required: ...' so users",
-    "      know which Okta group they need before hitting the consent",
-    "      screen.",
-    "  passthrough — wraps the legacy 'forward Authorization verbatim'",
-    "      behaviour. Used by backends that opt out of the broker.",
-    "  static — wraps the legacy 'auth.bearer' static-token mode."
-  ],
   "providers": {
     "github_oauth_app": {
       "type": "github_device_flow",
@@ -38,6 +10,17 @@
         "gist",
         "workflow"
       ]
+    },
+    "nike_okta": {
+      "type": "okta_device_flow",
+      "issuer": "${ZELOSMCP_OKTA_ISSUER}",
+      "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "scopes": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
     }
   }
 }
