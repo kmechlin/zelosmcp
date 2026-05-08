@@ -867,8 +867,9 @@ class TestCatalogEndpoint:
     async def test_api_catalog_includes_builtin_with_eight_tools(self):
         """/api/catalog must include the always-on builtin row with all
         8 tools and well-formed inputSchemas, even when no user backend
-        is configured. (Was 7 before `list_compressed_tools` was added
-        for the compression discovery surface.)"""
+        is configured. (Count history: 7 → 8 with `list_compressed_tools`
+        → 9 with `warm_up_passthrough_auth` → 8 again after warm_up was
+        dropped in favour of compression-wrapper-driven OAuth.)"""
         app, _ = _fresh()
         async with _lifespan(app):
             async with _client(app) as c:
@@ -1515,3 +1516,282 @@ class TestBuiltinListCompressedTools:
             assert body["alpha"]["render_level"] == "high"
             for line in body["alpha"]["catalog"]:
                 assert "(" in line and ")" in line
+
+
+# ── OAuth-passthrough end-to-end through the ASGI dispatcher ─────────────
+
+
+class _FakeByteStream(httpx.AsyncByteStream):
+    """Minimal AsyncByteStream wrapper so MockTransport responses survive
+    the manager's ``aiter_raw()`` streaming loop. Real httpx responses
+    (against a real upstream) are already streamable; MockTransport
+    pre-buffers content into ``Response.content`` and marks the stream
+    consumed, which trips StreamConsumed on iteration. Wrapping the body
+    in an explicit AsyncByteStream restores streaming semantics.
+    """
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _streaming_response(
+    status: int,
+    headers: dict[str, str] | None = None,
+    *,
+    chunks: list[bytes] | None = None,
+    body: bytes | None = None,
+) -> httpx.Response:
+    """Build a streaming-capable httpx.Response for MockTransport."""
+    if chunks is None:
+        chunks = [body or b""]
+    return httpx.Response(
+        status,
+        headers=headers,
+        stream=_FakeByteStream(chunks),
+    )
+
+
+class TestPassthroughDispatcher:
+    """End-to-end coverage of /<name>/mcp dispatching to a passthrough
+    backend. Uses httpx.MockTransport on the manager's outbound client to
+    intercept upstream calls without ever opening a network connection.
+    """
+
+    @staticmethod
+    def _install_mock_upstream(manager, handler):
+        """Replace the manager's outbound httpx.AsyncClient with one that
+        routes every request through ``handler`` (a sync callable taking
+        an httpx.Request and returning an httpx.Response).
+        """
+        manager._http_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_request_propagates_401(self):
+        seen: list[httpx.Request] = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return _streaming_response(
+                401,
+                headers={
+                    "WWW-Authenticate": (
+                        'Bearer resource_metadata='
+                        '"https://api.example.com/.well-known/oauth-protected-resource"'
+                    ),
+                    "content-type": "application/json",
+                },
+                body=b'{"error":"unauthorized"}',
+            )
+
+        app, manager = _fresh()
+        self._install_mock_upstream(manager, upstream)
+        await manager.start_all({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                },
+            },
+        })
+        try:
+            async with _client(app) as c:
+                r = await c.post(
+                    "/github/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            assert r.status_code == 401
+            ww = r.headers.get("www-authenticate")
+            assert ww is not None
+            assert "resource_metadata" in ww
+            assert "api.example.com" in ww
+            assert r.json() == {"error": "unauthorized"}
+            # Upstream saw exactly one request, no Authorization injected.
+            assert len(seen) == 1
+            assert "authorization" not in {h.lower() for h in seen[0].headers}
+        finally:
+            await manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_authenticated_request_forwards_token(self):
+        seen: list[httpx.Request] = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return _streaming_response(
+                200,
+                headers={"content-type": "application/json"},
+                body=b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}',
+            )
+
+        app, manager = _fresh()
+        self._install_mock_upstream(manager, upstream)
+        await manager.start_all({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                },
+            },
+        })
+        try:
+            async with _client(app) as c:
+                r = await c.post(
+                    "/github/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={
+                        "Authorization": "Bearer caller-token",
+                        "Accept": "application/json, text/event-stream",
+                    },
+                )
+            assert r.status_code == 200
+            assert r.json()["result"]["tools"] == []
+            assert seen[0].headers.get("authorization") == "Bearer caller-token"
+            # Upstream URL is the configured one, NOT the inbound /github/mcp.
+            assert str(seen[0].url) == "https://api.example.com/mcp"
+        finally:
+            await manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_static_bearer_fallback_used_when_no_caller_auth(self):
+        seen: list[httpx.Request] = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return _streaming_response(200, body=b"{}")
+
+        app, manager = _fresh()
+        self._install_mock_upstream(manager, upstream)
+        await manager.start_all({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "static-fallback"},
+                },
+            },
+        })
+        try:
+            async with _client(app) as c:
+                r = await c.post(
+                    "/github/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            assert r.status_code == 200
+            assert seen[0].headers.get("authorization") == "Bearer static-fallback"
+        finally:
+            await manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_caller_auth_overrides_static_bearer(self):
+        seen: list[httpx.Request] = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return _streaming_response(200, body=b"{}")
+
+        app, manager = _fresh()
+        self._install_mock_upstream(manager, upstream)
+        await manager.start_all({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "static-fallback"},
+                },
+            },
+        })
+        try:
+            async with _client(app) as c:
+                r = await c.post(
+                    "/github/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={
+                        "Authorization": "Bearer caller-wins",
+                        "Accept": "application/json, text/event-stream",
+                    },
+                )
+            assert r.status_code == 200
+            assert seen[0].headers.get("authorization") == "Bearer caller-wins"
+        finally:
+            await manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_503_when_passthrough_backend_not_running(self):
+        # No start_all => no backend configured / running. The dispatcher
+        # should return 503 with a clear error rather than hanging or
+        # reaching for a session_manager that doesn't exist.
+        app, manager = _fresh()
+        manager._http_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: _streaming_response(200, body=b"{}")
+            ),
+        )
+        try:
+            async with _client(app) as c:
+                r = await c.post(
+                    "/github/mcp",
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            assert r.status_code == 503
+            assert "github" in r.text
+        finally:
+            await manager._http_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_session_bound_backend_unaffected(self):
+        # Sanity: a non-passthrough HTTP backend should still route via
+        # the session_manager (mocked through patches), not via the
+        # passthrough forwarder. We assert by configuring an upstream
+        # mock that would error if hit — a session-bound /<name>/mcp
+        # request must NOT touch the outbound HTTP client.
+        outbound_was_hit = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            outbound_was_hit.append(request)
+            return _streaming_response(500, body=b"should-never-be-called")
+
+        mock_session, p1, p2, p3, p4, p5 = _apply_patches()
+        with p1, p2, p3, p4, p5:
+            app, manager = _fresh()
+            manager._http_client = httpx.AsyncClient(
+                transport=httpx.MockTransport(upstream),
+            )
+            await manager.start_all({
+                "mcpServers": {
+                    "alpha": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        # passthrough deliberately omitted
+                    },
+                },
+            })
+            try:
+                async with _client(app) as c:
+                    # The mocked StreamableHTTPSessionManager.run is a
+                    # no-op CM, so the session_manager attribute is
+                    # actually set on the ProxyState. We can verify the
+                    # routing decision by checking is_passthrough is
+                    # False and the dispatcher chose the session path.
+                    state = manager.get("alpha")
+                    assert state is not None
+                    assert state.is_passthrough is False
+                # The outbound mock should NOT have been touched.
+                assert outbound_was_hit == []
+            finally:
+                await manager.stop_all()

@@ -8,6 +8,7 @@ from zelosmcp.config import (
     COMPRESS_SCOPES,
     CompressSpec,
     ConfigError,
+    PassthroughPoolSpec,
     ReverseProxySpec,
     ServerSpec,
     parse_config,
@@ -515,3 +516,312 @@ class TestCompressSpec:
         )
         d = s.to_status()
         assert d["compress"] == {"level": "high", "scope": "global"}
+
+
+class TestPassthrough:
+    """Validation surface for the new ``passthrough`` flag and its
+    companion fields (top-level ``auth.bearer``, ``passthroughPool``).
+    """
+
+    def test_basic_passthrough_http(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                },
+            }
+        })
+        s = specs[0]
+        assert s.passthrough is True
+        assert s.url == "https://api.example.com/mcp"
+        assert s.auth_bearer is None
+        assert s.passthrough_pool is None
+        # Passthrough backends now auto-apply compression at the
+        # aggregator (scope=aggregator, level=medium). The aggregator's
+        # tools/list emits the wrapper pair regardless of inbound auth;
+        # the first wrapper invocation drives the OAuth dance via the
+        # existing PassthroughChallengeError path.
+        assert s.compress is not None
+        assert s.compress.level == "medium"
+        assert s.compress.scope == "aggregator"
+
+    def test_passthrough_with_static_bearer(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "ghp_static"},
+                },
+            }
+        })
+        assert specs[0].auth_bearer == "ghp_static"
+
+    def test_passthrough_pool_block(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "passthroughPool": {
+                        "maxSessions": 8,
+                        "idleTtlSeconds": 60,
+                    },
+                },
+            }
+        })
+        pool = specs[0].passthrough_pool
+        assert pool is not None
+        assert pool.max_sessions == 8
+        assert pool.idle_ttl_seconds == 60
+
+    def test_passthrough_pool_defaults(self):
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "passthroughPool": {},
+                },
+            }
+        })
+        pool = specs[0].passthrough_pool
+        assert isinstance(pool, PassthroughPoolSpec)
+        assert pool.max_sessions == 64
+        assert pool.idle_ttl_seconds == 1800
+
+    def test_passthrough_with_explicit_compress_catalog_allowed(self):
+        # `scope=catalog` is allowed but degrades to a no-op (no live
+        # session means no tools to render in the static catalog).
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": {"scope": "catalog"},
+                },
+            }
+        })
+        assert specs[0].compress is not None
+        assert specs[0].compress.scope == "catalog"
+
+    def test_passthrough_with_explicit_compress_aggregator_allowed(self):
+        # `scope=aggregator` is the new default for passthrough — explicitly
+        # setting it should round-trip cleanly without raising. The
+        # aggregator's tools/list emits wrappers; first invocation drives
+        # OAuth via the PassthroughChallengeError path.
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": {"scope": "aggregator"},
+                },
+            }
+        })
+        assert specs[0].compress is not None
+        assert specs[0].compress.scope == "aggregator"
+
+    def test_passthrough_with_explicit_compress_global_rejected(self):
+        # /<name>/mcp for passthrough is a streaming reverse proxy that
+        # doesn't terminate MCP, so wrappers can't be served at the
+        # per-backend mount. Reject `scope=global` so misconfigs surface
+        # at parse time.
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "compress": {"scope": "global"},
+                    },
+                }
+            })
+
+    def test_passthrough_with_explicit_compress_null_allowed(self):
+        # `compress: null` is the documented opt-out form; explicit
+        # disabling combined with passthrough should round-trip cleanly.
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": None,
+                },
+            }
+        })
+        assert specs[0].compress is None
+
+    def test_passthrough_on_stdio_rejected(self):
+        with pytest.raises(ConfigError, match="HTTP"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["@m/github"],
+                        "passthrough": True,
+                    },
+                }
+            })
+
+    def test_passthrough_on_sse_rejected(self):
+        # The legacy SSE transport isn't supported for passthrough. Only
+        # streamable-http is.
+        with pytest.raises(ConfigError, match="streamable-http"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "sse",
+                        "url": "https://api.example.com/sse",
+                        "passthrough": True,
+                    },
+                }
+            })
+
+    def test_top_level_auth_without_passthrough_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "auth": {"bearer": "x"},
+                    },
+                }
+            })
+
+    def test_top_level_auth_on_stdio_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["@m/github"],
+                        "auth": {"bearer": "x"},
+                    },
+                }
+            })
+
+    def test_pool_without_passthrough_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthroughPool": {"maxSessions": 8},
+                    },
+                }
+            })
+
+    def test_pool_max_sessions_must_be_positive(self):
+        with pytest.raises(ConfigError, match="maxSessions"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "passthroughPool": {"maxSessions": 0},
+                    },
+                }
+            })
+
+    def test_pool_idle_ttl_must_be_positive(self):
+        with pytest.raises(ConfigError, match="idleTtlSeconds"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "passthroughPool": {"idleTtlSeconds": -10},
+                    },
+                }
+            })
+
+    def test_passthrough_must_be_boolean(self):
+        with pytest.raises(ConfigError, match="boolean"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": "yes",
+                    },
+                }
+            })
+
+    def test_top_level_auth_bearer_must_be_string(self):
+        with pytest.raises(ConfigError, match="auth.bearer"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "auth": {"bearer": 123},
+                    },
+                }
+            })
+
+    def test_top_level_auth_envvar_interpolation(self, monkeypatch):
+        monkeypatch.setenv("MY_TEST_TOKEN", "secret-xyz")
+        specs, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "${MY_TEST_TOKEN}"},
+                },
+            }
+        })
+        assert specs[0].auth_bearer == "secret-xyz"
+
+    def test_top_level_auth_unset_envvar_rejected(self, monkeypatch):
+        monkeypatch.delenv("ZELOSMCP_TEST_UNSET_TOKEN", raising=False)
+        with pytest.raises(ConfigError, match="ZELOSMCP_TEST_UNSET_TOKEN"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "auth": {"bearer": "${ZELOSMCP_TEST_UNSET_TOKEN}"},
+                    },
+                }
+            })
+
+    def test_to_status_redacts_bearer(self):
+        s = ServerSpec(
+            name="github",
+            transport="http",
+            url="https://api.example.com/mcp",
+            passthrough=True,
+            auth_bearer="ghp_secret",
+            passthrough_pool=PassthroughPoolSpec(max_sessions=8, idle_ttl_seconds=60),
+        )
+        d = s.to_status()
+        assert d["passthrough"] is True
+        assert d["auth"] == {"bearer": "***"}
+        assert d["passthroughPool"] == {"maxSessions": 8, "idleTtlSeconds": 60}
+        # Make sure the raw bearer never escapes — protects against
+        # accidental dataclass-as-dict serialisation regressions.
+        assert "ghp_secret" not in repr(d)
+
+    def test_to_status_omits_passthrough_when_disabled(self):
+        s = ServerSpec(name="alpha", transport="stdio", command="echo")
+        d = s.to_status()
+        assert "passthrough" not in d
+        assert "auth" not in d
+        assert "passthroughPool" not in d

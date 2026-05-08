@@ -28,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "default-zelosmcp.json"
 USER_CONFIG = REPO_ROOT / "configs" / "user-zelosmcp.json"
+AUTH_PROVIDERS_CONFIG = REPO_ROOT / "configs" / "auth-providers.json"
 
 
 # ── Auto-detection ──────────────────────────────────────────────────────
@@ -229,7 +230,96 @@ def main() -> int:
             f"{'s' if len(servers) != 1 else ''})"
         )
 
-    # 9) Auto-detect platform.
+    # 9) Auth providers (configs/auth-providers.json).
+    print(
+        "\nAuth providers — broker mode for OAuth-protected backends.\n"
+        "  - GitHub: device flow against github.com (Cursor is PAT-only\n"
+        "    for the GitHub MCP; this gives you a GUI-driven alternative).\n"
+        "  - Okta: device flow against your Okta tenant. Requires admin\n"
+        "    to register a Native app + enable the Device Authorization\n"
+        "    grant. See docs/oauth-passthrough.md.\n"
+    )
+    providers_block: dict = {}
+    auth_env: dict[str, str] = {}
+
+    enable_github_provider = ask_yes_no(
+        "Configure the github_oauth_app provider?", True,
+    )
+    if enable_github_provider:
+        gh_client_id = ask(
+            "GitHub OAuth App client_id (ZELOSMCP_GITHUB_CLIENT_ID)",
+            "",
+        )
+        if gh_client_id:
+            auth_env["ZELOSMCP_GITHUB_CLIENT_ID"] = gh_client_id
+        else:
+            print(
+                "  WARNING: empty client_id; the provider will fail to "
+                "load until you set ZELOSMCP_GITHUB_CLIENT_ID in .env."
+            )
+        providers_block["github_oauth_app"] = {
+            "type": "github_device_flow",
+            "client_id": "${ZELOSMCP_GITHUB_CLIENT_ID}",
+            "scopes": [
+                "repo",
+                "read:org",
+                "user:email",
+                "gist",
+                "workflow",
+            ],
+        }
+
+    enable_okta_provider = ask_yes_no(
+        "Configure the nike_okta provider?", False,
+    )
+    if enable_okta_provider:
+        okta_issuer = ask(
+            "Okta authorization server issuer URL "
+            "(e.g. https://nike.okta.com/oauth2/default) "
+            "(ZELOSMCP_OKTA_ISSUER)",
+            "",
+        )
+        okta_client_id = ask(
+            "Okta App client_id (ZELOSMCP_OKTA_CLIENT_ID)",
+            "",
+        )
+        okta_membership_hint = ask(
+            "Okta authorized-group display string for the Connections "
+            "GUI (ZELOSMCP_OKTA_MEMBERSHIP_HINT)",
+            "Nike.uee.maria",
+        )
+        if okta_issuer:
+            auth_env["ZELOSMCP_OKTA_ISSUER"] = okta_issuer
+        if okta_client_id:
+            auth_env["ZELOSMCP_OKTA_CLIENT_ID"] = okta_client_id
+        if okta_membership_hint:
+            auth_env["ZELOSMCP_OKTA_MEMBERSHIP_HINT"] = okta_membership_hint
+        providers_block["nike_okta"] = {
+            "type": "okta_device_flow",
+            "issuer": "${ZELOSMCP_OKTA_ISSUER}",
+            "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+            "scopes": ["openid", "profile", "email"],
+            "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}",
+        }
+
+    if providers_block:
+        AUTH_PROVIDERS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        with AUTH_PROVIDERS_CONFIG.open("w") as fh:
+            json.dump({"providers": providers_block}, fh, indent=2)
+            fh.write("\n")
+        print(
+            f"  wrote {AUTH_PROVIDERS_CONFIG.relative_to(REPO_ROOT)} "
+            f"({len(providers_block)} provider"
+            f"{'s' if len(providers_block) != 1 else ''})"
+        )
+    else:
+        print(
+            "  no providers configured — broker-mode backends will fail "
+            "to load. Edit configs/auth-providers.json by hand or rerun "
+            "this wizard."
+        )
+
+    # 10) Auto-detect platform.
     platform_value = detect_platform()
     print(f"(detected platform: {platform_value})")
 
@@ -254,6 +344,14 @@ def main() -> int:
         lines.append(f"KUBERNETES_CONFIG_FILE={kube_config}")
     if enable_docker:
         lines.append(f"DOCKER_SOCK_FILE={docker_sock}")
+    if providers_block:
+        # Tell `make up` to mount the providers file we just wrote and
+        # `make load` to POST it after the mcpServers config.
+        lines.append(
+            f"ZELOSMCP_AUTH_PROVIDERS_FILE={AUTH_PROVIDERS_CONFIG}"
+        )
+    for env_name, env_val in auth_env.items():
+        lines.append(f"{env_name}={env_val}")
     lines.append("")
 
     ENV_FILE.write_text("\n".join(lines))

@@ -20,7 +20,7 @@ from zelosmcp.compression import (
     handle_compressed_call,
     wrapper_tool_names,
 )
-from zelosmcp.config import CompressSpec
+from zelosmcp.config import CompressSpec, PassthroughPoolSpec
 from zelosmcp.savings import measure_call
 
 logger = logging.getLogger("zelosmcp")
@@ -63,6 +63,34 @@ class ProxyState:
         # None for tests / standalone use, in which case measure_call
         # short-circuits to a plain await.
         self._recorder_provider: Callable[[], Any] | None = None
+        # OAuth-passthrough mode (transport=http only). When True, no
+        # client_session or session_manager is created — /<name>/mcp is
+        # routed through manager.proxy_mcp_request instead. Inbound
+        # Authorization is forwarded verbatim; 401 + WWW-Authenticate from
+        # upstream is propagated so the MCP client (Cursor) handles the
+        # OAuth dance directly with the upstream issuer.
+        self.is_passthrough: bool = False
+        # Backend URL retained for the passthrough dispatcher.
+        self.passthrough_url: str | None = None
+        # Static fallback bearer — injected only when the inbound request
+        # has no Authorization header. None = no fallback.
+        self.passthrough_auth_bearer: str | None = None
+        # Pool sizing for Phase 2 aggregator integration. Stored here so
+        # the lazy pool import (Phase 2A) can read it. None = use defaults.
+        self.passthrough_pool_spec: PassthroughPoolSpec | None = None
+        # Per-Cursor session pool for the aggregator's tools/list and
+        # tools/call fan-out (Phase 2A). Lazily initialised when the pool
+        # module is imported; stays None for Phase 1-only deployments.
+        self.passthrough_pool: Any = None
+        # Cached upstream tool catalog for passthrough backends. Populated
+        # by the aggregator's list_tools / call_tool the first time it
+        # gets a working session (any inbound user with a valid token
+        # warms it for everyone). Subsequent inbound requests reuse the
+        # cache so tools/list can render real wrapper-tool catalogs even
+        # when the *current* caller has no token. Tool definitions don't
+        # vary per user (only the data they return does), so global
+        # caching is correct here.
+        self.passthrough_catalog: dict[str, Tool] = {}
 
     def _emit_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -95,6 +123,9 @@ class ProxyState:
         cwd: str | None = None,
         headers: dict[str, str] | None = None,
         compress: CompressSpec | None = None,
+        passthrough: bool = False,
+        auth_bearer: str | None = None,
+        passthrough_pool: PassthroughPoolSpec | None = None,
     ) -> None:
         if self.running:
             raise RuntimeError("Proxy is already running — stop it first")
@@ -110,9 +141,28 @@ class ProxyState:
             compress is not None and compress.scope == "global"
         ) else None
 
-        self._task = asyncio.create_task(
-            self._run_backend(transport, command, args, url, env, cwd, headers)
-        )
+        # OAuth-passthrough lifecycle is structurally different (no
+        # client_session, no StreamableHTTPSessionManager). Fork early so
+        # _run_backend stays focused on session-bound transports.
+        self.is_passthrough = bool(passthrough)
+        self.passthrough_url = url if self.is_passthrough else None
+        self.passthrough_auth_bearer = auth_bearer if self.is_passthrough else None
+        self.passthrough_pool_spec = passthrough_pool if self.is_passthrough else None
+
+        if self.is_passthrough:
+            if transport != "http":
+                raise ValueError(
+                    "passthrough mode is only valid for transport=http"
+                )
+            if not url:
+                raise ValueError("URL is required for passthrough HTTP transport")
+            self._task = asyncio.create_task(
+                self._run_passthrough_backend(url=url)
+            )
+        else:
+            self._task = asyncio.create_task(
+                self._run_backend(transport, command, args, url, env, cwd, headers)
+            )
 
         await self._ready.wait()
 
@@ -249,6 +299,105 @@ class ProxyState:
             self.backend_info = {}
             self._compressed_catalog = {}
             self._emit_log("Proxy stopped")
+
+    async def _run_passthrough_backend(self, url: str) -> None:
+        """Background task for OAuth-passthrough HTTP backends.
+
+        Unlike :meth:`_run_backend`, this does NOT open an upstream MCP
+        session — zelosMCP forwards traffic transparently and the MCP
+        client (Cursor) owns the OAuth dance with the upstream issuer.
+        The task exists solely so the lifecycle (start/stop, log pump,
+        ready event) matches session-bound backends; the real work is
+        done by ``manager.proxy_mcp_request`` per inbound request.
+
+        Phase 2A wires :class:`PassthroughSessionPool` here so the
+        aggregator can fan out tool calls; for Phase 1 the task is a
+        sleep-until-cancelled placeholder.
+        """
+        self._emit_log(f"Starting passthrough HTTP backend -> {url}")
+        try:
+            self.backend_info = {
+                "transport": "http",
+                "url": url,
+                "passthrough": True,
+            }
+            if self.passthrough_auth_bearer:
+                # Mirror ServerSpec.to_status — never log or surface the
+                # bearer; the redacted marker is enough for status views.
+                self.backend_info["auth"] = {"bearer": "***"}
+            if self.passthrough_pool_spec is not None:
+                self.backend_info["passthroughPool"] = (
+                    self.passthrough_pool_spec.to_status()
+                )
+
+            # Lazily wire the per-Cursor session pool when the module is
+            # available (added in Phase 2A). Failure here must not abort
+            # the backend — Phase 1 deployments that only use /<name>/mcp
+            # don't need the pool at all, so an ImportError or any other
+            # init failure is logged and the backend stays Phase-1 capable.
+            try:
+                from zelosmcp.passthrough_pool import PassthroughSessionPool
+
+                spec = self.passthrough_pool_spec
+                self.passthrough_pool = PassthroughSessionPool(
+                    backend_name=self.name,
+                    upstream_url=url,
+                    max_sessions=(
+                        spec.max_sessions
+                        if spec is not None
+                        else PassthroughPoolSpec().max_sessions
+                    ),
+                    idle_ttl_seconds=(
+                        spec.idle_ttl_seconds
+                        if spec is not None
+                        else PassthroughPoolSpec().idle_ttl_seconds
+                    ),
+                    static_bearer=self.passthrough_auth_bearer,
+                    log=self._emit_log,
+                )
+                await self.passthrough_pool.start()
+            except ImportError:
+                # Phase 2A module not yet present; per-backend mode still
+                # works through manager.proxy_mcp_request.
+                self.passthrough_pool = None
+            except Exception as exc:
+                self._emit_log(
+                    f"WARN: passthrough pool init failed (aggregator "
+                    f"integration disabled for {self.name}): {exc}"
+                )
+                self.passthrough_pool = None
+
+            self.running = True
+            self._emit_log("Passthrough proxy is live")
+            self._ready.set()
+
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self._emit_log("Stopping passthrough proxy...")
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            self.error = str(exc)
+            self._emit_log(f"ERROR: {exc}")
+            self._startup_error = exc
+            self._ready.set()
+        finally:
+            if self.passthrough_pool is not None:
+                try:
+                    await self.passthrough_pool.close_all()
+                except Exception as exc:
+                    self._emit_log(f"WARN: pool shutdown error: {exc}")
+            self.passthrough_pool = None
+            self.running = False
+            self.backend_info = {}
+            self.is_passthrough = False
+            self.passthrough_url = None
+            self.passthrough_auth_bearer = None
+            self.passthrough_pool_spec = None
+            self.passthrough_catalog = {}
+            self._emit_log("Passthrough proxy stopped")
 
     def _register_handlers(self, server: Server) -> None:
         session = self.client_session

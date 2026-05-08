@@ -340,6 +340,450 @@ class TestReverseProxy:
         assert m._http_client is None
 
 
+# ── proxy_mcp_request (Phase 1C streaming passthrough) ─────────────────
+
+
+class _RecorderSend:
+    """ASGI ``send`` collector. Captures ``http.response.start`` (status +
+    headers) plus all ``http.response.body`` chunks so tests can assert on
+    streaming + header pass-through behaviour.
+    """
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+        self.headers: list[tuple[bytes, bytes]] = []
+        self.chunks: list[bytes] = []
+        self.completed: bool = False
+
+    async def __call__(self, message: dict) -> None:
+        if message["type"] == "http.response.start":
+            self.status = message["status"]
+            self.headers = list(message["headers"])
+        elif message["type"] == "http.response.body":
+            chunk = message.get("body", b"") or b""
+            if chunk:
+                self.chunks.append(chunk)
+            if not message.get("more_body", False):
+                self.completed = True
+
+    @property
+    def body(self) -> bytes:
+        return b"".join(self.chunks)
+
+    def header_value(self, name: str) -> str | None:
+        target = name.lower().encode("latin-1")
+        for raw_name, raw_value in self.headers:
+            if raw_name.lower() == target:
+                return raw_value.decode("latin-1")
+        return None
+
+
+def _make_receive(body: bytes):
+    """ASGI ``receive`` factory that yields a single body message."""
+    sent = False
+
+    async def receive() -> dict:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        # Subsequent reads block forever in real ASGI; the manager code
+        # never reads past more_body=False, so an unreachable sleep is
+        # the safest "shouldn't happen" stub.
+        await asyncio.sleep(3600)
+        return {"type": "http.disconnect"}
+
+    return receive
+
+
+class _StreamRecorder:
+    """Captures a single httpx request and serves a canned response.
+
+    Used as a stand-in for ``httpx.AsyncClient`` so we can assert on the
+    exact outbound request without ever opening a real connection.
+    """
+
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        chunks: list[bytes] | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.chunks = chunks or [b""]
+        # Last captured request (one per recorder is enough for tests).
+        self.captured_method: str | None = None
+        self.captured_url: str | None = None
+        self.captured_headers: list[tuple[str, str]] = []
+        self.captured_content: bytes | None = None
+
+    def build_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: list[tuple[str, str]] | None = None,
+        content: bytes | None = None,
+    ):
+        # Used only as a quick validity check by the production code; we
+        # don't need to fully emulate httpx.Request here.
+        class _R:
+            pass
+
+        return _R()
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: list[tuple[str, str]] | None = None,
+        content: bytes | None = None,
+    ):
+        """Mirrors ``httpx.AsyncClient.stream`` — returns an async CM."""
+        self.captured_method = method
+        self.captured_url = url
+        self.captured_headers = list(headers or [])
+        self.captured_content = content
+
+        recorder = self
+        chunks = list(self.chunks)
+
+        class _Resp:
+            def __init__(self):
+                self.status_code = recorder.status_code
+
+                class _H:
+                    @property
+                    def raw(self_inner):
+                        return [
+                            (k.encode("latin-1"), v.encode("latin-1"))
+                            for k, v in recorder.headers.items()
+                        ]
+
+                self.headers = _H()
+
+            async def aiter_raw(self):
+                for c in chunks:
+                    yield c
+
+        @asynccontextmanager
+        async def cm():
+            yield _Resp()
+
+        return cm()
+
+
+class TestProxyMcpRequest:
+    """Unit-level coverage for the streaming MCP passthrough forwarder."""
+
+    @staticmethod
+    def _scope(
+        *,
+        path: str = "/github/mcp",
+        method: str = "POST",
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> dict:
+        return {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "raw_path": path.encode("latin-1"),
+            "query_string": b"",
+            "scheme": "http",
+            "client": ("127.0.0.1", 12345),
+            "headers": headers or [],
+        }
+
+    @staticmethod
+    def _spec(
+        *,
+        url: str = "https://api.example.com/mcp",
+        auth_bearer: str | None = None,
+        headers: dict[str, str] | None = None,
+    ):
+        from zelosmcp.config import ServerSpec
+
+        return ServerSpec(
+            name="github",
+            transport="http",
+            url=url,
+            headers=headers,
+            passthrough=True,
+            auth_bearer=auth_bearer,
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_authorization_verbatim(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            chunks=[b'{"ok":true}'],
+        )
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        scope = self._scope(headers=[
+            (b"authorization", b"Bearer client-token-123"),
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ])
+        await m.proxy_mcp_request(
+            self._spec(auth_bearer="static-fallback"),
+            scope,
+            _make_receive(b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'),
+            sender,
+        )
+
+        assert sender.status == 200
+        assert sender.body == b'{"ok":true}'
+        # Inbound Authorization wins — fallback bearer must NOT be
+        # injected when the caller already supplied one.
+        sent_auth = [v for k, v in recorder.captured_headers if k.lower() == "authorization"]
+        assert sent_auth == ["Bearer client-token-123"]
+        # Host stripped so httpx synthesises the upstream's host.
+        assert all(k.lower() != "host" for k, _ in recorder.captured_headers)
+        # URL forwarded to the configured upstream MCP endpoint, not the
+        # inbound /github/mcp path.
+        assert recorder.captured_url == "https://api.example.com/mcp"
+        assert recorder.captured_content == b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+    @pytest.mark.asyncio
+    async def test_static_bearer_fallback_when_no_inbound_auth(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=200, headers={}, chunks=[b"{}"])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        scope = self._scope(headers=[(b"content-type", b"application/json")])
+        await m.proxy_mcp_request(
+            self._spec(auth_bearer="static-token"),
+            scope,
+            _make_receive(b"{}"),
+            sender,
+        )
+        sent_auth = [v for k, v in recorder.captured_headers if k.lower() == "authorization"]
+        assert sent_auth == ["Bearer static-token"]
+
+    @pytest.mark.asyncio
+    async def test_no_authorization_when_neither_inbound_nor_static(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=401, headers={}, chunks=[b""])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        scope = self._scope(headers=[])
+        await m.proxy_mcp_request(self._spec(), scope, _make_receive(b"{}"), sender)
+        sent_auth = [v for k, v in recorder.captured_headers if k.lower() == "authorization"]
+        assert sent_auth == []  # Nothing injected; upstream gets to challenge.
+
+    @pytest.mark.asyncio
+    async def test_propagates_401_and_www_authenticate(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(
+            status_code=401,
+            headers={
+                "www-authenticate": (
+                    'Bearer resource_metadata='
+                    '"https://api.example.com/.well-known/oauth-protected-resource"'
+                ),
+                "content-type": "application/json",
+            },
+            chunks=[b'{"error":"unauthorized"}'],
+        )
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[]),
+            _make_receive(b"{}"),
+            sender,
+        )
+
+        assert sender.status == 401
+        # WWW-Authenticate must be forwarded verbatim so the client's
+        # OAuth handler can fetch resource metadata directly upstream.
+        ww = sender.header_value("www-authenticate")
+        assert ww is not None
+        assert "resource_metadata" in ww
+        assert "api.example.com" in ww
+        assert sender.body == b'{"error":"unauthorized"}'
+
+    @pytest.mark.asyncio
+    async def test_streams_multi_chunk_response(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            chunks=[b"event: message\n", b'data: {"ok":1}\n\n', b'data: {"done":1}\n\n'],
+        )
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[(b"accept", b"text/event-stream")]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        assert sender.completed is True
+        assert sender.status == 200
+        assert sender.body == (
+            b"event: message\n"
+            b'data: {"ok":1}\n\n'
+            b'data: {"done":1}\n\n'
+        )
+        # Chunks are emitted as separate ASGI body messages so the
+        # client gets to consume each frame as it arrives.
+        assert len(sender.chunks) == 3
+
+    @pytest.mark.asyncio
+    async def test_strips_hop_by_hop_request_headers(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=200, headers={}, chunks=[b"{}"])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        scope = self._scope(headers=[
+            (b"connection", b"close"),
+            (b"keep-alive", b"timeout=5"),
+            (b"transfer-encoding", b"chunked"),
+            (b"content-type", b"application/json"),
+            (b"host", b"localhost:8000"),
+        ])
+        await m.proxy_mcp_request(self._spec(), scope, _make_receive(b"{}"), sender)
+        forwarded_lower = [k.lower() for k, _ in recorder.captured_headers]
+        for banned in ("connection", "keep-alive", "transfer-encoding", "host"):
+            assert banned not in forwarded_lower
+
+    @pytest.mark.asyncio
+    async def test_strips_hop_by_hop_response_headers(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(
+            status_code=200,
+            headers={
+                "connection": "close",
+                "transfer-encoding": "chunked",
+                "x-custom": "ok",
+                "content-type": "application/json",
+            },
+            chunks=[b"{}"],
+        )
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        # Hop-by-hop response headers must be stripped before relaying.
+        assert sender.header_value("connection") is None
+        assert sender.header_value("transfer-encoding") is None
+        # Non-hop-by-hop response headers pass through untouched.
+        assert sender.header_value("x-custom") == "ok"
+        assert sender.header_value("content-type") == "application/json"
+
+    @pytest.mark.asyncio
+    async def test_default_accept_when_caller_omits(self):
+        # MCP servers commonly require dual-Accept negotiation. If the
+        # caller didn't set one, we inject the canonical pair so probe
+        # tools / barebones HTTP clients still work.
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=200, headers={}, chunks=[b"{}"])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        accepts = [v for k, v in recorder.captured_headers if k.lower() == "accept"]
+        assert accepts == ["application/json, text/event-stream"]
+
+    @pytest.mark.asyncio
+    async def test_inbound_accept_preserved(self):
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=200, headers={}, chunks=[b"{}"])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[(b"accept", b"text/event-stream")]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        accepts = [v for k, v in recorder.captured_headers if k.lower() == "accept"]
+        # Don't double-up — caller's Accept wins.
+        assert accepts == ["text/event-stream"]
+
+    @pytest.mark.asyncio
+    async def test_503_when_http_client_not_initialised(self):
+        m = ProxyManager(mandatory_config_path="")
+        # Deliberately leave m._http_client = None.
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(),
+            self._scope(headers=[]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        assert sender.status == 503
+
+    @pytest.mark.asyncio
+    async def test_500_when_spec_has_no_url(self):
+        m = ProxyManager(mandatory_config_path="")
+        m._http_client = _StreamRecorder()  # type: ignore[assignment]
+
+        # Build a malformed spec by clearing the URL after the fact.
+        spec = self._spec()
+        spec.url = None
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            spec,
+            self._scope(headers=[]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        assert sender.status == 500
+
+    @pytest.mark.asyncio
+    async def test_per_request_authorization_wins_over_config_headers(self):
+        # Config-level ``headers`` is for static augmentation (e.g.
+        # custom X-Trace-Id). Per-request headers (especially
+        # Authorization) MUST take priority so we never overwrite a
+        # caller's bearer with a stale config-level one.
+        m = ProxyManager(mandatory_config_path="")
+        recorder = _StreamRecorder(status_code=200, headers={}, chunks=[b"{}"])
+        m._http_client = recorder  # type: ignore[assignment]
+
+        sender = _RecorderSend()
+        await m.proxy_mcp_request(
+            self._spec(headers={"X-Trace-Id": "abc", "Authorization": "should-be-ignored"}),
+            self._scope(headers=[
+                (b"authorization", b"Bearer caller-wins"),
+            ]),
+            _make_receive(b"{}"),
+            sender,
+        )
+        # X-Trace-Id from config flows through.
+        x_trace = [v for k, v in recorder.captured_headers if k.lower() == "x-trace-id"]
+        assert x_trace == ["abc"]
+        # Authorization from caller wins.
+        sent_auth = [v for k, v in recorder.captured_headers if k.lower() == "authorization"]
+        assert sent_auth == ["Bearer caller-wins"]
+
+
 class TestMandatoryMerge:
     """Cover the mandatory-config merge applied at the top of start_all()."""
 

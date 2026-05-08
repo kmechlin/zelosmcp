@@ -20,8 +20,20 @@ import httpx
 from starlette.responses import JSONResponse
 
 from zelosmcp.aggregator import Aggregator
+from zelosmcp.auth import (
+    AuthRegistry,
+    AuthStore,
+    ProviderTypeUnavailable,
+    build_provider,
+)
 from zelosmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
-from zelosmcp.config import ServerSpec, parse_config
+from zelosmcp.config import (
+    AuthProviderSpec,
+    ServerSpec,
+    parse_auth_providers,
+    parse_config,
+    validate_provider_references,
+)
 from zelosmcp.proxy import ProxyState
 from zelosmcp.savings import SavingsRecorder, TokenCounter
 from zelosmcp.savings_db import SavingsStore, resolve_db_path
@@ -55,6 +67,17 @@ _HOP_BY_HOP: frozenset[str] = frozenset({
     "upgrade",
     "host",
     "content-length",
+})
+
+# Response headers that prevent the zelosMCP UI from embedding a
+# reverse-proxied dashboard in an iframe. Backends like pincher correctly set
+# these for direct exposure, but zelosMCP's reverseProxy feature is explicitly a
+# trusted same-origin embedding surface (e.g. /pincher/v1/dashboard in the
+# dashboard view). Strip them at the proxy boundary so the browser doesn't
+# block the iframe with a blank/broken frame.
+_FRAME_DENY_HEADERS: frozenset[str] = frozenset({
+    "x-frame-options",
+    "content-security-policy",
 })
 
 
@@ -121,6 +144,15 @@ class ProxyManager:
             )
         except ValueError:
             self._pincher_poll_interval = 60.0
+        # Auth-provider plumbing. Registry holds constructed providers;
+        # the spec dict is the source-of-truth for the GET config endpoint
+        # (so the UI sees what was loaded, not the constructed provider).
+        # Both populated by start_auth_providers (called from app.py
+        # lifespan or POST /api/auth/providers/config). The store opens
+        # alongside the savings store.
+        self.auth_registry: AuthRegistry = AuthRegistry()
+        self._auth_provider_specs: dict[str, AuthProviderSpec] = {}
+        self._auth_store: AuthStore | None = None
 
     @property
     def primary(self) -> str | None:
@@ -133,6 +165,16 @@ class ProxyManager:
 
     def get(self, name: str) -> ProxyState | None:
         return self.servers.get(name)
+
+    def get_spec(self, name: str) -> ServerSpec | None:
+        """Public accessor for a backend's parsed :class:`ServerSpec`.
+
+        Returns ``None`` for unknown names or for the always-on builtin
+        (which has no user-supplied spec). Used by the ASGI dispatcher to
+        dispatch passthrough backends through ``proxy_mcp_request`` —
+        passthrough mode requires the spec's ``url`` and ``auth_bearer``.
+        """
+        return self._specs.get(name)
 
     def names(self) -> list[str]:
         return list(self.servers.keys())
@@ -149,6 +191,12 @@ class ProxyManager:
 
         merged = self._merge_mandatory(raw_config)
         specs, primary = parse_config(merged)
+        # Cross-validate any auth.provider references against the
+        # currently-loaded providers config. Empty providers dict +
+        # zero references = no-op; non-empty references against an
+        # empty / mismatched set raises here so a misconfigured config
+        # can't silently start backends in a broken state.
+        validate_provider_references(specs, self._auth_provider_specs)
         self._specs = {s.name: s for s in specs}
 
         if primary is not None:
@@ -387,9 +435,21 @@ class ProxyManager:
         # read window so streaming responses (dashboard HTML, slow query
         # endpoints) don't get cut off. follow_redirects stays off — we
         # forward the upstream's redirect response verbatim instead.
+        #
+        # Trust the system CA bundle (Debian path) when present so any
+        # corporate root certs installed via `update-ca-certificates`
+        # at image-build time are honoured. httpx's default uses certifi
+        # alone, which doesn't pick up corporate roots — that breaks
+        # outbound calls through TLS-intercepting proxies (Zscaler,
+        # corporate egress gateways, etc.). Falls back to the default
+        # bundled bundle when the system file is absent (e.g. running
+        # outside the container during tests).
+        system_ca = "/etc/ssl/certs/ca-certificates.crt"
+        verify: Any = system_ca if os.path.exists(system_ca) else True
         self._http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0),
             follow_redirects=False,
+            verify=verify,
         )
         await self.start_savings()
 
@@ -454,6 +514,120 @@ class ProxyManager:
         self.savings = None
         if store is not None:
             await store.close()
+
+    async def start_auth_store(
+        self, db_path: str | None = None, key_path: Any | None = None
+    ) -> None:
+        """Open the encrypted auth store. Idempotent.
+
+        Parallel to :meth:`start_savings`. The store is needed by every
+        provider that maintains per-user state (i.e. all real OAuth
+        providers); ``passthrough`` and ``static`` providers don't
+        touch it. Tests can pass ``db_path=":memory:"`` to skip
+        on-disk state.
+        """
+        if self._auth_store is not None:
+            return
+        try:
+            store = AuthStore.open_with_key_file(
+                path=db_path, key_path=key_path,
+            )
+            await store.open()
+        except Exception as exc:
+            # Don't crash the whole app — auth store failures only
+            # break OAuth providers; passthrough / static still work
+            # without it. Surface in the activity log so the GUI can
+            # tell the user.
+            _log.warning("auth store open failed (%s); disabling", exc)
+            self._broadcast_tagged("auth", f"store disabled: {exc}")
+            return
+        self._auth_store = store
+        self._broadcast_tagged("auth", "store ready")
+
+    async def stop_auth_store(self) -> None:
+        store, self._auth_store = self._auth_store, None
+        if store is not None:
+            await store.close()
+
+    @property
+    def auth_store(self) -> AuthStore | None:
+        """Public accessor used by provider factories that need
+        per-user persistence. ``None`` when the store hasn't been
+        opened (test mode without ``start_auth_store``)."""
+        return self._auth_store
+
+    async def start_auth_providers(self, raw_config: Any) -> dict[str, Any]:
+        """Parse and load the auth-providers config.
+
+        Replaces the entire registry atomically. Spec parsing happens
+        first; if any spec is invalid the registry is left untouched
+        so a bad POST doesn't drop the working set. Provider
+        instantiation happens after parse — types whose factory isn't
+        registered yet (because their PR hasn't landed) are tracked
+        separately and surface in the result map.
+
+        Returns ``{"providers": {<name>: <status>, ...}}`` where
+        status is ``"ready"`` for fully-constructed providers,
+        ``"unavailable"`` when no factory is registered, or
+        ``"error: <msg>"`` when construction failed.
+        """
+        specs = parse_auth_providers(raw_config)
+
+        results: dict[str, str] = {}
+        constructed: list[Any] = []
+        for name, spec in specs.items():
+            try:
+                provider = build_provider(spec, self._auth_store)
+            except ProviderTypeUnavailable:
+                results[name] = "unavailable"
+                continue
+            except Exception as exc:  # noqa: BLE001 — surface to caller
+                results[name] = f"error: {exc}"
+                continue
+            constructed.append(provider)
+            results[name] = "ready"
+
+        try:
+            self.auth_registry.replace_all(constructed)
+        except ValueError as exc:
+            # Should be unreachable since parse_auth_providers already
+            # rejects duplicates; defensive in case the factory ever
+            # returns a renamed instance.
+            raise ValueError(
+                f"auth provider registration failed: {exc}"
+            ) from exc
+
+        self._auth_provider_specs = specs
+        # Re-validate currently-loaded server references against the
+        # new provider set so a swap that drops a referenced provider
+        # surfaces immediately rather than at the next /api/start.
+        validate_provider_references(
+            list(self._specs.values()), specs,
+        )
+        if specs:
+            self._broadcast_tagged(
+                "auth",
+                f"loaded {len(specs)} provider(s): {', '.join(sorted(specs))}",
+            )
+        return {"providers": results}
+
+    def current_auth_providers_config(
+        self, *, redacted: bool = True
+    ) -> dict[str, Any]:
+        """JSON snapshot of the loaded providers config — what the GUI
+        renders in the Connections page and what
+        ``GET /api/auth/providers/config`` returns.
+
+        ``redacted=True`` (the default) replaces secret-like fields
+        with ``"***"``; ``False`` returns the raw values for trusted
+        callers (currently nobody, but useful in tests).
+        """
+        return {
+            "providers": {
+                name: spec.to_status(redacted=redacted)
+                for name, spec in self._auth_provider_specs.items()
+            }
+        }
 
     async def _pincher_poll_loop(self) -> None:
         """Periodically snapshot ``pincher__stats`` into the savings store.
@@ -668,7 +842,7 @@ class ProxyManager:
         response_headers: list[tuple[bytes, bytes]] = []
         for raw_name, raw_value in upstream_resp.headers.raw:
             name_lower = raw_name.decode("latin-1").lower()
-            if name_lower in _HOP_BY_HOP:
+            if name_lower in _HOP_BY_HOP or name_lower in _FRAME_DENY_HEADERS:
                 continue
             # httpx auto-decompresses the upstream's body (gzip / br /
             # deflate) when we read .content, so a forwarded
@@ -693,6 +867,239 @@ class ProxyManager:
             "more_body": False,
         })
 
+    async def proxy_mcp_request(
+        self,
+        spec: ServerSpec,
+        scope: dict[str, Any],
+        receive: Any,
+        send: Any,
+    ) -> None:
+        """Streaming MCP-aware passthrough for /<name>/mcp.
+
+        Used for backends with ``passthrough=True`` so the MCP client's
+        OAuth dance flows directly to the upstream issuer. Differs from
+        :meth:`proxy_request` in three ways:
+
+        1. Forwards to ``spec.url`` (the MCP endpoint) — there's no
+           ``reverseProxy.mount/upstream`` pair to consult.
+        2. Streams the response body chunk-by-chunk so MCP's
+           ``text/event-stream`` flows survive end-to-end.
+        3. Injects ``Authorization: Bearer <auth_bearer>`` only when the
+           inbound request has no ``Authorization`` header (static
+           fallback for headless / CI scenarios).
+
+        ``WWW-Authenticate`` and other response headers are propagated
+        verbatim, sans hop-by-hop, so an upstream 401 reaches the client
+        intact and triggers its OAuth handler.
+        """
+        if spec.url is None:
+            resp = JSONResponse(
+                {"error": f"backend '{spec.name}' has no url for passthrough"},
+                status_code=500,
+            )
+            await resp(scope, receive, send)
+            return
+
+        client = self._http_client
+        if client is None:
+            resp = JSONResponse(
+                {"error": "passthrough HTTP client not initialised"},
+                status_code=503,
+            )
+            await resp(scope, receive, send)
+            return
+
+        # Read the inbound body fully. MCP requests are JSON-RPC envelopes
+        # — small. Streaming the *response* matters far more than the
+        # request, since SSE responses can be long-lived.
+        body_chunks: list[bytes] = []
+        more = True
+        while more:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                continue
+            chunk = message.get("body", b"") or b""
+            if chunk:
+                body_chunks.append(chunk)
+            more = message.get("more_body", False)
+        body = b"".join(body_chunks)
+
+        # Build forwarded headers: drop hop-by-hop, then layer Authorization
+        # fallback (only when caller didn't supply one). User-configured
+        # ``headers`` from ServerSpec are merged in like the static-bearer
+        # case — they win over inbound only when the inbound is absent, so
+        # a user can't accidentally lose their per-request Authorization
+        # by setting a config-level one.
+        outbound_headers: list[tuple[str, str]] = []
+        seen_authorization = False
+        inbound_authorization_value: str | None = None
+        seen_accept = False
+        for raw_name, raw_value in scope.get("headers", []):
+            hname = raw_name.decode("latin-1")
+            lower = hname.lower()
+            if lower in _HOP_BY_HOP:
+                continue
+            # Drop the inbound Host so httpx synthesises one matching the
+            # upstream URL — otherwise upstream sees `localhost:8000`.
+            if lower == "host":
+                continue
+            if lower == "authorization":
+                seen_authorization = True
+                inbound_authorization_value = raw_value.decode("latin-1")
+            if lower == "accept":
+                seen_accept = True
+            outbound_headers.append((hname, raw_value.decode("latin-1")))
+
+        # Broker-mode provider: if this backend references an auth provider
+        # and that provider can mint a token for the current user, the
+        # minted token wins over any inbound Authorization header. This keeps
+        # /<name>/mcp aligned with the aggregator path: users authenticate in
+        # the zelosMCP GUI, then both raw passthrough and /mcp aggregate calls
+        # forward the brokered upstream token.
+        if spec.auth_provider:
+            provider = self.auth_registry.get_for_backend(
+                spec.name, spec.auth_provider
+            )
+            if provider is not None:
+                try:
+                    from zelosmcp.passthrough_pool import hash_authorization
+
+                    user_key = hash_authorization(inbound_authorization_value)
+                    minted = await provider.mint_token(
+                        user_key, spec.auth_audience
+                    )
+                except Exception as exc:
+                    _log.info(
+                        "provider %s mint_token for %s failed: %s",
+                        spec.auth_provider, spec.name, exc,
+                    )
+                    minted = None
+                if minted is not None:
+                    outbound_headers = [
+                        (k, v)
+                        for k, v in outbound_headers
+                        if k.lower() != "authorization"
+                    ]
+                    outbound_headers.append(("Authorization", minted))
+                    seen_authorization = True
+
+        # Static fallback bearer (only when the caller didn't supply one).
+        if not seen_authorization and spec.auth_bearer:
+            outbound_headers.append(("Authorization", f"Bearer {spec.auth_bearer}"))
+
+        # Static config-level headers from ServerSpec.headers — merged
+        # after Authorization handling. We do NOT overwrite caller-set
+        # headers (case-insensitive) so per-Cursor values take priority.
+        if spec.headers:
+            existing_lower = {k.lower() for k, _ in outbound_headers}
+            for k, v in spec.headers.items():
+                if k.lower() in existing_lower:
+                    continue
+                outbound_headers.append((k, v))
+
+        # MCP servers commonly require the dual-Accept header to negotiate
+        # JSON vs. event-stream. If the caller didn't set Accept, default
+        # to the canonical MCP value so a barebones proxy probe (e.g. our
+        # own integration tests) works without extra ceremony.
+        if not seen_accept:
+            outbound_headers.append(
+                ("Accept", "application/json, text/event-stream")
+            )
+
+        method = scope.get("method", "POST")
+        upstream_url = spec.url
+
+        # Stream the upstream response so SSE and chunked replies survive
+        # end-to-end. The httpx `stream` API keeps the connection open
+        # until we explicitly read aiter_raw / close.
+        try:
+            req = client.build_request(
+                method,
+                upstream_url,
+                headers=outbound_headers,
+                content=body if body else None,
+            )
+            stream_ctx = client.stream(
+                method,
+                upstream_url,
+                headers=outbound_headers,
+                content=body if body else None,
+            )
+        except httpx.RequestError as exc:
+            resp = JSONResponse(
+                {
+                    "error": "passthrough upstream unreachable",
+                    "backend": spec.name,
+                    "upstream": upstream_url,
+                    "detail": str(exc),
+                },
+                status_code=502,
+            )
+            await resp(scope, receive, send)
+            return
+
+        # `req` was built above only to validate the request shape early
+        # (httpx.URL parsing, encoding errors). The actual on-wire request
+        # happens inside `client.stream(...)`. We discard the prebuilt
+        # one so the linter doesn't flag unused vars.
+        del req
+
+        try:
+            async with stream_ctx as upstream_resp:
+                response_headers: list[tuple[bytes, bytes]] = []
+                for raw_name, raw_value in upstream_resp.headers.raw:
+                    name_lower = raw_name.decode("latin-1").lower()
+                    if name_lower in _HOP_BY_HOP or name_lower in _FRAME_DENY_HEADERS:
+                        continue
+                    response_headers.append((raw_name, raw_value))
+
+                await send({
+                    "type": "http.response.start",
+                    "status": upstream_resp.status_code,
+                    "headers": response_headers,
+                })
+
+                # Stream chunks straight through. `aiter_raw` yields the
+                # bytes exactly as the upstream sends them, preserving SSE
+                # frame boundaries.
+                async for chunk in upstream_resp.aiter_raw():
+                    if not chunk:
+                        continue
+                    await send({
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    })
+                # Final empty frame to flush.
+                await send({
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                })
+        except httpx.RequestError as exc:
+            # If the stream errors mid-flight (e.g. upstream TLS issue),
+            # we may have already sent a 200 / response.start — in that
+            # case the best we can do is close. If not, emit a 502.
+            try:
+                await send({
+                    "type": "http.response.start",
+                    "status": 502,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": (
+                        b'{"error":"passthrough stream failed",'
+                        b'"detail":' + repr(str(exc)).encode("utf-8") + b"}"
+                    ),
+                    "more_body": False,
+                })
+            except Exception:
+                # Already mid-response; nothing to do.
+                pass
+
     def status(self) -> dict[str, Any]:
         servers = []
         for name, state in self.servers.items():
@@ -712,6 +1119,34 @@ class ProxyManager:
             elif state.backend_info:
                 entry["transport"] = state.backend_info.get("transport")
                 entry["spec"] = dict(state.backend_info)
+            # Passthrough surfacing: explicit per-row flag + auth_state +
+            # pool stats so the UI can render the right badge and the
+            # agent (via `zelosmcp__list_loaded_servers`) can see which
+            # auth mode is active. Provider-backed passthrough is broker
+            # mode (GUI device flow + token injection), not the legacy
+            # "needs inbound Authorization" mode.
+            if getattr(state, "is_passthrough", False):
+                entry["passthrough"] = True
+                provider_name = getattr(spec, "auth_provider", None) if spec else None
+                if provider_name:
+                    provider = self.auth_registry.get(provider_name)
+                    entry["auth_state"] = (
+                        "provider_ready" if provider is not None
+                        else "provider_missing"
+                    )
+                    entry["auth_provider"] = provider_name
+                elif getattr(state, "passthrough_auth_bearer", None):
+                    entry["auth_state"] = "static_bearer"
+                else:
+                    entry["auth_state"] = "needs_inbound_token"
+                pool = getattr(state, "passthrough_pool", None)
+                if pool is not None:
+                    try:
+                        entry["passthrough_pool"] = pool.stats()
+                    except Exception:
+                        # Pool not fully initialised — surface absence
+                        # rather than crashing /api/status.
+                        pass
             servers.append(entry)
         # `running` reflects whether any USER backend is up. The builtin
         # is always up by design, so it's excluded from this aggregate
@@ -801,4 +1236,7 @@ class ProxyManager:
             cwd=spec.cwd,
             headers=spec.headers,
             compress=spec.compress,
+            passthrough=spec.passthrough,
+            auth_bearer=spec.auth_bearer,
+            passthrough_pool=spec.passthrough_pool,
         )

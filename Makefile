@@ -34,8 +34,8 @@ CORP_ROOT_AUTHORITY_CERT_NAME ?= Nike Root Authority NG
 # ----- Pincher source pinning -----
 # kmechlin's fork adds --basepath / --trust-proxy used by the default config's
 # reverseProxy entry. Override both to switch to upstream once that PR merges.
-PINCHER_REPO ?= https://github.com/kmechlin/pincherMCP.git
-PINCHER_REF  ?= feat/reverse-proxy-basepath
+PINCHER_REPO ?= https://github.com/kwad77/pincherMCP.git
+PINCHER_REF  ?= master
 
 # ============================================================================
 # Runtime variables (.env overrides these — `make init-env` writes a .env)
@@ -62,9 +62,32 @@ ZELOSMCP_CONTAINER  ?= zelosmcp
 ZELOSMCP_CONFIG     ?= $(shell pwd)/configs/default-zelosmcp.json
 ZELOSMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
 
+# Auth-providers config posted alongside the mcpServers config by `make load`.
+# zelosMCP also auto-loads this file on container startup (the lifespan hook
+# reads ZELOSMCP_AUTH_PROVIDERS_FILE inside the container, set below). Override
+# in .env to point at a different providers file or set to "" to skip.
+ZELOSMCP_AUTH_PROVIDERS_FILE ?= $(shell pwd)/configs/auth-providers.json
+
+# Provider client_ids passed to the container via env vars. The auth-providers
+# JSON file uses ${ZELOSMCP_GITHUB_CLIENT_ID} / ${ZELOSMCP_OKTA_*} — those
+# names resolve at config-load time inside the container, so the values must
+# be present in the container's environment. Source these from .env (which
+# `make init-env` writes) or a Kubernetes Secret in production.
+ZELOSMCP_GITHUB_CLIENT_ID ?=
+ZELOSMCP_OKTA_ISSUER ?=
+ZELOSMCP_OKTA_CLIENT_ID ?=
+ZELOSMCP_OKTA_MEMBERSHIP_HINT ?=
+ZELOSMCP_CI_GITHUB_PAT ?=
+
 # Host paths bind-mounted in.
 KUBERNETES_CONFIG_FILE ?= $(HOME)/.kube/config
 DOCKER_SOCK_FILE       ?= /var/run/docker.sock
+
+# Cursor's per-user state DB. Holds the cached team-admin policy under
+# `adminSettings.cached` (including the MCP server allowlist that decides
+# which entries in ~/.cursor/mcp.json are allowed to connect). Default is
+# the macOS path; override on Linux/Windows or for a non-default profile.
+CURSOR_STATE_DB ?= $(HOME)/Library/Application Support/Cursor/User/globalStorage/state.vscdb
 
 # Cursor `.mdc` rule file: where it lands and what access mode it carries.
 # Default: per-project. Set to $(HOME)/.cursor/rules/zelosmcp.mdc for global.
@@ -90,6 +113,7 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 	cert build-buildx-image setup-buildx setup build rebuild \
 	kubeconfig clean-kubeconfig \
 	up down restart load status logs shell ui tools rule index index-full \
+	cursor-mcp-allowlist \
 	clean nuke
 
 # ============================================================================
@@ -100,7 +124,7 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 # you add a new public target; the help output is generated from them.
 HELP_CONTROL := up down restart clean nuke
 HELP_SERVICE := load status tools rule index index-full ui kubeconfig clean-kubeconfig
-HELP_DEV     := init-env setup build rebuild cert logs shell vars
+HELP_DEV     := init-env setup build rebuild cert logs shell vars cursor-mcp-allowlist
 
 help: ## Print every public verb grouped by section
 	@printf '\nzelosMCP — Docker container lifecycle for the MCP proxy + aggregator.\n\n'
@@ -281,11 +305,23 @@ up: kubeconfig ## Build (if missing) + start container + load default backends
 		VOLUME_ARGS="$$VOLUME_ARGS -v $$spec" ; \
 	done < <(sed -e 's/[[:space:]]*\#.*$$//' -e '/^[[:space:]]*$$/d' \
 		"$(ZELOSMCP_VOLUMES_FILE)") ; \
+	@AUTH_MOUNT_ARGS=""; \
+	if [ -n "$(ZELOSMCP_AUTH_PROVIDERS_FILE)" ] && [ -f "$(ZELOSMCP_AUTH_PROVIDERS_FILE)" ]; then \
+		AUTH_MOUNT_ARGS="-v $(ZELOSMCP_AUTH_PROVIDERS_FILE):/etc/zelosmcp/auth-providers.json:ro"; \
+		echo "    -v $(ZELOSMCP_AUTH_PROVIDERS_FILE):/etc/zelosmcp/auth-providers.json:ro"; \
+	fi; \
 	docker run -d \
 		--name $(ZELOSMCP_CONTAINER) \
 		--restart unless-stopped \
 		--add-host host.docker.internal:host-gateway \
 		-p $(ZELOSMCP_BIND_ADDR):$(ZELOSMCP_PORT):$(ZELOSMCP_PORT) \
+		-e ZELOSMCP_AUTH_PROVIDERS_FILE=/etc/zelosmcp/auth-providers.json \
+		-e ZELOSMCP_GITHUB_CLIENT_ID="$(ZELOSMCP_GITHUB_CLIENT_ID)" \
+		-e ZELOSMCP_OKTA_ISSUER="$(ZELOSMCP_OKTA_ISSUER)" \
+		-e ZELOSMCP_OKTA_CLIENT_ID="$(ZELOSMCP_OKTA_CLIENT_ID)" \
+		-e ZELOSMCP_OKTA_MEMBERSHIP_HINT="$(ZELOSMCP_OKTA_MEMBERSHIP_HINT)" \
+		-e ZELOSMCP_CI_GITHUB_PAT="$(ZELOSMCP_CI_GITHUB_PAT)" \
+		$$AUTH_MOUNT_ARGS \
 		$$VOLUME_ARGS \
 		$(ZELOSMCP_IMAGE_TAG)
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -360,6 +396,16 @@ load: ## POST $(ZELOSMCP_CONFIG); chains `index` and `rule`
 		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
+	fi
+	@if [ -n "$(ZELOSMCP_AUTH_PROVIDERS_FILE)" ] && [ -f "$(ZELOSMCP_AUTH_PROVIDERS_FILE)" ]; then \
+		echo "==> POSTing $(ZELOSMCP_AUTH_PROVIDERS_FILE) to http://localhost:$(ZELOSMCP_PORT)/api/auth/providers/config"; \
+		RESP=$$(curl -sS -X POST -H "Content-Type: application/json" \
+			--data-binary @"$(ZELOSMCP_AUTH_PROVIDERS_FILE)" \
+			http://localhost:$(ZELOSMCP_PORT)/api/auth/providers/config); \
+		echo "$$RESP" | python3 -m json.tool 2>/dev/null || echo "$$RESP"; \
+		echo ""; \
+	else \
+		echo "(skip) auth-providers config not found at $(ZELOSMCP_AUTH_PROVIDERS_FILE) — using whatever the container auto-loaded at startup"; \
 	fi
 	@echo "==> POSTing config to http://localhost:$(ZELOSMCP_PORT)/api/start"
 	@RESP=$$(curl -sS -X POST -H "Content-Type: application/json" \
@@ -469,6 +515,51 @@ rule: ## Regenerate $(ZELOSMCP_RULE_FILE) (auto-chained from `load`)
 		-o $(ZELOSMCP_RULE_FILE)
 	@echo "==> wrote $(ZELOSMCP_RULE_FILE) ($(ZELOSMCP_RULE_ACCESS) mode, $$(wc -l < $(ZELOSMCP_RULE_FILE)) lines)"
 	@echo "    Restart Cursor (Cmd+Q) for the new rule to load."
+
+# ============================================================================
+# Cursor-side introspection
+# ============================================================================
+
+# Pretty-print Cursor's cached team-admin MCP allowlist. The entry list is
+# what gates which `serverUrl` / `command` shapes in ~/.cursor/mcp.json
+# Cursor will actually instantiate; mismatches show up in
+# ~/Library/Application Support/Cursor/logs/.../MCP user-*.log as
+# `config_server_removed` and look like Cursor silently dropped them.
+#
+# Optional FILTER variable narrows the output to entries whose serverUrl OR
+# command contains the given substring. Examples:
+#   make cursor-mcp-allowlist                       # full policy
+#   make cursor-mcp-allowlist FILTER=localhost      # only localhost entries
+#   make cursor-mcp-allowlist FILTER=nike.com
+cursor-mcp-allowlist: ## Print Cursor's team-admin MCP allowlist from $(CURSOR_STATE_DB)
+	@if ! command -v sqlite3 >/dev/null 2>&1; then \
+		echo "ERROR: sqlite3 not found on PATH"; exit 1; \
+	fi
+	@if [ ! -f "$(CURSOR_STATE_DB)" ]; then \
+		echo "ERROR: Cursor state DB not found: $(CURSOR_STATE_DB)"; \
+		echo "       Override with CURSOR_STATE_DB=path/to/state.vscdb if you're"; \
+		echo "       not on macOS or use a non-default profile."; \
+		exit 1; \
+	fi
+	@RAW=$$(sqlite3 "$(CURSOR_STATE_DB)" \
+		"SELECT value FROM ItemTable WHERE key='adminSettings.cached';"); \
+	if [ -z "$$RAW" ]; then \
+		echo "(no adminSettings.cached row — sign in to a team-managed Cursor"; \
+		echo " account and let Cursor sync once before retrying)"; \
+		exit 0; \
+	fi; \
+	FILTER='$(FILTER)'; \
+	if command -v jq >/dev/null 2>&1; then \
+		if [ -n "$$FILTER" ]; then \
+			echo "$$RAW" | jq --arg f "$$FILTER" \
+				'.allowedMcpConfiguration | {disableAll, requireMcpServersInTeamNetworkAllowlist, allowedMcpServers: [.allowedMcpServers[] | select(((.serverUrl // "") | contains($$f)) or ((.command // "") | contains($$f)))]}'; \
+		else \
+			echo "$$RAW" | jq '.allowedMcpConfiguration'; \
+		fi; \
+	else \
+		echo "(install jq for pretty-printed/filtered output; raw JSON follows)"; \
+		echo "$$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("allowedMcpConfiguration",{}),indent=2))'; \
+	fi
 
 # ============================================================================
 # Teardown

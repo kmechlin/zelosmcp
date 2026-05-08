@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
@@ -107,6 +108,56 @@ _REDOC_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+# Default path for the auth-providers config when ``ZELOSMCP_AUTH_PROVIDERS_FILE``
+# isn't set. Container deploys override this to ``/etc/zelosmcp/auth-providers.json``
+# (mounted from a Kubernetes Secret); local dev points at the repo path.
+_DEFAULT_AUTH_PROVIDERS_PATH = "configs/auth-providers.json"
+
+
+async def _autoload_auth_providers(manager) -> None:
+    """Load ``configs/auth-providers.json`` (or whatever
+    ``ZELOSMCP_AUTH_PROVIDERS_FILE`` points at) into the manager's
+    auth registry at startup.
+
+    Missing file is logged and skipped — a deployment with no
+    providers is a valid (legacy-passthrough-only) configuration.
+    Malformed file logs the error but doesn't crash the app; the
+    registry stays empty and any backend referencing a provider
+    will fail at /api/start time with a clear message.
+    """
+    import json as _json
+
+    log = logging.getLogger("zelosmcp")
+    path = os.environ.get(
+        "ZELOSMCP_AUTH_PROVIDERS_FILE", _DEFAULT_AUTH_PROVIDERS_PATH
+    )
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = _json.load(f)
+    except FileNotFoundError:
+        log.info(
+            "auth-providers config not found at %s; starting with empty registry",
+            path,
+        )
+        return
+    except (OSError, _json.JSONDecodeError) as exc:
+        log.error(
+            "auth-providers config %s failed to load: %s", path, exc
+        )
+        return
+
+    try:
+        result = await manager.start_auth_providers(payload)
+    except Exception as exc:
+        log.error(
+            "auth-providers config %s failed to register: %s", path, exc
+        )
+        return
+    log.info(
+        "auth-providers loaded from %s: %s", path, result.get("providers", {})
+    )
 
 
 def _flatten_call_result(result) -> dict | list | str | None:
@@ -572,6 +623,328 @@ def create_app(manager: ProxyManager | None = None):
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 
+    async def api_auth_providers_list(request: Request) -> JSONResponse:
+        """
+        summary: List configured auth providers with per-user status.
+        description: |
+          Returns one entry per provider in the registry. Each entry
+          carries the provider name, type, ready flag, optional
+          identity badge fields (username, avatar_url) when the user
+          has authenticated, the optional membership_hint, and a
+          flag indicating whether device flow is supported. Used by
+          the GUI Connections page to render one card per provider.
+
+          User identity is derived from the inbound Authorization
+          header (SHA-256 hashed via the same primitive the
+          passthrough pool uses for upstream session keying). Local
+          single-user deployments with no inbound Authorization
+          map to the "anonymous" key.
+        tags: [introspection]
+        responses:
+          200:
+            description: Array of provider status objects.
+        """
+        from zelosmcp.passthrough_pool import hash_authorization
+        user_key = hash_authorization(
+            request.headers.get("authorization")
+        )
+        providers_out: list[dict[str, Any]] = []
+        for provider in manager.auth_registry.values():
+            try:
+                status = await provider.status(user_key)
+            except Exception as exc:
+                logging.getLogger("zelosmcp").info(
+                    "auth provider '%s' status failed: %s",
+                    provider.name, exc,
+                )
+                providers_out.append({
+                    "name": provider.name,
+                    "type": provider.type,
+                    "ready": False,
+                    "identity": None,
+                    "membership_hint": None,
+                    "supports_device_flow": False,
+                    "error": str(exc),
+                })
+                continue
+            entry: dict[str, Any] = {
+                "name": status.name,
+                "type": status.type,
+                "ready": status.ready,
+                "membership_hint": status.membership_hint,
+                "supports_device_flow": status.supports_device_flow,
+            }
+            if status.identity is not None:
+                entry["identity"] = {
+                    "username": status.identity.username,
+                    "avatar_url": status.identity.avatar_url,
+                    "scopes": list(status.identity.scopes),
+                    "expires_at": status.identity.expires_at,
+                }
+            else:
+                entry["identity"] = None
+            providers_out.append(entry)
+        return JSONResponse({"providers": providers_out})
+
+    async def api_auth_provider_start(request: Request) -> JSONResponse:
+        """
+        summary: Initiate a device-flow handshake for one provider.
+        description: |
+          Returns the user_code, verification URLs, and a session_id
+          the GUI uses to poll for completion via the SSE stream
+          endpoint. The verification_uri_complete (when the upstream
+          provider supplies it) lets the GUI open a single-click
+          browser tab with the code already entered.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Device-flow session metadata.
+          404:
+            description: Unknown provider name.
+          400:
+            description: Provider doesn't support device flow.
+          502:
+            description: Upstream device-code endpoint failed.
+        """
+        from zelosmcp.auth.protocol import (
+            AuthProviderError,
+            DeviceFlowError,
+        )
+        from zelosmcp.passthrough_pool import hash_authorization
+
+        provider_name = request.path_params["provider"]
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return JSONResponse(
+                {"error": f"unknown provider '{provider_name}'"},
+                status_code=404,
+            )
+        user_key = hash_authorization(
+            request.headers.get("authorization")
+        )
+        try:
+            session = await provider.start_device_flow(user_key)
+        except DeviceFlowError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        except AuthProviderError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({
+            "session_id": session.session_id,
+            "user_code": session.user_code,
+            "verification_uri": session.verification_uri,
+            "verification_uri_complete": session.verification_uri_complete,
+            "expires_in": session.expires_in,
+            "poll_interval": session.poll_interval,
+        })
+
+    async def api_auth_provider_stream(request: Request) -> StreamingResponse:
+        """
+        summary: Server-Sent-Events stream of device-flow state.
+        description: |
+          The GUI subscribes to this stream after starting a device
+          flow. zelosMCP polls the upstream at the provider-prescribed
+          interval and pushes one SSE frame per state change (or per
+          poll, whichever is rarer). Stream terminates when the
+          state reaches a terminal value (complete / error / expired)
+          or when the session's expires_at passes.
+        tags: [introspection]
+        responses:
+          200:
+            description: SSE stream; each frame is a JSON object with `state` (and optional `identity` / `error`).
+            content:
+              text/event-stream: {}
+          404:
+            description: Unknown provider or unknown session_id.
+        """
+        from zelosmcp.auth.protocol import DeviceFlowStateKind
+
+        provider_name = request.path_params["provider"]
+        session_id = request.query_params.get("session")
+        if not session_id:
+            return JSONResponse(
+                {"error": "missing required query param 'session'"},
+                status_code=400,
+            )
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return JSONResponse(
+                {"error": f"unknown provider '{provider_name}'"},
+                status_code=404,
+            )
+
+        async def event_stream():
+            import json as _json
+            try:
+                while True:
+                    try:
+                        state = await provider.poll_device_flow(session_id)
+                    except Exception as exc:
+                        frame = {"state": "error", "error": str(exc)}
+                        yield f"data: {_json.dumps(frame)}\n\n"
+                        return
+                    payload: dict[str, Any] = {"state": state.state.value}
+                    if state.identity is not None:
+                        payload["identity"] = {
+                            "username": state.identity.username,
+                            "avatar_url": state.identity.avatar_url,
+                            "scopes": list(state.identity.scopes),
+                            "expires_at": state.identity.expires_at,
+                        }
+                    if state.error_message is not None:
+                        payload["error"] = state.error_message
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                    if state.state in (
+                        DeviceFlowStateKind.COMPLETE,
+                        DeviceFlowStateKind.ERROR,
+                        DeviceFlowStateKind.EXPIRED,
+                    ):
+                        return
+                    # Re-fetch the session to honour the latest
+                    # poll_interval (some providers slow_down the
+                    # cadence on rate-limit feedback).
+                    session_row = await manager.auth_store.get_device_session(
+                        session_id
+                    ) if manager.auth_store is not None else None
+                    interval = (
+                        float(session_row["poll_interval"])
+                        if session_row is not None
+                        and session_row.get("poll_interval")
+                        else 5.0
+                    )
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                pass
+
+        return StreamingResponse(
+            event_stream(), media_type="text/event-stream",
+        )
+
+    async def api_auth_provider_identity(request: Request) -> JSONResponse:
+        """
+        summary: Currently-authed identity for one provider.
+        description: |
+          Returns username + avatar + scopes + expiry for the
+          inbound user against one provider. Used by the
+          Connections card to render the user badge after a
+          successful auth.
+        tags: [introspection]
+        responses:
+          200:
+            description: Identity object; when not authenticated the body has ready set to false and identity null.
+          404:
+            description: Unknown provider.
+        """
+        from zelosmcp.passthrough_pool import hash_authorization
+
+        provider_name = request.path_params["provider"]
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return JSONResponse(
+                {"error": f"unknown provider '{provider_name}'"},
+                status_code=404,
+            )
+        user_key = hash_authorization(
+            request.headers.get("authorization")
+        )
+        try:
+            status = await provider.status(user_key)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": str(exc), "ready": False}, status_code=200,
+            )
+        if status.identity is None:
+            return JSONResponse({"ready": status.ready, "identity": None})
+        return JSONResponse({
+            "ready": status.ready,
+            "identity": {
+                "username": status.identity.username,
+                "avatar_url": status.identity.avatar_url,
+                "scopes": list(status.identity.scopes),
+                "expires_at": status.identity.expires_at,
+            },
+        })
+
+    async def api_auth_provider_revoke(request: Request) -> JSONResponse:
+        """
+        summary: Sign out — drop the stored token for one provider.
+        description: |
+          Best-effort upstream revocation followed by unconditional
+          local removal. After this returns, the provider's
+          is_ready returns False and the aggregator gates the
+          backend's wrappers again.
+        tags: [lifecycle]
+        responses:
+          200: { description: "Revoked." }
+          404: { description: "Unknown provider." }
+        """
+        from zelosmcp.passthrough_pool import hash_authorization
+
+        provider_name = request.path_params["provider"]
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return JSONResponse(
+                {"error": f"unknown provider '{provider_name}'"},
+                status_code=404,
+            )
+        user_key = hash_authorization(
+            request.headers.get("authorization")
+        )
+        try:
+            await provider.revoke(user_key)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400,
+            )
+        return JSONResponse({"ok": True})
+
+    async def api_auth_providers_config_get(request: Request) -> JSONResponse:
+        """
+        summary: Currently-loaded auth-providers config (redacted).
+        description: |
+          Returns the providers registry as the GUI's Connections page
+          renders it. Secret-like fields (the bearer token on static
+          providers) are replaced with three asterisks. The client_id
+          field is non-sensitive (the public OAuth client identifier
+          ships in zelosMCP's default config) and stays in the clear.
+        tags: [introspection]
+        responses:
+          200:
+            description: Object with a `providers` key mapping provider name to redacted spec.
+        """
+        return JSONResponse(manager.current_auth_providers_config(redacted=True))
+
+    async def api_auth_providers_config_post(request: Request) -> JSONResponse:
+        """
+        summary: Replace the auth-providers config at runtime.
+        description: |
+          POST a JSON document with the same shape as the
+          configs/auth-providers.json file (top-level providers mapping).
+          Validates against the currently-loaded backend specs so the swap
+          cannot drop a referenced provider. Existing tokens in the auth
+          store survive provider renames; provider deletion drops the
+          associated tokens via the manager (logged for audit).
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Per-provider load result map.
+          400:
+            description: Invalid JSON or schema error.
+        """
+        try:
+            data = await request.json()
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"invalid JSON: {exc}"},
+                status_code=400,
+            )
+        try:
+            result = await manager.start_auth_providers(data)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)}, status_code=400,
+            )
+        return JSONResponse({"ok": True, **result})
+
     async def api_savings(request: Request) -> JSONResponse:
         """
         summary: Token-savings dashboard snapshot.
@@ -860,6 +1233,24 @@ def create_app(manager: ProxyManager | None = None):
             logging.getLogger("zelosmcp").error(
                 "reverse-proxy client failed to start: %s", exc, exc_info=True
             )
+        # Open the encrypted auth store before any provider tries to read
+        # / write user tokens. Failure is logged but non-fatal — the app
+        # still boots; OAuth providers just won't work until the store is
+        # available.
+        try:
+            await manager.start_auth_store()
+        except Exception as exc:
+            logging.getLogger("zelosmcp").error(
+                "auth store failed to start: %s", exc, exc_info=True
+            )
+        # Auto-load the auth-providers config from disk before serving
+        # any traffic so backend specs that reference providers can
+        # resolve at /api/start time. Path follows the same priority
+        # order as ZELOSMCP_CONFIG: explicit env > default. Missing
+        # file is non-fatal (deployment with no providers is valid);
+        # malformed file fails the lifespan so misconfig surfaces at
+        # boot rather than the first auth attempt.
+        await _autoload_auth_providers(manager)
         try:
             yield
         finally:
@@ -867,6 +1258,8 @@ def create_app(manager: ProxyManager | None = None):
                 await manager.stop_builtin()
             with contextlib.suppress(Exception):
                 await manager.stop_all()
+            with contextlib.suppress(Exception):
+                await manager.stop_auth_store()
             with contextlib.suppress(Exception):
                 await manager.stop_http_client()
 
@@ -894,8 +1287,113 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/repos", api_repos_list),
             Route("/api/repos/write-rule", api_repo_write_rule, methods=["POST"]),
             Route("/api/repos/index", api_repo_index, methods=["POST"]),
+            Route("/api/auth/providers/config", api_auth_providers_config_get),
+            Route(
+                "/api/auth/providers/config",
+                api_auth_providers_config_post,
+                methods=["POST"],
+            ),
+            Route("/api/auth/providers", api_auth_providers_list),
+            Route(
+                "/api/auth/{provider}/start",
+                api_auth_provider_start,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/auth/{provider}/stream",
+                api_auth_provider_stream,
+            ),
+            Route(
+                "/api/auth/{provider}/identity",
+                api_auth_provider_identity,
+            ),
+            Route(
+                "/api/auth/{provider}/revoke",
+                api_auth_provider_revoke,
+                methods=["POST"],
+            ),
         ],
     )
+
+    async def _handle_aggregate_with_challenge(
+        session_manager,
+        scope: dict,
+        receive,
+        send,
+        challenge_cls,
+    ) -> None:
+        """Wrap aggregator ``session_manager.handle_request`` so a
+        :class:`PassthroughChallengeError` raised by an aggregator
+        handler surfaces as a transport-level 401 + WWW-Authenticate
+        instead of getting buried in a JSON-RPC error envelope.
+
+        Why we use a side-channel ContextVar (``pending_challenge``)
+        instead of catching exceptions: MCP's lowlevel ``Server``
+        catches *any* exception from a handler and serialises it as a
+        JSON-RPC error response (HTTP 200). A plain ``raise`` would
+        therefore never surface the challenge to the HTTP layer.
+        The aggregator handlers set the ContextVar before returning;
+        we check it here after ``handle_request`` returns and rewrite
+        the response if set.
+
+        We buffer ALL response messages until ``handle_request``
+        completes so we can swap the entire response (status + headers
+        + body) in one shot.
+        """
+        from zelosmcp.passthrough_pool import pending_challenge as _pending
+
+        # Bind a fresh mutable list as the per-request signal slot.
+        # The list is shared by reference into child tasks the SDK
+        # spawns to run handlers, so a handler appending to the list
+        # is visible to us after ``handle_request`` returns.
+        challenge_box: list = []
+        token = _pending.set(challenge_box)
+
+        buffered: list[dict] = []
+
+        async def buffered_send(message: dict) -> None:
+            buffered.append(message)
+
+        challenge: BaseException | None = None
+        try:
+            await session_manager.handle_request(scope, receive, buffered_send)
+        except challenge_cls as exc:
+            challenge = exc
+        finally:
+            # If a handler signalled a challenge via the list, prefer
+            # the first one (closest to the failed call). A direct
+            # exception from handle_request also wins over signals.
+            if challenge is None and challenge_box:
+                challenge = challenge_box[0]
+            _pending.reset(token)
+
+        if challenge is not None:
+            ww = getattr(challenge, "www_authenticate", None) or "Bearer"
+            status = getattr(challenge, "status", 401) or 401
+            backend = getattr(challenge, "backend", "unknown")
+            await send({
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", ww.encode("latin-1", errors="replace")),
+                ],
+            })
+            import json as _json
+
+            await send({
+                "type": "http.response.body",
+                "body": _json.dumps({
+                    "error": "authentication_required",
+                    "backend": backend,
+                }).encode("utf-8"),
+                "more_body": False,
+            })
+            return
+
+        # No challenge: replay the buffered messages in order.
+        for msg in buffered:
+            await send(msg)
 
     async def asgi_app(scope, receive, send) -> None:
         """Dispatch /<name>/mcp, /mcp, and any backend's reverseProxy mount
@@ -922,15 +1420,85 @@ def create_app(manager: ProxyManager | None = None):
                     target_label = None
 
             if target_label is not None:
+                # OAuth-passthrough backends have no zelosMCP-owned
+                # session_manager; route them through the streaming HTTP
+                # forwarder so the client's OAuth dance flows directly to
+                # the upstream issuer. Only applies to /<name>/mcp — the
+                # /mcp aggregator handles passthrough internally via the
+                # session pool (Phase 2B).
+                if (
+                    target is not None
+                    and target_label != "aggregate"
+                    and getattr(target, "is_passthrough", False)
+                ):
+                    if not getattr(target, "running", False):
+                        resp = JSONResponse(
+                            {"error": f"No MCP server '{target_label}' is running"},
+                            status_code=503,
+                        )
+                        return await resp(scope, receive, send)
+                    spec = manager.get_spec(target_label)
+                    if spec is None or not spec.passthrough:
+                        # Inconsistent state — state says passthrough but
+                        # spec disagrees. Fail loudly rather than silently
+                        # routing through the wrong path.
+                        resp = JSONResponse(
+                            {
+                                "error": (
+                                    f"backend '{target_label}' is in passthrough "
+                                    "state but has no matching ServerSpec"
+                                )
+                            },
+                            status_code=500,
+                        )
+                        return await resp(scope, receive, send)
+                    return await manager.proxy_mcp_request(spec, scope, receive, send)
+
                 if target is not None and getattr(target, "session_manager", None) is not None:
                     # Strip the routing prefix so the session manager sees a
                     # path it expects (e.g. "/mcp" or "").
                     forwarded = dict(scope)
                     forwarded["path"] = "/mcp"
                     forwarded["raw_path"] = b"/mcp"
-                    return await target.session_manager.handle_request(
-                        forwarded, receive, send
+                    # Make the inbound HTTP Authorization header readable
+                    # from inside MCP handlers via the ContextVar set
+                    # below. The aggregator uses this to route passthrough
+                    # backend calls through their per-token session pool;
+                    # all other backends ignore it.
+                    from zelosmcp.passthrough_pool import (
+                        PassthroughChallengeError,
+                        inbound_authorization,
                     )
+
+                    auth_value: str | None = None
+                    for k, v in scope.get("headers", []):
+                        if k.lower() == b"authorization":
+                            try:
+                                auth_value = v.decode("latin-1")
+                            except Exception:
+                                auth_value = None
+                            break
+                    auth_token = inbound_authorization.set(auth_value)
+                    try:
+                        # Phase 2C: the middleware around session_manager
+                        # converts a PassthroughChallengeError raised
+                        # from inside an aggregator handler into a 401
+                        # + WWW-Authenticate response. For the per-
+                        # backend / non-aggregator path the session
+                        # manager runs handlers as today.
+                        if target_label == "aggregate":
+                            return await _handle_aggregate_with_challenge(
+                                target.session_manager,
+                                forwarded,
+                                receive,
+                                send,
+                                PassthroughChallengeError,
+                            )
+                        return await target.session_manager.handle_request(
+                            forwarded, receive, send
+                        )
+                    finally:
+                        inbound_authorization.reset(auth_token)
                 if target_label == "aggregate":
                     msg = "No MCP servers are running"
                 else:

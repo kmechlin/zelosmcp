@@ -1,4 +1,20 @@
 {
+  "_doc": [
+    "Default mcpServers catalog for zelosMCP. Trimmed in PR 7 to the",
+    "minimum useful set: kubernetes + docker (stdio, no auth) and one",
+    "github passthrough backend referencing the github_oauth_app",
+    "provider in configs/auth-providers.json.",
+    "",
+    "The github backend's wrappers are GATED behind successful auth via",
+    "the GUI Connections page (left nav -> Authentication -> Connections).",
+    "Until the user authorizes, Cursor sees no github__* tools at all.",
+    "",
+    "For the broader Nike/atlassian/artifactory/box example matrix, see",
+    "configs/example-passthrough-zelosmcp.json + configs/example-auth-",
+    "providers.json — load both with:",
+    "  make load ZELOSMCP_CONFIG=configs/example-passthrough-zelosmcp.json \\",
+    "             ZELOSMCP_AUTH_PROVIDERS_FILE=configs/example-auth-providers.json"
+  ],
   "mcpServers": {
     "kubernetes": {
       "command": "npx",
@@ -17,6 +33,14 @@
       ],
       "env": {
         "DOCKER_HOST": "unix:///var/run/docker.sock"
+      }
+    },
+    "github": {
+      "type": "streamable-http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "passthrough": true,
+      "auth": {
+        "provider": "github_oauth_app"
       }
     }
   }
