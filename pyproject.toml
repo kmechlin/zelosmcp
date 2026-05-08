@@ -15,6 +15,7 @@ dependencies = [
     "httpx>=0.25",
     "aiosqlite>=0.20",
     "markdown>=3.5",
+    "cryptography>=41.0",
 ]
 
 [project.optional-dependencies]

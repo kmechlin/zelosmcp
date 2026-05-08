@@ -1,0 +1,59 @@
+{
+  "_doc": [
+    "Example auth-providers config showing the full provider matrix:",
+    "  - github_oauth_app: device flow against github.com",
+    "  - nike_okta: device flow against the Nike Okta tenant, with the",
+    "    membership_hint surfacing the authorized-group requirement",
+    "    (Nike.uee.maria) in the Connections GUI before the user hits",
+    "    Okta's consent screen.",
+    "  - ci_pat: legacy static-bearer mode for headless / CI deploys",
+    "    where no browser is available (the GUI device-flow flow can't",
+    "    run). Wraps a PAT injected via env var.",
+    "",
+    "Pair this file with configs/example-passthrough-zelosmcp.json",
+    "(the example mcp-server catalog), e.g.:",
+    "  make load ZELOSMCP_CONFIG=configs/example-passthrough-zelosmcp.json \\",
+    "             ZELOSMCP_AUTH_PROVIDERS_FILE=configs/example-auth-providers.json",
+    "",
+    "All env vars are interpolated at parse time via the standard",
+    "${VAR} syntax — missing vars fail-loud at config-load with a",
+    "clear ConfigError.",
+    "",
+    "membership_hint is OPTIONAL and UX-only — never used for",
+    "authorization (Okta enforces). It just lets the GUI show",
+    "'Membership required: <group>' on the provider card so users",
+    "know what they need before clicking Connect."
+  ],
+  "providers": {
+    "github_oauth_app": {
+      "type": "github_device_flow",
+      "client_id": "${ZELOSMCP_GITHUB_CLIENT_ID}",
+      "scopes": [
+        "repo",
+        "read:org",
+        "user:email",
+        "gist",
+        "workflow",
+        "read:packages",
+        "notifications",
+        "project",
+        "codespace"
+      ]
+    },
+    "nike_okta": {
+      "type": "okta_device_flow",
+      "issuer": "${ZELOSMCP_OKTA_ISSUER}",
+      "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "scopes": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
+    },
+    "ci_pat": {
+      "type": "static",
+      "bearer": "${ZELOSMCP_CI_GITHUB_PAT}"
+    }
+  }
+}

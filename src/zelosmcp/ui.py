@@ -457,6 +457,164 @@ HTML_TEMPLATE = """\
     flex-shrink: 0;
   }
 
+  /* ── Connections (auth providers) ── */
+  .connections-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .connection-card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border: 1px solid var(--border);
+  }
+  .connection-card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .connection-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--black);
+  }
+  .connection-card-status {
+    font-size: 12px;
+    color: var(--mid);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .connection-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mid);
+    flex-shrink: 0;
+  }
+  .connection-status-dot.connected {
+    background: #15803d;
+  }
+  .connection-status-dot.gated {
+    background: #c2410c;
+  }
+  .connection-card-hint {
+    font-size: 11px;
+    color: var(--mid);
+    font-style: italic;
+  }
+  .connection-card-identity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--black);
+  }
+  .connection-card-identity img {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+  }
+  .connection-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  /* Device-flow modal */
+  .connect-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .connect-modal-backdrop.hidden {
+    display: none;
+  }
+  .connect-modal {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 28px;
+    min-width: 360px;
+    max-width: 480px;
+    position: relative;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  }
+  .connect-modal h3 {
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .connect-modal-hint {
+    background: #fef3c7;
+    border-left: 3px solid #d97706;
+    padding: 8px 12px;
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: #92400e;
+  }
+  .connect-modal-status {
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .connect-modal-status.complete {
+    color: #15803d;
+    font-weight: 700;
+  }
+  .connect-modal-status.error {
+    color: #b91c1c;
+    font-weight: 700;
+  }
+  .connect-modal-code-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 0;
+    background: #f3f4f6;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-family: var(--mono);
+  }
+  .connect-modal-code-row code {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--black);
+  }
+  .connect-modal-code-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--mid);
+    letter-spacing: 0.05em;
+  }
+  .connect-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: transparent;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--mid);
+    line-height: 1;
+  }
+  .connect-modal-close:hover {
+    color: var(--black);
+  }
+
   /* ── Server list ── */
   .server-list {
     display: flex;
@@ -1150,6 +1308,10 @@ HTML_TEMPLATE = """\
       <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
     </div>
     <div class="nav-group">
+      <div class="nav-group-label">Authentication</div>
+      <button type="button" class="nav-item" data-view="connections">Connections</button>
+    </div>
+    <div class="nav-group">
       <div class="nav-group-label">Event logging</div>
       <button type="button" class="nav-item" data-view="logs">Activity</button>
     </div>
@@ -1392,6 +1554,38 @@ HTML_TEMPLATE = """\
             spellcheck="false"
           />
           <div class="log-viewer" id="log-viewer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Connections view: per-provider auth cards + device-flow modal -->
+    <section class="view" data-view="connections">
+      <p class="intro">Per-user authentication for OAuth-protected MCP backends. Connecting a provider here unlocks the corresponding wrappers in <code>tools/list</code> at <code>localhost:8000/mcp</code> &mdash; until a backend's provider is connected, its wrappers are hidden from Cursor entirely.</p>
+
+      <div class="section">
+        <div class="section-label">
+          <span>Connections</span>
+          <span class="dashboard-meta" id="connections-meta">&mdash;</span>
+        </div>
+        <div id="connections-list" class="connections-list">
+          <span class="docs-empty">Loading providers...</span>
+        </div>
+      </div>
+
+      <!-- Device-flow modal. Hidden by default; shown via showConnectModal() -->
+      <div class="connect-modal-backdrop hidden" id="connect-modal-backdrop">
+        <div class="connect-modal" role="dialog" aria-modal="true" aria-labelledby="connect-modal-title">
+          <button type="button" class="connect-modal-close" onclick="closeConnectModal()" aria-label="Close">&times;</button>
+          <h3 id="connect-modal-title">Connect</h3>
+          <p class="connect-modal-hint hidden" id="connect-modal-hint"></p>
+          <p id="connect-modal-instructions">One-time browser authorization. We will open the upstream provider's authorize page in a new tab.</p>
+          <div class="connect-modal-code-row hidden" id="connect-modal-code-row">
+            <span class="connect-modal-code-label">Code:</span>
+            <code id="connect-modal-code">&mdash;</code>
+            <button type="button" class="btn-mini btn-outline" onclick="copyConnectCode()">Copy</button>
+          </div>
+          <a id="connect-modal-authorize-link" class="btn btn-primary" target="_blank" rel="noopener" style="display:none; text-decoration:none; margin-top: 16px;">Authorize on Upstream</a>
+          <p class="connect-modal-status" id="connect-modal-status">Starting...</p>
         </div>
       </div>
     </section>
@@ -1740,6 +1934,30 @@ HTML_TEMPLATE = """\
         state.textContent = "stopped";
       }
       row.appendChild(state);
+
+      // OAuth-passthrough indicator. Shown for any backend running in
+      // passthrough mode so the operator knows requests forward to the
+      // upstream issuer rather than terminating in zelosmcp. The
+      // tooltip explains what the auth_state values mean.
+      if (s.passthrough) {
+        const pt = document.createElement("span");
+        pt.className = "pill";
+        pt.textContent = "passthrough";
+        const authState = s.auth_state || "unknown";
+        if (authState === "static_bearer") {
+          pt.title = "Passthrough mode with a static fallback bearer token. " +
+            "Inbound Authorization wins; the static token is injected only " +
+            "when the caller has none.";
+        } else if (authState === "needs_inbound_token") {
+          pt.title = "Passthrough mode without a static fallback. The MCP " +
+            "client must perform OAuth directly with the upstream issuer; " +
+            "zelosmcp forwards the resulting Authorization header verbatim.";
+        } else {
+          pt.title = "Passthrough mode: inbound Authorization is forwarded " +
+            "to the upstream MCP server.";
+        }
+        row.appendChild(pt);
+      }
 
       const meta = document.createElement("div");
       meta.className = "server-meta grow";
@@ -2606,6 +2824,7 @@ HTML_TEMPLATE = """\
       ensureSavingsStream();
     }
     if (name === "docs") loadDocsIndex();
+    if (name === "connections") loadConnections();
   }
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
@@ -3043,6 +3262,264 @@ HTML_TEMPLATE = """\
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
   }
+
+  // ── Connections (auth providers) ───────────────────────────────────
+  // Renders one card per provider returned by /api/auth/providers.
+  // Connect button POSTs to /api/auth/<name>/start, then opens
+  // verification_uri_complete in a new tab and consumes the SSE
+  // stream at /api/auth/<name>/stream until terminal state.
+  let connectModalSse = null;
+  let connectModalProvider = null;
+  let connectModalSession = null;
+
+  async function loadConnections() {
+    const meta = document.getElementById("connections-meta");
+    const list = document.getElementById("connections-list");
+    if (!list) return;
+    if (meta) meta.textContent = "loading...";
+    list.innerHTML = '<span class="docs-empty">Loading providers...</span>';
+    let providers = [];
+    try {
+      const r = await fetch("/api/auth/providers");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const body = await r.json();
+      providers = Array.isArray(body.providers) ? body.providers : [];
+    } catch (err) {
+      if (meta) meta.textContent = "error: " + err.message;
+      list.innerHTML = '<span class="docs-empty">Failed to load providers.</span>';
+      return;
+    }
+    if (meta) {
+      meta.textContent = providers.length === 0
+        ? "no providers configured"
+        : `${providers.length} provider${providers.length === 1 ? "" : "s"}`;
+    }
+    list.innerHTML = "";
+    if (providers.length === 0) {
+      const p = document.createElement("span");
+      p.className = "docs-empty";
+      p.textContent = "No auth providers configured. Edit configs/auth-providers.json.";
+      list.appendChild(p);
+      return;
+    }
+    providers.forEach((entry) => list.appendChild(renderConnectionCard(entry)));
+  }
+
+  function renderConnectionCard(entry) {
+    const card = document.createElement("div");
+    card.className = "connection-card";
+
+    const body = document.createElement("div");
+    body.className = "connection-card-body";
+
+    const title = document.createElement("span");
+    title.className = "connection-card-title";
+    title.textContent = entry.name;
+    body.appendChild(title);
+
+    const status = document.createElement("span");
+    status.className = "connection-card-status";
+    const dot = document.createElement("span");
+    dot.className = "connection-status-dot";
+    if (entry.ready) dot.classList.add("connected");
+    else if (entry.supports_device_flow) dot.classList.add("gated");
+    status.appendChild(dot);
+    const statusText = document.createElement("span");
+    if (entry.ready && entry.identity && entry.identity.username) {
+      statusText.textContent = "Connected";
+    } else if (entry.ready) {
+      statusText.textContent = "Ready (legacy)";
+    } else if (entry.supports_device_flow) {
+      statusText.textContent = "Not connected";
+    } else {
+      statusText.textContent = "Always available";
+    }
+    statusText.appendChild(document.createTextNode(" \u00b7 " + entry.type));
+    status.appendChild(statusText);
+    body.appendChild(status);
+
+    if (entry.identity && entry.identity.username) {
+      const ident = document.createElement("span");
+      ident.className = "connection-card-identity";
+      if (entry.identity.avatar_url) {
+        const img = document.createElement("img");
+        img.src = entry.identity.avatar_url;
+        img.alt = "";
+        ident.appendChild(img);
+      }
+      const nm = document.createElement("span");
+      nm.textContent = "@" + entry.identity.username;
+      ident.appendChild(nm);
+      body.appendChild(ident);
+    }
+
+    if (entry.membership_hint) {
+      const hint = document.createElement("span");
+      hint.className = "connection-card-hint";
+      hint.textContent = "Membership required: " + entry.membership_hint;
+      body.appendChild(hint);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "connection-card-actions";
+    if (entry.supports_device_flow) {
+      const connect = document.createElement("button");
+      connect.type = "button";
+      connect.className = "btn btn-mini " + (entry.ready ? "btn-outline" : "btn-primary");
+      connect.textContent = entry.ready ? "Reconnect" : "Connect";
+      connect.addEventListener("click", () => startConnect(entry));
+      actions.appendChild(connect);
+    }
+    if (entry.ready && entry.type !== "static" && entry.type !== "passthrough") {
+      const signout = document.createElement("button");
+      signout.type = "button";
+      signout.className = "btn btn-mini btn-outline";
+      signout.textContent = "Sign out";
+      signout.addEventListener("click", () => signOutProvider(entry));
+      actions.appendChild(signout);
+    }
+
+    card.appendChild(body);
+    card.appendChild(actions);
+    return card;
+  }
+
+  async function startConnect(entry) {
+    showConnectModal(entry);
+    setConnectModalStatus("Requesting device code...", null);
+    let session;
+    try {
+      const r = await fetch(`/api/auth/${encodeURIComponent(entry.name)}/start`, {
+        method: "POST",
+      });
+      if (!r.ok) {
+        const body = await r.text();
+        throw new Error(`HTTP ${r.status}: ${body}`);
+      }
+      session = await r.json();
+    } catch (err) {
+      setConnectModalStatus("Failed to start: " + err.message, "error");
+      return;
+    }
+    connectModalSession = session;
+    connectModalProvider = entry.name;
+    const codeRow = document.getElementById("connect-modal-code-row");
+    const codeEl = document.getElementById("connect-modal-code");
+    if (codeRow) codeRow.classList.remove("hidden");
+    if (codeEl) codeEl.textContent = session.user_code;
+    const link = document.getElementById("connect-modal-authorize-link");
+    if (link) {
+      link.href = session.verification_uri_complete || session.verification_uri;
+      link.style.display = "inline-flex";
+    }
+    setConnectModalStatus("Waiting for authorization in browser...", null);
+    streamConnectStatus(entry.name, session.session_id);
+  }
+
+  function streamConnectStatus(provider, sessionId) {
+    if (connectModalSse) {
+      try { connectModalSse.close(); } catch (e) {}
+      connectModalSse = null;
+    }
+    const url = `/api/auth/${encodeURIComponent(provider)}/stream?session=${encodeURIComponent(sessionId)}`;
+    const sse = new EventSource(url);
+    connectModalSse = sse;
+    sse.onmessage = (ev) => {
+      let frame;
+      try { frame = JSON.parse(ev.data); } catch { return; }
+      if (frame.state === "complete") {
+        const who = frame.identity && frame.identity.username
+          ? "@" + frame.identity.username
+          : "your account";
+        setConnectModalStatus("Connected as " + who, "complete");
+        try { sse.close(); } catch (e) {}
+        connectModalSse = null;
+        // Refresh the cards so the connected state shows up.
+        setTimeout(() => { closeConnectModal(); loadConnections(); }, 1500);
+      } else if (frame.state === "expired") {
+        setConnectModalStatus("Code expired. Click Connect again.", "error");
+        try { sse.close(); } catch (e) {}
+        connectModalSse = null;
+      } else if (frame.state === "error") {
+        setConnectModalStatus("Error: " + (frame.error || "unknown"), "error");
+        try { sse.close(); } catch (e) {}
+        connectModalSse = null;
+      }
+    };
+    sse.onerror = () => {
+      // Browser may auto-reconnect; don't tear down on transient errors.
+    };
+  }
+
+  function showConnectModal(entry) {
+    const backdrop = document.getElementById("connect-modal-backdrop");
+    const title = document.getElementById("connect-modal-title");
+    const hint = document.getElementById("connect-modal-hint");
+    const codeRow = document.getElementById("connect-modal-code-row");
+    const link = document.getElementById("connect-modal-authorize-link");
+    if (!backdrop) return;
+    backdrop.classList.remove("hidden");
+    if (title) title.textContent = "Connect " + entry.name;
+    if (hint) {
+      if (entry.membership_hint) {
+        hint.textContent = "You must be a member of " + entry.membership_hint
+          + " to authorize. The browser will reject the consent otherwise.";
+        hint.classList.remove("hidden");
+      } else {
+        hint.classList.add("hidden");
+      }
+    }
+    if (codeRow) codeRow.classList.add("hidden");
+    if (link) link.style.display = "none";
+  }
+
+  function closeConnectModal() {
+    const backdrop = document.getElementById("connect-modal-backdrop");
+    if (backdrop) backdrop.classList.add("hidden");
+    if (connectModalSse) {
+      try { connectModalSse.close(); } catch (e) {}
+      connectModalSse = null;
+    }
+    connectModalProvider = null;
+    connectModalSession = null;
+  }
+
+  function setConnectModalStatus(text, kind) {
+    const el = document.getElementById("connect-modal-status");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove("complete", "error");
+    if (kind) el.classList.add(kind);
+  }
+
+  function copyConnectCode() {
+    const codeEl = document.getElementById("connect-modal-code");
+    if (!codeEl || !navigator.clipboard) return;
+    navigator.clipboard.writeText(codeEl.textContent || "").catch(() => {});
+  }
+
+  async function signOutProvider(entry) {
+    if (!confirm(`Sign out of ${entry.name}? You'll need to re-authorize to use it again.`)) return;
+    try {
+      const r = await fetch(`/api/auth/${encodeURIComponent(entry.name)}/revoke`, {
+        method: "POST",
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+    } catch (err) {
+      alert("Sign out failed: " + err.message);
+      return;
+    }
+    loadConnections();
+  }
+
+  // Click outside modal to close.
+  (function () {
+    const backdrop = document.getElementById("connect-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) closeConnectModal();
+    });
+  })();
 
   // Initial status
   refreshStatus();

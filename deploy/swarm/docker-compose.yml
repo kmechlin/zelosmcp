@@ -1,0 +1,84 @@
+# zelosMCP Docker Swarm stack.
+#
+# Mirrors the Kubernetes manifest:
+#   - configs section ships the mcpServers catalog (low-sensitivity)
+#   - secrets section ships auth-providers.json + auth.key (medium)
+#   - one named volume covers persistent state (savings + auth.sqlite)
+#
+# Deploy with:
+#   docker swarm init                                # if not already
+#   echo 'YOUR_FERNET_KEY' | docker secret create zelosmcp_auth_key -
+#   docker secret create zelosmcp_auth_providers \
+#       deploy/swarm/auth-providers.json             # local file you fill in
+#   docker stack deploy -c deploy/swarm/docker-compose.yml zelosmcp
+#
+# See deploy/README.md for the full prerequisites.
+
+version: "3.8"
+
+services:
+  zelosmcp:
+    image: IMAGE_TAG_HERE
+    ports:
+      - target: 8000
+        published: 8000
+        mode: host
+    environment:
+      ZELOSMCP_AUTH_PROVIDERS_FILE: /run/secrets/zelosmcp_auth_providers
+      ZELOSMCP_AUTH_KEY_FILE: /run/secrets/zelosmcp_auth_key
+      # Provider client_ids — Swarm doesn't have valueFrom-style env
+      # references like k8s, so put these in your shell environment
+      # before running `docker stack deploy` and they'll be picked up.
+      # Or move them into the auth-providers secret as a JSON file
+      # and remove these env entries entirely.
+      ZELOSMCP_GITHUB_CLIENT_ID: ${ZELOSMCP_GITHUB_CLIENT_ID:-}
+      ZELOSMCP_OKTA_ISSUER: ${ZELOSMCP_OKTA_ISSUER:-}
+      ZELOSMCP_OKTA_CLIENT_ID: ${ZELOSMCP_OKTA_CLIENT_ID:-}
+      ZELOSMCP_OKTA_MEMBERSHIP_HINT: ${ZELOSMCP_OKTA_MEMBERSHIP_HINT:-}
+    configs:
+      - source: zelosmcp_mcp_servers
+        target: /etc/zelosmcp/mcp-servers.json
+        mode: 0444
+    secrets:
+      - source: zelosmcp_auth_providers
+        target: zelosmcp_auth_providers
+        mode: 0400
+      - source: zelosmcp_auth_key
+        target: zelosmcp_auth_key
+        mode: 0400
+    volumes:
+      - zelosmcp_state:/root/.zelosmcp
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+configs:
+  zelosmcp_mcp_servers:
+    file: ../../configs/default-zelosmcp.json
+
+secrets:
+  # Auth-providers JSON — same shape as configs/auth-providers.json.
+  # Pre-create with `docker secret create zelosmcp_auth_providers
+  # path/to/auth-providers.json` before deploying the stack.
+  zelosmcp_auth_providers:
+    external: true
+  # AES key for the encrypted auth store. Pre-create with
+  # `echo 'YOUR_FERNET_KEY' | docker secret create zelosmcp_auth_key -`.
+  zelosmcp_auth_key:
+    external: true
+
+volumes:
+  # Single named volume covers savings.sqlite + auth.sqlite. Same
+  # mount point the local-dev configs/default-volumes.conf uses.
+  zelosmcp_state:

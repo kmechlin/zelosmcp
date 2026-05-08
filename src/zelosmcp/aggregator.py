@@ -30,6 +30,12 @@ from zelosmcp.compression import (
     handle_compressed_call,
     wrapper_tool_names,
 )
+from zelosmcp.passthrough_pool import (
+    PassthroughChallengeError,
+    hash_authorization,
+    inbound_authorization,
+    signal_challenge,
+)
 from zelosmcp.savings import measure_call
 
 if TYPE_CHECKING:
@@ -93,6 +99,70 @@ class Aggregator:
             if s.running and s.client_session is not None
         ]
 
+    def _passthrough_states(self) -> list["ProxyState"]:
+        """Running passthrough backends. Distinct from
+        :meth:`_running_states` because these have no shared
+        ``client_session`` — each request resolves its own session via
+        the per-backend :class:`PassthroughSessionPool`.
+        """
+        return [
+            s for s in self.manager.servers.values()
+            if s.running
+            and getattr(s, "is_passthrough", False)
+            and getattr(s, "passthrough_pool", None) is not None
+        ]
+
+    async def _passthrough_session(
+        self, state: "ProxyState"
+    ):
+        """Fetch (or create) a per-Cursor :class:`ClientSession` for one
+        passthrough backend, keyed by the inbound HTTP Authorization.
+
+        When the backend has an ``auth.provider`` configured AND the
+        provider returns a token via :meth:`AuthProvider.mint_token`,
+        the minted token replaces the inbound Authorization on the
+        upstream connection. This is what lets zelosMCP forward
+        per-user GitHub OAuth tokens to ``api.githubcopilot.com/mcp/``
+        even though Cursor's MCP transport never saw the OAuth dance.
+
+        When no provider is configured (legacy passthrough) or the
+        provider returns ``None`` (e.g. user not authenticated yet),
+        the inbound Authorization is forwarded verbatim — same
+        behaviour as before this PR.
+
+        Raises :class:`PassthroughChallengeError` when the upstream
+        returns 401 — the caller decides whether to surface (call_tool)
+        or skip silently (list_tools).
+        """
+        pool = state.passthrough_pool
+        if pool is None:
+            raise PassthroughChallengeError(
+                backend=state.name,
+                www_authenticate='Bearer error="invalid_token"',
+            )
+        auth = inbound_authorization.get()
+        spec = self.manager._specs.get(state.name)
+        provider = self.manager.auth_registry.get_for_backend(
+            state.name,
+            spec.auth_provider if spec is not None else None,
+        )
+        if provider is not None:
+            user_key = hash_authorization(auth)
+            try:
+                minted = await provider.mint_token(
+                    user_key,
+                    spec.auth_audience if spec is not None else None,
+                )
+            except Exception as exc:
+                self._log(
+                    f"{state.name} provider '{provider.name}' "
+                    f"mint_token failed: {exc}; falling back to inbound auth"
+                )
+                minted = None
+            if minted is not None:
+                auth = minted
+        return await pool.get_or_create(auth)
+
     async def _run(self) -> None:
         """Lifecycle task — mirrors the anyio-safe pattern in ProxyState._run_backend."""
         self._resource_origin.clear()
@@ -130,63 +200,159 @@ class Aggregator:
         async def list_tools() -> list:
             states = self._running_states()
             self.compressed_catalog.clear()
-            if not states:
-                return []
-            results = await asyncio.gather(
-                *(s.client_session.list_tools() for s in states),
-                return_exceptions=True,
-            )
             tools: list = []
             # Compression snapshots are recorded after the iteration so we
             # never block the wire-format response on the savings DB. Each
             # entry: (backend, level, raw_payload, compressed_payload).
             snapshots: list[tuple[str, str, list, list]] = []
-            for state, r in zip(states, results):
-                if isinstance(r, BaseException):
-                    if not _is_method_not_found(r):
-                        self._log(f"{state.name} list_tools failed: {r}")
-                    continue
-                spec = self.manager._specs.get(state.name)
-                compress = spec.compress if spec is not None else None
-                backend_tools = list(getattr(r, "tools", []) or [])
-                # Cache the full catalog whenever compression is configured
-                # so docs/discovery surfaces (`zelosmcp__list_compressed_tools`,
-                # cursor-rule generator) see the compressed view regardless
-                # of scope.
-                if compress is not None:
-                    self.compressed_catalog[state.name] = {
-                        t.name: t for t in backend_tools
-                    }
-                applies_to_aggregator = (
-                    compress is not None
-                    and compress.scope in ("aggregator", "global")
-                    and compress.level != "low"
+            if states:
+                results = await asyncio.gather(
+                    *(s.client_session.list_tools() for s in states),
+                    return_exceptions=True,
                 )
-                if compress is not None:
-                    raw_payload = [
-                        _tool_to_wire(_qualified_copy(t, state.name))
-                        for t in backend_tools
-                    ]
-                    compressed_payload = [
-                        _tool_to_wire(t)
-                        for t in compressed_tool_list(
+                for state, r in zip(states, results):
+                    if isinstance(r, BaseException):
+                        if not _is_method_not_found(r):
+                            self._log(f"{state.name} list_tools failed: {r}")
+                        continue
+                    spec = self.manager._specs.get(state.name)
+                    compress = spec.compress if spec is not None else None
+                    backend_tools = list(getattr(r, "tools", []) or [])
+                    # Cache the full catalog whenever compression is configured
+                    # so docs/discovery surfaces (`zelosmcp__list_compressed_tools`,
+                    # cursor-rule generator) see the compressed view regardless
+                    # of scope.
+                    if compress is not None:
+                        self.compressed_catalog[state.name] = {
+                            t.name: t for t in backend_tools
+                        }
+                    applies_to_aggregator = (
+                        compress is not None
+                        and compress.scope in ("aggregator", "global")
+                        and compress.level != "low"
+                    )
+                    if compress is not None:
+                        raw_payload = [
+                            _tool_to_wire(_qualified_copy(t, state.name))
+                            for t in backend_tools
+                        ]
+                        compressed_payload = [
+                            _tool_to_wire(t)
+                            for t in compressed_tool_list(
+                                prefix=state.name,
+                                tools=backend_tools,
+                                level=compress.level,
+                            )
+                        ]
+                        snapshots.append(
+                            (state.name, compress.level, raw_payload, compressed_payload)
+                        )
+                    if not applies_to_aggregator:
+                        for t in backend_tools:
+                            tools.append(_qualified_copy(t, state.name))
+                        continue
+                    tools.extend(
+                        compressed_tool_list(
                             prefix=state.name,
                             tools=backend_tools,
                             level=compress.level,
                         )
-                    ]
-                    snapshots.append(
-                        (state.name, compress.level, raw_payload, compressed_payload)
                     )
-                if not applies_to_aggregator:
-                    for t in backend_tools:
-                        tools.append(_qualified_copy(t, state.name))
+
+            # Passthrough fan-out: emit the wrapper pair for every
+            # passthrough backend with compression configured, regardless
+            # of inbound auth state. The first wrapper invocation drives
+            # the OAuth dance via the existing PassthroughChallengeError
+            # path; tools/list never blocks on auth. Catalog priority:
+            #   1. Live upstream session (if inbound auth is good) —
+            #      refresh and cache for everyone else.
+            #   2. ProxyState.passthrough_catalog (a previous user
+            #      already warmed it).
+            #   3. Empty + auth_pending=True — wrappers explain the
+            #      coming OAuth challenge.
+            user_key = hash_authorization(inbound_authorization.get())
+            for state in self._passthrough_states():
+                spec = self.manager._specs.get(state.name)
+                compress = spec.compress if spec is not None else None
+                if compress is None:
+                    # User explicitly disabled compression for this
+                    # passthrough backend (compress: null). Without
+                    # wrappers we can't expose anything pre-auth, so
+                    # skip — preserves the old "invisible until auth"
+                    # behaviour as an opt-out.
                     continue
+
+                # Provider-gated visibility: when a backend is wired to an
+                # auth provider AND the current user hasn't authenticated
+                # to that provider yet, hide the wrapper-pair from
+                # tools/list entirely. Cursor sees no entry for the
+                # backend until the user completes the device flow in
+                # the Connections page. Backends with no provider
+                # configured (legacy passthrough) are unchanged — no
+                # gating, current behaviour preserved.
+                auth_provider = self.manager.auth_registry.get_for_backend(
+                    state.name,
+                    spec.auth_provider if spec is not None else None,
+                )
+                if auth_provider is not None:
+                    try:
+                        ready = await auth_provider.is_ready(user_key)
+                    except Exception as exc:
+                        self._log(
+                            f"{state.name} auth provider "
+                            f"'{auth_provider.name}' is_ready failed: {exc}; "
+                            "treating as not-ready and gating wrappers"
+                        )
+                        ready = False
+                    if not ready:
+                        continue
+
+                backend_tools: list = []
+                auth_pending = False
+                try:
+                    session = await self._passthrough_session(state)
+                    try:
+                        r = await session.list_tools()
+                        backend_tools = list(getattr(r, "tools", []) or [])
+                        state.passthrough_catalog = {
+                            t.name: t for t in backend_tools
+                        }
+                    except Exception as exc:
+                        if not _is_method_not_found(exc):
+                            self._log(
+                                f"{state.name} list_tools failed: {exc}"
+                            )
+                        # Live fetch failed — fall back to whatever was
+                        # cached so we still emit a useful wrapper pair.
+                        backend_tools = list(state.passthrough_catalog.values())
+                except PassthroughChallengeError:
+                    # Inbound caller has no usable token. If a previous
+                    # caller already populated the catalog, reuse it so
+                    # the wrappers carry the real surface; otherwise
+                    # emit auth-pending wrappers so the agent at least
+                    # sees the entry-point and knows to invoke (which
+                    # triggers OAuth on the call_tool path).
+                    if state.passthrough_catalog:
+                        backend_tools = list(state.passthrough_catalog.values())
+                    else:
+                        auth_pending = True
+                except Exception as exc:
+                    self._log(
+                        f"{state.name} list_tools session failed: {exc}"
+                    )
+                    backend_tools = list(state.passthrough_catalog.values())
+
+                if backend_tools:
+                    self.compressed_catalog[state.name] = {
+                        t.name: t for t in backend_tools
+                    }
+
                 tools.extend(
                     compressed_tool_list(
                         prefix=state.name,
                         tools=backend_tools,
                         level=compress.level,
+                        auth_pending=auth_pending,
                     )
                 )
             self._log(f"list_tools -> {len(tools)} tools")
@@ -209,15 +375,109 @@ class Aggregator:
         async def call_tool(qualified_name: str, arguments: dict[str, Any]) -> list:
             backend, original = _split_qualified(qualified_name)
             recorder = getattr(self.manager, "savings", None)
-            # Compression-wrapper interception. We check the cache first so
-            # only backends with `compress` configured can route this way —
-            # an uncompressed backend that happens to expose a tool literally
-            # named `invoke_tool` keeps working as today.
-            if backend and backend in self.compressed_catalog:
+
+            # Compression-wrapper interception. Two trigger conditions:
+            #   (a) Session-bound backend in compressed_catalog (legacy
+            #       behaviour) AND the call name matches a wrapper.
+            #   (b) Passthrough backend with compression configured AND
+            #       the call name matches a wrapper. This branch fires
+            #       even when the catalog isn't cached yet — that's the
+            #       whole point of the lazy-OAuth-on-invoke design.
+            if backend:
                 spec = self.manager._specs.get(backend)
-                level = spec.compress.level if spec and spec.compress else "medium"
-                if original in wrapper_tool_names(level):
-                    state = self.manager.servers.get(backend)
+                state = self.manager.servers.get(backend)
+                level = (
+                    spec.compress.level
+                    if spec is not None and spec.compress is not None
+                    else "medium"
+                )
+                is_wrapper_call = original in wrapper_tool_names(level)
+                is_session_wrapper = (
+                    is_wrapper_call and backend in self.compressed_catalog
+                )
+                is_passthrough_wrapper = (
+                    is_wrapper_call
+                    and spec is not None
+                    and getattr(spec, "passthrough", False)
+                    and spec.compress is not None
+                    and state is not None
+                    and getattr(state, "is_passthrough", False)
+                )
+
+                if is_passthrough_wrapper:
+                    if state is None or not state.running:
+                        return _error_tool_result(
+                            f"Unknown or unavailable tool '{qualified_name}'"
+                        )
+                    # Lazily open the upstream session for the inbound
+                    # caller. On 401 the middleware in app.py rewrites
+                    # the response to 401 + WWW-Authenticate, so Cursor
+                    # opens a browser flow with the upstream issuer.
+                    try:
+                        session = await self._passthrough_session(state)
+                    except PassthroughChallengeError as exc:
+                        signal_challenge(exc)
+                        return _error_tool_result(
+                            f"backend '{backend}' requires authentication"
+                        )
+                    # Refresh the catalog cache if empty so handle_compressed_call
+                    # can validate tool_name. Catalog is shared across users
+                    # because the tool list itself doesn't vary per identity.
+                    if not state.passthrough_catalog:
+                        try:
+                            r = await session.list_tools()
+                            state.passthrough_catalog = {
+                                t.name: t
+                                for t in (getattr(r, "tools", []) or [])
+                            }
+                            self.compressed_catalog[backend] = (
+                                state.passthrough_catalog
+                            )
+                        except PassthroughChallengeError as exc:
+                            signal_challenge(exc)
+                            return _error_tool_result(
+                                f"backend '{backend}' requires authentication"
+                            )
+                        except Exception as exc:
+                            return _error_tool_result(
+                                f"backend '{backend}' catalog fetch failed: {exc}"
+                            )
+
+                    catalog = state.passthrough_catalog
+                    self._log(f"call_tool (compressed passthrough): {qualified_name}")
+
+                    async def _passthrough_dispatch():
+                        try:
+                            return await handle_compressed_call(
+                                catalog=catalog,
+                                op=original,
+                                args=arguments,
+                                dispatch=session.call_tool,
+                                level=level,
+                            )
+                        except PassthroughChallengeError as exc:
+                            # Token expired mid-call. Surface for OAuth
+                            # refresh just like the open-session path.
+                            signal_challenge(exc)
+                            from mcp.types import CallToolResult
+                            return CallToolResult(
+                                content=[],
+                                structuredContent=None,
+                                isError=True,
+                                meta=None,
+                            )
+
+                    return await measure_call(
+                        recorder=recorder,
+                        backend=backend,
+                        tool=original,
+                        qualified=qualified_name,
+                        compressed=True,
+                        arguments=arguments,
+                        dispatch=_passthrough_dispatch,
+                    )
+
+                if is_session_wrapper:
                     if state is None or not state.running or state.client_session is None:
                         return _error_tool_result(
                             f"Unknown or unavailable tool '{qualified_name}'"
@@ -239,12 +499,62 @@ class Aggregator:
                         ),
                     )
             state = self.manager.servers.get(backend) if original else None
-            if state is None or not state.running or state.client_session is None:
+            if state is None or not state.running:
                 return _error_tool_result(
                     f"Unknown or unavailable tool '{qualified_name}'"
                 )
             self._log(f"call_tool: {qualified_name}")
             from mcp.types import CallToolResult
+
+            # Passthrough backends resolve a per-Cursor session lazily.
+            # On a PassthroughChallengeError we set the side-channel
+            # ContextVar — the ASGI middleware in app.py reads it after
+            # handle_request returns and rewrites the response to 401 +
+            # WWW-Authenticate. We can't surface the 401 by raising:
+            # the MCP SDK catches handler exceptions and serialises them
+            # as JSON-RPC error envelopes (HTTP 200), which would never
+            # trigger the client's OAuth handler.
+            if getattr(state, "is_passthrough", False):
+                try:
+                    session = await self._passthrough_session(state)
+                except PassthroughChallengeError as exc:
+                    signal_challenge(exc)
+                    return _error_tool_result(
+                        f"backend '{backend}' requires authentication"
+                    )
+
+                async def _dispatch_passthrough() -> CallToolResult:
+                    try:
+                        r = await session.call_tool(original, arguments)
+                    except PassthroughChallengeError as exc:
+                        signal_challenge(exc)
+                        return CallToolResult(
+                            content=[],
+                            structuredContent=None,
+                            isError=True,
+                            meta=None,
+                        )
+                    return CallToolResult(
+                        content=r.content,
+                        structuredContent=getattr(r, "structuredContent", None),
+                        isError=bool(r.isError),
+                        meta=getattr(r, "meta", None),
+                    )
+
+                return await measure_call(
+                    recorder=recorder,
+                    backend=backend,
+                    tool=original,
+                    qualified=qualified_name,
+                    compressed=False,
+                    arguments=arguments,
+                    dispatch=_dispatch_passthrough,
+                )
+
+            if state.client_session is None:
+                return _error_tool_result(
+                    f"Unknown or unavailable tool '{qualified_name}'"
+                )
 
             async def _dispatch() -> CallToolResult:
                 r = await state.client_session.call_tool(original, arguments)
@@ -277,17 +587,36 @@ class Aggregator:
         @server.list_prompts()
         async def list_prompts() -> list:
             states = self._running_states()
-            if not states:
-                return []
-            results = await asyncio.gather(
-                *(s.client_session.list_prompts() for s in states),
-                return_exceptions=True,
-            )
             prompts: list = []
-            for state, r in zip(states, results):
-                if isinstance(r, BaseException):
-                    if not _is_method_not_found(r):
-                        self._log(f"{state.name} list_prompts failed: {r}")
+            if states:
+                results = await asyncio.gather(
+                    *(s.client_session.list_prompts() for s in states),
+                    return_exceptions=True,
+                )
+                for state, r in zip(states, results):
+                    if isinstance(r, BaseException):
+                        if not _is_method_not_found(r):
+                            self._log(f"{state.name} list_prompts failed: {r}")
+                        continue
+                    for p in getattr(r, "prompts", []) or []:
+                        prompts.append(_qualified_copy(p, state.name))
+
+            # Passthrough fan-out — same skip-on-401 policy as list_tools.
+            for state in self._passthrough_states():
+                try:
+                    session = await self._passthrough_session(state)
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    self._log(f"{state.name} list_prompts session failed: {exc}")
+                    continue
+                try:
+                    r = await session.list_prompts()
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    if not _is_method_not_found(exc):
+                        self._log(f"{state.name} list_prompts failed: {exc}")
                     continue
                 for p in getattr(r, "prompts", []) or []:
                     prompts.append(_qualified_copy(p, state.name))
@@ -298,7 +627,7 @@ class Aggregator:
         async def get_prompt(qualified_name: str, arguments: dict[str, str] | None = None):
             backend, original = _split_qualified(qualified_name)
             state = self.manager.servers.get(backend) if original else None
-            if state is None or not state.running or state.client_session is None:
+            if state is None or not state.running:
                 from mcp.types import GetPromptResult, PromptMessage, TextContent
                 return GetPromptResult(
                     description=f"Unknown or unavailable prompt '{qualified_name}'",
@@ -313,22 +642,90 @@ class Aggregator:
                     ],
                 )
             self._log(f"get_prompt: {qualified_name}")
+            if getattr(state, "is_passthrough", False):
+                try:
+                    session = await self._passthrough_session(state)
+                except PassthroughChallengeError as exc:
+                    signal_challenge(exc)
+                    from mcp.types import GetPromptResult, PromptMessage, TextContent
+                    return GetPromptResult(
+                        description=f"backend '{backend}' requires authentication",
+                        messages=[
+                            PromptMessage(
+                                role="user",
+                                content=TextContent(
+                                    type="text",
+                                    text=f"backend '{backend}' requires authentication",
+                                ),
+                            )
+                        ],
+                    )
+                try:
+                    return await session.get_prompt(original, arguments)
+                except PassthroughChallengeError as exc:
+                    signal_challenge(exc)
+                    from mcp.types import GetPromptResult, PromptMessage, TextContent
+                    return GetPromptResult(
+                        description=f"backend '{backend}' requires authentication",
+                        messages=[
+                            PromptMessage(
+                                role="user",
+                                content=TextContent(
+                                    type="text",
+                                    text=f"backend '{backend}' requires authentication",
+                                ),
+                            )
+                        ],
+                    )
+            if state.client_session is None:
+                from mcp.types import GetPromptResult, PromptMessage, TextContent
+                return GetPromptResult(
+                    description=f"Unknown or unavailable prompt '{qualified_name}'",
+                    messages=[
+                        PromptMessage(
+                            role="user",
+                            content=TextContent(
+                                type="text",
+                                text=f"Unknown or unavailable prompt '{qualified_name}'",
+                            ),
+                        )
+                    ],
+                )
             return await state.client_session.get_prompt(original, arguments)
 
         @server.list_resources()
         async def list_resources() -> list:
             states = self._running_states()
-            if not states:
-                return []
-            results = await asyncio.gather(
-                *(s.client_session.list_resources() for s in states),
-                return_exceptions=True,
-            )
             out: list = []
-            for state, r in zip(states, results):
-                if isinstance(r, BaseException):
-                    if not _is_method_not_found(r):
-                        self._log(f"{state.name} list_resources failed: {r}")
+            if states:
+                results = await asyncio.gather(
+                    *(s.client_session.list_resources() for s in states),
+                    return_exceptions=True,
+                )
+                for state, r in zip(states, results):
+                    if isinstance(r, BaseException):
+                        if not _is_method_not_found(r):
+                            self._log(f"{state.name} list_resources failed: {r}")
+                        continue
+                    for res in getattr(r, "resources", []) or []:
+                        self._resource_origin[str(res.uri)] = state.name
+                        out.append(res)
+
+            for state in self._passthrough_states():
+                try:
+                    session = await self._passthrough_session(state)
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    self._log(f"{state.name} list_resources session failed: {exc}")
+                    continue
+                try:
+                    r = await session.list_resources()
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    if not _is_method_not_found(exc):
+                        self._log(f"{state.name} list_resources failed: {exc}")
                     continue
                 for res in getattr(r, "resources", []) or []:
                     self._resource_origin[str(res.uri)] = state.name
@@ -339,17 +736,41 @@ class Aggregator:
         @server.list_resource_templates()
         async def list_resource_templates() -> list:
             states = self._running_states()
-            if not states:
-                return []
-            results = await asyncio.gather(
-                *(s.client_session.list_resource_templates() for s in states),
-                return_exceptions=True,
-            )
             out: list = []
-            for state, r in zip(states, results):
-                if isinstance(r, BaseException):
-                    if not _is_method_not_found(r):
-                        self._log(f"{state.name} list_resource_templates failed: {r}")
+            if states:
+                results = await asyncio.gather(
+                    *(s.client_session.list_resource_templates() for s in states),
+                    return_exceptions=True,
+                )
+                for state, r in zip(states, results):
+                    if isinstance(r, BaseException):
+                        if not _is_method_not_found(r):
+                            self._log(
+                                f"{state.name} list_resource_templates failed: {r}"
+                            )
+                        continue
+                    for tmpl in getattr(r, "resourceTemplates", []) or []:
+                        out.append(tmpl)
+
+            for state in self._passthrough_states():
+                try:
+                    session = await self._passthrough_session(state)
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    self._log(
+                        f"{state.name} list_resource_templates session failed: {exc}"
+                    )
+                    continue
+                try:
+                    r = await session.list_resource_templates()
+                except PassthroughChallengeError:
+                    continue
+                except Exception as exc:
+                    if not _is_method_not_found(exc):
+                        self._log(
+                            f"{state.name} list_resource_templates failed: {exc}"
+                        )
                     continue
                 for tmpl in getattr(r, "resourceTemplates", []) or []:
                     out.append(tmpl)
@@ -362,15 +783,34 @@ class Aggregator:
             already_tried: set[str] = set()
             last_error: BaseException | None = None
 
+            async def _read_via(state) -> Any:
+                """Fetch a session-bound or passthrough session, depending
+                on the state, and call read_resource."""
+                if getattr(state, "is_passthrough", False):
+                    session = await self._passthrough_session(state)
+                    return await session.read_resource(uri)
+                return await state.client_session.read_resource(uri)
+
             # Tracked owner first.
             owner_name = self._resource_origin.get(uri_str)
             if owner_name:
                 state = self.manager.servers.get(owner_name)
-                if state and state.running and state.client_session is not None:
+                owner_running = state and state.running and (
+                    state.client_session is not None
+                    or getattr(state, "is_passthrough", False)
+                )
+                if owner_running:
                     try:
                         self._log(f"read_resource: {uri_str} -> {owner_name}")
-                        r = await state.client_session.read_resource(uri)
+                        r = await _read_via(state)
                         return _to_internal_contents(r.contents)
+                    except PassthroughChallengeError as exc:
+                        # Surface auth-required via the side channel
+                        # ContextVar; the middleware in app.py reads
+                        # it after handle_request returns and rewrites
+                        # to a 401 + WWW-Authenticate.
+                        signal_challenge(exc)
+                        raise
                     except Exception as exc:
                         last_error = exc
                         self._log(
@@ -384,11 +824,20 @@ class Aggregator:
                     self._resource_origin.pop(uri_str, None)
 
             # Fan out across remaining backends; first success wins and is cached.
-            for state in self._running_states():
+            candidates = list(self._running_states()) + list(self._passthrough_states())
+            for state in candidates:
                 if state.name in already_tried:
                     continue
                 try:
-                    r = await state.client_session.read_resource(uri)
+                    r = await _read_via(state)
+                except PassthroughChallengeError:
+                    # Don't raise from a fan-out attempt; auth might
+                    # only matter for one backend among many. Keep
+                    # trying, then fall back to the generic error.
+                    last_error = RuntimeError(
+                        f"backend '{state.name}' requires authentication"
+                    )
+                    continue
                 except Exception as exc:
                     last_error = exc
                     continue

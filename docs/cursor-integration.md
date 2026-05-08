@@ -55,6 +55,14 @@ The web UI's **Cursor full mcp.json** panel auto-populates this with every runni
 
 The `zelosmcp-` prefix on each entry is a convention — it's obvious in Cursor's UI which entries are zelosMCP-proxied (and there's no collision with backends you may already have configured directly).
 
+### OAuth-protected backends
+
+For upstream MCP servers that require OAuth (GitHub MCP, Atlassian MCP, Box MCP, ...), configure the backend with `"passthrough": true` in the zelosMCP config. Cursor performs the OAuth dance directly with the upstream issuer — no shared service account, no tokens on disk in zelosMCP.
+
+**Just the aggregate is sufficient.** Passthrough backends auto-apply compression at the aggregator, so the agent always sees `<backend>__get_tool_schema` and `<backend>__invoke_tool` in `/mcp`'s `tools/list` (even pre-auth — the wrapper descriptions carry an "auth required" notice). The first wrapper invocation drives the OAuth flow: zelosMCP responds with `HTTP 401 + WWW-Authenticate`, Cursor opens a browser tab against the upstream issuer, and subsequent invocations dispatch through normally. You don't need a separate per-backend `mcp.json` entry to trigger OAuth.
+
+See [oauth-passthrough.md](oauth-passthrough.md) for the full reference.
+
 ## `.mdc` rules — the agent guidance
 
 Cursor reads `.mdc` files from `.cursor/rules/` (per-project) or `~/.cursor/rules/` (global). They're prepended to the system prompt on every Cursor session.

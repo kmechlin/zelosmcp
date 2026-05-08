@@ -451,3 +451,140 @@ class TestHandlersDirect:
             )
             result = await handler(req)
             mock_session.get_prompt.assert_awaited_once()
+
+
+# ── Passthrough lifecycle ───────────────────────────────────────────────
+
+
+class TestPassthroughLifecycle:
+    """Validate the OAuth-passthrough start path: skips client_session and
+    session_manager creation entirely; sets is_passthrough/passthrough_url
+    so the dispatcher knows to route through ``manager.proxy_mcp_request``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_start_passthrough_skips_session_creation(self):
+        p = ProxyState(name="github")
+        # No mock patching needed — passthrough start NEVER reaches
+        # streamablehttp_client / ClientSession code paths.
+        await p.start(
+            transport="http",
+            url="https://api.example.com/mcp",
+            passthrough=True,
+        )
+        try:
+            assert p.running is True
+            assert p.is_passthrough is True
+            assert p.passthrough_url == "https://api.example.com/mcp"
+            assert p.client_session is None
+            assert p.session_manager is None
+            assert p.backend_info["transport"] == "http"
+            assert p.backend_info["url"] == "https://api.example.com/mcp"
+            assert p.backend_info["passthrough"] is True
+            # No bearer set => no `auth` key in backend_info.
+            assert "auth" not in p.backend_info
+        finally:
+            await p.stop()
+
+    @pytest.mark.asyncio
+    async def test_passthrough_redacts_bearer_in_backend_info(self):
+        p = ProxyState(name="github")
+        await p.start(
+            transport="http",
+            url="https://api.example.com/mcp",
+            passthrough=True,
+            auth_bearer="ghp_secret",
+        )
+        try:
+            # The redaction marker is present so /api/status can show
+            # "auth configured" without leaking the value.
+            assert p.backend_info["auth"] == {"bearer": "***"}
+            # The raw token MUST never appear in backend_info.
+            assert "ghp_secret" not in repr(p.backend_info)
+        finally:
+            await p.stop()
+
+    @pytest.mark.asyncio
+    async def test_passthrough_clears_state_on_stop(self):
+        p = ProxyState(name="github")
+        await p.start(
+            transport="http",
+            url="https://api.example.com/mcp",
+            passthrough=True,
+            auth_bearer="ghp_secret",
+        )
+        await p.stop()
+        # All passthrough fields are cleared so a stale reference can't
+        # leak credentials or routing info to a later restart.
+        assert p.running is False
+        assert p.is_passthrough is False
+        assert p.passthrough_url is None
+        assert p.passthrough_auth_bearer is None
+        assert p.passthrough_pool is None
+        assert p.backend_info == {}
+
+    @pytest.mark.asyncio
+    async def test_passthrough_requires_http_transport(self):
+        p = ProxyState(name="github")
+        with pytest.raises(ValueError, match="transport=http"):
+            await p.start(
+                transport="stdio",
+                command="echo",
+                passthrough=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_passthrough_requires_url(self):
+        p = ProxyState(name="github")
+        with pytest.raises(ValueError, match="URL is required"):
+            await p.start(transport="http", url=None, passthrough=True)
+
+    @pytest.mark.asyncio
+    async def test_non_passthrough_http_does_not_set_is_passthrough(self):
+        # Sanity check that the existing session-bound HTTP path still
+        # works as expected — is_passthrough must stay False.
+        from contextlib import asynccontextmanager as _acm
+
+        @_acm
+        async def fake_run(self_ref=None):
+            yield
+
+        from tests.conftest import (
+            fake_http_client as _fake_http_client,
+            make_mock_session,
+        )
+        mock_session = make_mock_session()
+
+        @_acm
+        async def patched_session(read, write):
+            yield mock_session
+
+        with patch(
+            "zelosmcp.proxy.streamablehttp_client",
+            side_effect=_fake_http_client,
+        ), patch(
+            "zelosmcp.proxy.ClientSession",
+            side_effect=patched_session,
+        ), patch.object(
+            __import__(
+                "mcp.server.streamable_http_manager",
+                fromlist=["StreamableHTTPSessionManager"],
+            ).StreamableHTTPSessionManager,
+            "run",
+            side_effect=fake_run,
+        ):
+            p = ProxyState(name="docs")
+            await p.start(
+                transport="http",
+                url="https://api.example.com/mcp",
+                passthrough=False,
+            )
+            try:
+                assert p.running is True
+                assert p.is_passthrough is False
+                assert p.passthrough_url is None
+                # Session-bound mode wires up a real session_manager &
+                # client_session (mocked here, but still set).
+                assert p.client_session is not None
+            finally:
+                await p.stop()

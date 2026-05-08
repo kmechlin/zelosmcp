@@ -97,6 +97,82 @@ For a remote MCP server speaking the streamable-HTTP transport (the same transpo
 | `url` | yes | string | Full URL of the MCP endpoint. |
 | `headers` | no | object of strings | Sent on every request. |
 
+### OAuth passthrough (`passthrough`)
+
+Some remote MCP servers — GitHub MCP at `api.githubcopilot.com/mcp`, Atlassian's hosted MCP, etc. — require **OAuth** rather than a static token. With `"passthrough": true`, zelosMCP forwards traffic transparently and lets the MCP client (Cursor) perform the OAuth dance directly with the upstream issuer. zelosMCP holds **no** OAuth state of its own; tokens flow through unchanged.
+
+```json
+{
+  "github": {
+    "type": "streamable-http",
+    "url": "https://api.githubcopilot.com/mcp/",
+    "passthrough": true,
+    "passthroughPool": {
+      "maxSessions": 64,
+      "idleTtlSeconds": 1800
+    }
+  }
+}
+```
+
+| Field | Required | Type | Default | Notes |
+|---|---|---|---|---|
+| `passthrough` | no | bool | `false` | Enables OAuth-passthrough mode. Only valid for `type: "streamable-http"`. |
+| `auth.provider` | no | string | _(none)_ | **Modern broker mode**: name of an entry in [configs/auth-providers.json](#auth-providers-config). zelosMCP mints tokens via the provider (typically through the GUI device flow) and gates the backend's wrappers until the user authenticates. Mutually exclusive with `auth.bearer`. |
+| `auth.audience` | no | string | _(none)_ | Provider-specific audience claim. Only valid alongside `auth.provider`. Reserved for future token-exchange providers; current device-flow providers ignore it. |
+| `auth.bearer` | no | string | _(none)_ | **Legacy** static fallback token. Injected on outbound requests only when the inbound request has no `Authorization` header. Useful for headless / CI runs. Supports `${ENV_VAR}` interpolation. Prefer `auth.provider` -> a `static`-type provider for new configs. |
+| `passthroughPool.maxSessions` | no | int | `64` | LRU cap on cached upstream sessions per backend. Each unique inbound `Authorization` value gets its own session (keyed by SHA-256 hash). |
+| `passthroughPool.idleTtlSeconds` | no | int | `1800` | Idle TTL after which a cached upstream session is closed. |
+
+How it works:
+
+- **`/<name>/mcp`** — streaming reverse-proxy of MCP traffic. zelosMCP does not own a session here; each Cursor connection drives its own OAuth flow with the upstream. 401 + `WWW-Authenticate` from the upstream propagates verbatim. Useful when you want raw upstream tool names (no `<backend>__` prefix).
+- **`/mcp` (aggregator)** — passthrough backends are auto-compressed to the standard wrapper pair (`<name>__get_tool_schema`, `<name>__invoke_tool`). The aggregator emits the wrappers in `tools/list` regardless of inbound auth state — pre-OAuth they carry an "auth required" description block; post-OAuth they include the real upstream catalog. The first wrapper invocation opens a per-Cursor upstream session; if the upstream returns 401, zelosMCP rewrites the response to `HTTP 401 + WWW-Authenticate` (the upstream's own challenge, so Cursor's OAuth client follows the canonical issuer). Subsequent calls dispatch through the standard `handle_compressed_call` path.
+
+Constraints:
+
+- **Compression auto-applies to passthrough backends** with `level=medium, scope=aggregator`. To opt out and revert to the previous "invisible until auth" behaviour, set `"compress": null`.
+- **`compress.scope: "global"` is rejected.** The `/<name>/mcp` route is a streaming reverse proxy that doesn't terminate MCP, so the per-backend session manager can't host wrappers there. Use the default `aggregator` scope, or `catalog` for docs-only mode.
+- **stdio and `type: "sse"` are rejected.** Passthrough is `type: "streamable-http"` only.
+- **`tools/list` always succeeds.** The aggregator never blocks on auth — the wrappers are emitted regardless, and OAuth is driven by the first wrapper invocation rather than by `tools/list` itself.
+
+See [oauth-passthrough.md](oauth-passthrough.md) for the full reference, sequence diagrams, troubleshooting, and an end-to-end walkthrough using GitHub MCP.
+
+### Auth-providers config
+
+In broker mode (`auth.provider` set on a backend), the provider definitions live in a **separate file** from the mcpServers catalog. Default location: [`configs/auth-providers.json`](../configs/auth-providers.json), overridable via `ZELOSMCP_AUTH_PROVIDERS_FILE`.
+
+Top-level shape:
+
+```json
+{
+  "providers": {
+    "<name>": { "type": "...", ... }
+  }
+}
+```
+
+Why two files: different sensitivity classes. The mcpServers catalog (URLs, command lines) is low-sensitivity and ships as a Kubernetes ConfigMap; the providers config (env-resolved client_ids, plus the encryption key for the per-user token store) is medium-sensitivity and ships as a Secret.
+
+Provider types:
+
+- `github_device_flow` — public OAuth client against `github.com/login/device`. Required: `client_id`. Optional: `scopes` (list of strings), `membership_hint` (UX-only display string).
+- `okta_device_flow` — public OAuth client against an Okta tenant. Required: `client_id`, `issuer` (`https://<okta-domain>/oauth2/<auth-server-id>`). Optional: `scopes`, `membership_hint`.
+- `passthrough` — wraps the legacy "forward Authorization verbatim" behaviour as an `AuthProvider`. No additional fields.
+- `static` — wraps a configured bearer token (env-interpolated). Required: `bearer`.
+
+The `membership_hint` field on any provider is purely for UX — the GUI Connections card surfaces it as `"Membership required: <hint>"` so users know which authorized-group / role they need before clicking Connect. Never used for authorization (the upstream IdP enforces).
+
+Live edits via the API:
+
+```bash
+curl -sS -X POST http://localhost:8000/api/auth/providers/config \
+  -H 'Content-Type: application/json' \
+  --data-binary @configs/auth-providers.json
+```
+
+`GET /api/auth/providers/config` returns the currently-loaded providers with secrets redacted to `***`. See [oauth-passthrough.md](oauth-passthrough.md#configuration-two-files) for the full schema reference.
+
 ### Reverse-proxy (`reverseProxy`)
 
 Any backend (stdio or remote) can declare an optional `reverseProxy` block alongside the transport fields above. When set, zelosMCP forwards HTTP requests on the configured `mount` path to the backend's HTTP sidecar — letting you expose a dashboard or REST API through zelosMCP's port without leaking the backend's own port.

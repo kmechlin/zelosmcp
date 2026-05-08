@@ -590,8 +590,11 @@ class TestRenderComprehensiveRule:
 
 class TestToolRegistry:
     def test_eight_tools_registered(self):
-        # Was 7 before the compression work added `list_compressed_tools`.
-        # If you add a builtin, bump this number AND ship a handler in _HANDLERS.
+        # Count history: 7 → 8 (`list_compressed_tools`) → 9 (`warm_up_
+        # passthrough_auth`) → 8 again (warm_up dropped now that the
+        # aggregator emits compression wrappers for passthrough backends
+        # — first wrapper invocation drives OAuth on demand). If you add
+        # a builtin, bump this number AND ship a handler in `_HANDLERS`.
         assert len(_TOOLS) == 8
 
     def test_handler_per_tool(self):

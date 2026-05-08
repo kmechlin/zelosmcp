@@ -117,20 +117,51 @@ def _wrapper_name(prefix: str, base: str) -> str:
     return f"{prefix}__{base}" if prefix else base
 
 
-def make_get_schema_wrapper(prefix: str, tools: list[Tool], level: str) -> Tool:
+# Pre-OAuth description block used when ``auth_pending=True`` is passed
+# to a wrapper builder. Replaces the inline catalog so the agent knows
+# the backend's tool surface isn't reachable yet without leading the
+# model to assume it failed permanently.
+_AUTH_PENDING_NOTE = (
+    "This backend requires OAuth via Cursor. The FIRST invocation will "
+    "trigger an HTTP 401 + WWW-Authenticate so Cursor's MCP OAuth client "
+    "opens a browser flow with the upstream issuer. After auth completes, "
+    "retry the SAME call — the wrapper will return real schemas / "
+    "execute the tool. Tool catalog will populate after first successful "
+    "auth (federated through Nike Okta SSO, so subsequent backends "
+    "complete silently)."
+)
+
+
+def make_get_schema_wrapper(
+    prefix: str,
+    tools: list[Tool],
+    level: str,
+    *,
+    auth_pending: bool = False,
+) -> Tool:
     """Build the ``get_tool_schema`` wrapper Tool.
 
     The wrapper's description embeds the compressed catalog (one line per
     underlying tool) so the LLM can browse without round-trips. Required
     arg: ``tool_name``.
+
+    When ``auth_pending=True`` (passthrough backend with no cached
+    upstream catalog yet), the inline catalog is replaced with a notice
+    explaining that the first invocation triggers OAuth.
     """
-    catalog = _render_catalog(tools, level)
     label = f"'{prefix}'" if prefix else "this backend"
-    description = (
-        f"Return the full JSON schema for one tool exposed by {label}. "
-        f"Pass `tool_name` exactly as listed in the catalog below.\n\n"
-        f"Catalog ({len(tools)} tools, level={level}):\n{catalog}"
-    )
+    if auth_pending:
+        description = (
+            f"Return the full JSON schema for one tool exposed by "
+            f"{label}.\n\n{_AUTH_PENDING_NOTE}"
+        )
+    else:
+        catalog = _render_catalog(tools, level)
+        description = (
+            f"Return the full JSON schema for one tool exposed by {label}. "
+            f"Pass `tool_name` exactly as listed in the catalog below.\n\n"
+            f"Catalog ({len(tools)} tools, level={level}):\n{catalog}"
+        )
     return Tool(
         name=_wrapper_name(prefix, "get_tool_schema"),
         description=description,
@@ -147,18 +178,34 @@ def make_get_schema_wrapper(prefix: str, tools: list[Tool], level: str) -> Tool:
     )
 
 
-def make_invoke_wrapper(prefix: str, n_tools: int) -> Tool:
+def make_invoke_wrapper(
+    prefix: str,
+    n_tools: int,
+    *,
+    auth_pending: bool = False,
+) -> Tool:
     """Build the ``invoke_tool`` wrapper Tool. Required args: ``tool_name``,
-    ``tool_input``."""
+    ``tool_input``.
+
+    When ``auth_pending=True`` the description tells the agent to expect
+    a 401 OAuth challenge on first invocation rather than a tool failure.
+    """
     label = f"'{prefix}'" if prefix else "this backend"
     schema_ref = (
         f"{prefix}__get_tool_schema" if prefix else "get_tool_schema"
     )
-    description = (
-        f"Invoke any of the {n_tools} tools exposed by {label}. "
-        f"Pass `tool_name` (string) and `tool_input` (object matching the "
-        f"tool's schema). Use `{schema_ref}` first if you need the schema."
-    )
+    if auth_pending:
+        description = (
+            f"Invoke any tool exposed by {label}. Pass `tool_name` "
+            f"(string) and `tool_input` (object matching the tool's "
+            f"schema).\n\n{_AUTH_PENDING_NOTE}"
+        )
+    else:
+        description = (
+            f"Invoke any of the {n_tools} tools exposed by {label}. "
+            f"Pass `tool_name` (string) and `tool_input` (object matching the "
+            f"tool's schema). Use `{schema_ref}` first if you need the schema."
+        )
     return Tool(
         name=_wrapper_name(prefix, "invoke_tool"),
         description=description,
@@ -177,7 +224,12 @@ def make_invoke_wrapper(prefix: str, n_tools: int) -> Tool:
     )
 
 
-def make_list_tools_wrapper(prefix: str, n_tools: int) -> Tool:
+def make_list_tools_wrapper(
+    prefix: str,
+    n_tools: int,
+    *,
+    auth_pending: bool = False,
+) -> Tool:
     """Build the ``list_tools`` wrapper Tool used at level=max.
 
     The result of calling this tool is the same compressed catalog
@@ -185,13 +237,22 @@ def make_list_tools_wrapper(prefix: str, n_tools: int) -> Tool:
     LLM doesn't even see the catalog inline in tools/list — it has to
     explicitly call this tool to discover what's available, which is the
     point of ``max`` for very large backends.
+
+    When ``auth_pending=True`` the description tells the agent that
+    calling list_tools itself will trigger the OAuth flow.
     """
     label = f"'{prefix}'" if prefix else "this backend"
-    description = (
-        f"List the {n_tools} tools exposed by {label}. Returns one short "
-        f"summary line per tool. Follow up with the matching get_tool_schema "
-        f"and invoke_tool wrappers to actually call a tool."
-    )
+    if auth_pending:
+        description = (
+            f"List the tools exposed by {label}. Returns one short "
+            f"summary line per tool.\n\n{_AUTH_PENDING_NOTE}"
+        )
+    else:
+        description = (
+            f"List the {n_tools} tools exposed by {label}. Returns one short "
+            f"summary line per tool. Follow up with the matching get_tool_schema "
+            f"and invoke_tool wrappers to actually call a tool."
+        )
     return Tool(
         name=_wrapper_name(prefix, "list_tools"),
         description=description,
@@ -199,7 +260,13 @@ def make_list_tools_wrapper(prefix: str, n_tools: int) -> Tool:
     )
 
 
-def compressed_tool_list(prefix: str, tools: list[Tool], level: str) -> list[Tool]:
+def compressed_tool_list(
+    prefix: str,
+    tools: list[Tool],
+    level: str,
+    *,
+    auth_pending: bool = False,
+) -> list[Tool]:
     """Convenience: return the wrapper tools for one backend at ``level``.
 
     - ``max`` => ``[list_tools]``.
@@ -209,12 +276,22 @@ def compressed_tool_list(prefix: str, tools: list[Tool], level: str) -> list[Too
     is treated as "no compression" by callers and shouldn't reach this
     helper; if it does, we still produce the medium-style wrappers so the
     behaviour is at least defined.
+
+    ``auth_pending=True`` is propagated to the underlying builders so
+    the wrapper descriptions explain the upcoming OAuth challenge
+    instead of advertising a fake tool count or empty catalog.
     """
     if level == "max":
-        return [make_list_tools_wrapper(prefix, len(tools))]
+        return [make_list_tools_wrapper(
+            prefix, len(tools), auth_pending=auth_pending
+        )]
     return [
-        make_get_schema_wrapper(prefix, tools, level),
-        make_invoke_wrapper(prefix, len(tools)),
+        make_get_schema_wrapper(
+            prefix, tools, level, auth_pending=auth_pending
+        ),
+        make_invoke_wrapper(
+            prefix, len(tools), auth_pending=auth_pending
+        ),
     ]
 
 

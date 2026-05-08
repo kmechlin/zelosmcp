@@ -48,6 +48,27 @@ RESERVED_MOUNTS: frozenset[str] = frozenset({
 COMPRESS_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "max"})
 COMPRESS_SCOPES: frozenset[str] = frozenset({"catalog", "aggregator", "global"})
 
+# Recognised provider types in ``configs/auth-providers.json``. Two are
+# legacy shims around pre-existing zelosMCP behaviour
+# (``passthrough``/``static``); the other two are real OAuth providers
+# implemented in :mod:`zelosmcp.auth.github` and
+# :mod:`zelosmcp.auth.okta`. Adding a new provider type means: extend
+# this set, add validation in :func:`_parse_auth_provider`, add a
+# factory in :mod:`zelosmcp.auth.factory`.
+AUTH_PROVIDER_TYPES: frozenset[str] = frozenset({
+    "github_device_flow",
+    "okta_device_flow",
+    "passthrough",
+    "static",
+})
+
+# Passthrough session-pool defaults. See docs/oauth-passthrough.md. Per-Cursor
+# upstream sessions are keyed by SHA-256 of the inbound Authorization header
+# value; the pool caps total sessions per backend (LRU eviction) and idle TTL
+# so abandoned tokens don't pin connections forever.
+PASSTHROUGH_MAX_SESSIONS_DEFAULT: int = 64
+PASSTHROUGH_IDLE_TTL_SECONDS_DEFAULT: int = 1800
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]*$")
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -111,6 +132,84 @@ class CompressSpec:
 
 
 @dataclass
+class PassthroughPoolSpec:
+    """Per-backend session-pool sizing for ``passthrough`` HTTP backends.
+
+    The pool caches one upstream :class:`mcp.client.session.ClientSession`
+    per inbound Authorization header (keyed by SHA-256 hash) so multiple
+    Cursor clients sharing the same OAuth token reuse a single connection.
+    Sessions evict on LRU when ``max_sessions`` is hit and on idle TTL.
+    """
+
+    max_sessions: int = PASSTHROUGH_MAX_SESSIONS_DEFAULT
+    idle_ttl_seconds: int = PASSTHROUGH_IDLE_TTL_SECONDS_DEFAULT
+
+    def to_status(self) -> dict[str, Any]:
+        return {
+            "maxSessions": self.max_sessions,
+            "idleTtlSeconds": self.idle_ttl_seconds,
+        }
+
+
+@dataclass
+class AuthProviderSpec:
+    """One provider definition parsed from ``configs/auth-providers.json``.
+
+    Pure data — turning a spec into a working
+    :class:`zelosmcp.auth.protocol.AuthProvider` instance happens in
+    :mod:`zelosmcp.auth.factory`. The two halves are split because
+    config parsing has to validate at startup before the auth_store
+    is open (the store is what real providers need to construct).
+
+    Field semantics by ``type``:
+
+    - ``github_device_flow`` — requires ``client_id``, optional
+      ``scopes``. No ``bearer``, no ``issuer``.
+    - ``okta_device_flow`` — requires ``issuer`` + ``client_id``,
+      optional ``scopes``, optional ``membership_hint``.
+    - ``passthrough`` — only ``name`` + ``type``; all other fields
+      rejected. Wraps the legacy "forward Authorization verbatim"
+      behaviour as an :class:`AuthProvider`.
+    - ``static`` — requires ``bearer`` (env-interpolated). Wraps the
+      legacy ``auth.bearer`` static-token mode.
+
+    ``membership_hint`` is universally optional regardless of type —
+    a free-form display string the GUI surfaces on the provider card
+    (e.g. ``"Membership required: Nike.uee.maria"``). Never used for
+    authorization.
+    """
+
+    name: str
+    type: str
+    client_id: str | None = None
+    issuer: str | None = None
+    scopes: list[str] = field(default_factory=list)
+    membership_hint: str | None = None
+    bearer: str | None = None  # static only
+
+    def to_status(self, *, redacted: bool = True) -> dict[str, Any]:
+        """JSON-serialisable view used by ``GET /api/auth/providers/config``.
+
+        ``client_id`` is non-sensitive (public OAuth-client identifier
+        that ships in zelosMCP's default config) and stays in the
+        clear. ``bearer`` is always redacted. ``membership_hint`` is
+        a free-form display string with no secret content.
+        """
+        info: dict[str, Any] = {"name": self.name, "type": self.type}
+        if self.client_id:
+            info["client_id"] = self.client_id
+        if self.issuer:
+            info["issuer"] = self.issuer
+        if self.scopes:
+            info["scopes"] = list(self.scopes)
+        if self.membership_hint:
+            info["membership_hint"] = self.membership_hint
+        if self.bearer:
+            info["bearer"] = "***" if redacted else self.bearer
+        return info
+
+
+@dataclass
 class ServerSpec:
     """Normalized, transport-tagged description of one MCP backend."""
 
@@ -124,6 +223,34 @@ class ServerSpec:
     headers: dict[str, str] | None = None
     reverse_proxy: ReverseProxySpec | None = None
     compress: CompressSpec | None = None
+    # OAuth-passthrough mode: zelosMCP forwards HTTP requests to ``url``
+    # without owning an MCP session of its own. Inbound Authorization is
+    # forwarded verbatim; 401 + WWW-Authenticate from upstream is propagated
+    # so the Cursor client (or whichever MCP client) handles the OAuth
+    # dance directly with the upstream issuer. See docs/oauth-passthrough.md.
+    passthrough: bool = False
+    # Static fallback bearer token. Injected on outbound requests ONLY when
+    # the inbound request has no Authorization header. Useful for headless
+    # / CI scenarios where the OAuth dance isn't possible. Only meaningful
+    # when ``passthrough=True``.
+    auth_bearer: str | None = None
+    # Passthrough session-pool sizing (Phase 2 aggregator integration). Only
+    # meaningful when ``passthrough=True``; ignored otherwise.
+    passthrough_pool: PassthroughPoolSpec | None = None
+    # Modern auth-provider reference. When set, the backend's outbound
+    # Authorization header is minted by the named provider instead of
+    # forwarded from the inbound request. References a key in the
+    # parallel ``configs/auth-providers.json`` file; cross-validation
+    # happens after both files load (see
+    # :func:`validate_provider_references`). Only meaningful when
+    # ``passthrough=True`` because zelosMCP can't intercept inbound
+    # Authorization on session-bound backends.
+    auth_provider: str | None = None
+    # Provider-specific audience claim, e.g. ``"api://atlassian-mcp"``
+    # for an Okta token-exchange provider. Most providers ignore this
+    # (they mint a single token regardless of audience). ``None`` means
+    # "let the provider use its default audience".
+    auth_audience: str | None = None
 
     def to_status(self) -> dict[str, Any]:
         """Compact JSON-serializable view used by status endpoints."""
@@ -144,6 +271,23 @@ class ServerSpec:
             info["reverseProxy"] = self.reverse_proxy.to_status()
         if self.compress is not None:
             info["compress"] = self.compress.to_status()
+        if self.passthrough:
+            info["passthrough"] = True
+        # Compose the ``auth`` block from whichever fields are present.
+        # ``bearer`` and ``provider`` are mutually exclusive (enforced
+        # in :func:`_parse_top_level_auth`); both can't appear here.
+        auth_block: dict[str, Any] = {}
+        if self.auth_bearer:
+            # Mirrors ReverseProxySpec.to_status — never leak secrets.
+            auth_block["bearer"] = "***"
+        if self.auth_provider:
+            auth_block["provider"] = self.auth_provider
+            if self.auth_audience:
+                auth_block["audience"] = self.auth_audience
+        if auth_block:
+            info["auth"] = auth_block
+        if self.passthrough_pool is not None:
+            info["passthroughPool"] = self.passthrough_pool.to_status()
         return info
 
 
@@ -286,6 +430,35 @@ def _parse_reverse_proxy(server_name: str, raw: Any) -> ReverseProxySpec:
     )
 
 
+def _parse_passthrough_pool(server_name: str, raw: Any) -> PassthroughPoolSpec:
+    """Validate and normalize one ``passthroughPool`` block.
+
+    Both fields are optional; an empty object yields all dataclass defaults.
+    Negative or zero values are rejected so a misconfig can't disable the
+    pool's eviction behaviour silently.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Server '{server_name}': 'passthroughPool' must be an object"
+        )
+
+    max_sessions = raw.get("maxSessions", PASSTHROUGH_MAX_SESSIONS_DEFAULT)
+    if not isinstance(max_sessions, int) or isinstance(max_sessions, bool) or max_sessions <= 0:
+        raise ConfigError(
+            f"Server '{server_name}': passthroughPool.maxSessions must be "
+            f"a positive integer (got {max_sessions!r})"
+        )
+
+    idle_ttl = raw.get("idleTtlSeconds", PASSTHROUGH_IDLE_TTL_SECONDS_DEFAULT)
+    if not isinstance(idle_ttl, int) or isinstance(idle_ttl, bool) or idle_ttl <= 0:
+        raise ConfigError(
+            f"Server '{server_name}': passthroughPool.idleTtlSeconds must be "
+            f"a positive integer (got {idle_ttl!r})"
+        )
+
+    return PassthroughPoolSpec(max_sessions=max_sessions, idle_ttl_seconds=idle_ttl)
+
+
 def _parse_compress(server_name: str, raw: Any) -> CompressSpec:
     """Validate and normalize one ``compress`` block.
 
@@ -316,6 +489,257 @@ def _parse_compress(server_name: str, raw: Any) -> CompressSpec:
     return CompressSpec(level=level, scope=scope)
 
 
+def _parse_top_level_auth(
+    name: str, raw: Any
+) -> tuple[str | None, str | None, str | None]:
+    """Parse the top-level ``auth`` block on one server entry.
+
+    Returns ``(bearer, provider, audience)`` — at most one of
+    ``bearer`` / ``provider`` is set. Both is a config error so a
+    misconfig can't silently drop one field's intent.
+
+    - ``auth: { bearer: "${VAR}" }`` — legacy static-token mode.
+      Equivalent to a synthetic ``static`` provider auto-registered
+      by the manager.
+    - ``auth: { provider: "github_oauth_app" }`` — modern provider
+      reference. Optional ``audience`` field for token-exchange
+      style providers.
+    """
+    auth_raw = raw.get("auth")
+    if auth_raw is None:
+        return None, None, None
+    if not isinstance(auth_raw, dict):
+        raise ConfigError(f"Server '{name}': 'auth' must be an object")
+
+    bearer_raw = auth_raw.get("bearer")
+    provider_raw = auth_raw.get("provider")
+    audience_raw = auth_raw.get("audience")
+
+    if bearer_raw is not None and provider_raw is not None:
+        raise ConfigError(
+            f"Server '{name}': 'auth' must specify either 'bearer' OR "
+            "'provider', not both. Use 'provider' to reference an entry "
+            "in configs/auth-providers.json; use 'bearer' for the legacy "
+            "static-token mode."
+        )
+
+    bearer: str | None = None
+    if bearer_raw is not None:
+        if not isinstance(bearer_raw, str):
+            raise ConfigError(f"Server '{name}': auth.bearer must be a string")
+        bearer = _interpolate_env(bearer_raw, name, "auth.bearer")
+
+    provider: str | None = None
+    if provider_raw is not None:
+        if not isinstance(provider_raw, str) or not provider_raw:
+            raise ConfigError(
+                f"Server '{name}': auth.provider must be a non-empty string"
+            )
+        if not _NAME_RE.match(provider_raw):
+            raise ConfigError(
+                f"Server '{name}': auth.provider name '{provider_raw}' is "
+                "invalid: use letters, digits, '-', '_', or '.'"
+            )
+        provider = provider_raw
+
+    audience: str | None = None
+    if audience_raw is not None:
+        if provider is None:
+            raise ConfigError(
+                f"Server '{name}': auth.audience is only valid alongside "
+                "auth.provider"
+            )
+        if not isinstance(audience_raw, str) or not audience_raw:
+            raise ConfigError(
+                f"Server '{name}': auth.audience must be a non-empty string"
+            )
+        audience = audience_raw
+
+    return bearer, provider, audience
+
+
+def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
+    """Validate and normalize one entry from
+    ``configs/auth-providers.json``'s ``providers`` mapping.
+
+    Type-specific required fields are enforced here; cross-cutting
+    field validation (env interpolation, name format) is shared.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Auth provider '{name}': entry must be an object"
+        )
+    _validate_name(name)
+
+    type_raw = raw.get("type")
+    if not isinstance(type_raw, str) or type_raw not in AUTH_PROVIDER_TYPES:
+        raise ConfigError(
+            f"Auth provider '{name}': 'type' must be one of "
+            f"{sorted(AUTH_PROVIDER_TYPES)} (got {type_raw!r})"
+        )
+
+    # Per-type field allowlist + required fields.
+    allowed: set[str] = {"name", "type", "membership_hint"}
+    required: set[str] = set()
+    if type_raw == "github_device_flow":
+        allowed |= {"client_id", "scopes"}
+        required = {"client_id"}
+    elif type_raw == "okta_device_flow":
+        allowed |= {"client_id", "issuer", "scopes"}
+        required = {"client_id", "issuer"}
+    elif type_raw == "static":
+        allowed |= {"bearer"}
+        required = {"bearer"}
+    # passthrough has only the cross-cutting fields; no extras allowed.
+
+    extra_keys = set(raw) - allowed
+    if extra_keys:
+        raise ConfigError(
+            f"Auth provider '{name}' (type {type_raw!r}): unrecognised "
+            f"fields {sorted(extra_keys)}. Allowed: {sorted(allowed)}"
+        )
+    missing = required - set(raw)
+    if missing:
+        raise ConfigError(
+            f"Auth provider '{name}' (type {type_raw!r}): missing required "
+            f"field(s) {sorted(missing)}"
+        )
+
+    client_id: str | None = None
+    if "client_id" in raw:
+        if not isinstance(raw["client_id"], str) or not raw["client_id"]:
+            raise ConfigError(
+                f"Auth provider '{name}': client_id must be a non-empty string"
+            )
+        client_id = _interpolate_env(raw["client_id"], name, "client_id")
+
+    issuer: str | None = None
+    if "issuer" in raw:
+        if not isinstance(raw["issuer"], str) or not raw["issuer"]:
+            raise ConfigError(
+                f"Auth provider '{name}': issuer must be a non-empty string"
+            )
+        issuer_str = _interpolate_env(raw["issuer"], name, "issuer")
+        parsed = urlparse(issuer_str)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ConfigError(
+                f"Auth provider '{name}': issuer must be an http:// or "
+                f"https:// URL with a host (got {issuer_str!r})"
+            )
+        issuer = issuer_str
+
+    scopes: list[str] = []
+    if "scopes" in raw:
+        scopes_raw = raw["scopes"]
+        if not isinstance(scopes_raw, list) or not all(
+            isinstance(s, str) and s for s in scopes_raw
+        ):
+            raise ConfigError(
+                f"Auth provider '{name}': scopes must be an array of "
+                "non-empty strings"
+            )
+        scopes = list(scopes_raw)
+
+    membership_hint: str | None = None
+    if "membership_hint" in raw:
+        hint_raw = raw["membership_hint"]
+        if hint_raw is not None:
+            if not isinstance(hint_raw, str):
+                raise ConfigError(
+                    f"Auth provider '{name}': membership_hint must be a string"
+                )
+            # Empty after env interpolation is treated as unset so a
+            # missing env var doesn't surface "Membership required: " to
+            # the UI with a blank tail.
+            interpolated = _interpolate_env(
+                hint_raw, name, "membership_hint"
+            ).strip()
+            membership_hint = interpolated or None
+
+    bearer: str | None = None
+    if "bearer" in raw:
+        if not isinstance(raw["bearer"], str) or not raw["bearer"]:
+            raise ConfigError(
+                f"Auth provider '{name}': bearer must be a non-empty string"
+            )
+        bearer = _interpolate_env(raw["bearer"], name, "bearer")
+
+    return AuthProviderSpec(
+        name=name,
+        type=type_raw,
+        client_id=client_id,
+        issuer=issuer,
+        scopes=scopes,
+        membership_hint=membership_hint,
+        bearer=bearer,
+    )
+
+
+def parse_auth_providers(raw: Any) -> dict[str, AuthProviderSpec]:
+    """Parse the ``configs/auth-providers.json`` file body.
+
+    Top-level shape: ``{"providers": {<name>: {<spec>, ...}, ...}}``.
+    Returns a name-keyed dict matching the input order. The empty
+    object ``{"providers": {}}`` is allowed and yields an empty
+    dict (a deployment with zero providers configured); the missing
+    ``providers`` key is also tolerated for ergonomics.
+
+    Validation is per-provider (see :func:`_parse_auth_provider`)
+    plus duplicate-name detection (case-insensitive). Cross-validation
+    against backend specs lives in
+    :func:`validate_provider_references` and runs once both files
+    have been parsed.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError("Auth providers config must be a JSON object")
+
+    providers_raw = raw.get("providers")
+    if providers_raw is None:
+        return {}
+    if not isinstance(providers_raw, dict):
+        raise ConfigError(
+            "'providers' must be an object mapping name -> provider config"
+        )
+
+    out: dict[str, AuthProviderSpec] = {}
+    seen: set[str] = set()
+    for name, entry in providers_raw.items():
+        spec = _parse_auth_provider(name, entry)
+        lower = name.lower()
+        if lower in seen:
+            raise ConfigError(
+                f"Duplicate auth provider name (case-insensitive): '{name}'"
+            )
+        seen.add(lower)
+        out[name] = spec
+    return out
+
+
+def validate_provider_references(
+    server_specs: list[ServerSpec],
+    provider_specs: dict[str, AuthProviderSpec],
+) -> None:
+    """Cross-check that every backend's ``auth.provider`` reference
+    resolves to an entry in the providers config.
+
+    Called from the manager after both files have been parsed (or
+    after the live config-replace endpoint swaps either set). Raises
+    :class:`ConfigError` on the first dangling reference; the error
+    message lists both the backend name and the missing provider so
+    the user can fix the typo without grep-ing the providers file.
+    """
+    for server in server_specs:
+        if server.auth_provider is None:
+            continue
+        if server.auth_provider not in provider_specs:
+            available = ", ".join(sorted(provider_specs)) or "(none)"
+            raise ConfigError(
+                f"Server '{server.name}' references auth provider "
+                f"'{server.auth_provider}' which is not defined in the "
+                f"auth-providers config. Available: {available}"
+            )
+
+
 def _parse_server(name: str, raw: Any) -> ServerSpec:
     if not isinstance(raw, dict):
         raise ConfigError(f"Server '{name}': entry must be an object")
@@ -326,6 +750,28 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     if "reverseProxy" in raw and raw["reverseProxy"] is not None:
         reverse_proxy = _parse_reverse_proxy(name, raw["reverseProxy"])
 
+    # Passthrough flag — only valid for HTTP transports. Validated below per
+    # transport branch so the error message can reference the right field.
+    passthrough_raw = raw.get("passthrough", False)
+    if not isinstance(passthrough_raw, bool):
+        raise ConfigError(
+            f"Server '{name}': 'passthrough' must be a boolean (got {passthrough_raw!r})"
+        )
+
+    # Top-level auth block. Yields (bearer, provider, audience) — at
+    # most one of bearer/provider is non-None (parser enforces). Both
+    # are only meaningful for passthrough HTTP backends; rejected below
+    # when set on stdio or non-passthrough HTTP.
+    top_level_auth_bearer, auth_provider, auth_audience = _parse_top_level_auth(
+        name, raw
+    )
+
+    # Pool sizing — only honoured when passthrough=True; rejected on stdio
+    # / non-passthrough so misconfigs surface immediately.
+    passthrough_pool: PassthroughPoolSpec | None = None
+    if "passthroughPool" in raw and raw["passthroughPool"] is not None:
+        passthrough_pool = _parse_passthrough_pool(name, raw["passthroughPool"])
+
     # Default-on: every backend gets `medium` compression scoped to the
     # aggregator unless it explicitly opts out. Opt-out forms:
     #   "compress": null        # disable entirely
@@ -335,6 +781,15 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     #   "compress": {}          # same as omitted — dataclass defaults
     #   "compress": {"level": "high"}             # override one field
     #   "compress": {"level": "low", "scope": "global"}
+    #
+    # Passthrough backends are compressed by default (same as session-bound
+    # ones) — the aggregator emits the wrapper pair regardless of inbound
+    # auth so the agent always sees a stable surface; the FIRST wrapper
+    # invocation drives the upstream OAuth dance via the existing
+    # PassthroughChallengeError path. See docs/oauth-passthrough.md.
+    # `scope=global` is still rejected for passthrough below because the
+    # `/<name>/mcp` path is a streaming reverse proxy and can't host
+    # wrappers; only the aggregator at `/mcp` can.
     compress: CompressSpec | None
     if "compress" not in raw:
         compress = CompressSpec()
@@ -345,6 +800,30 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
 
     # Stdio: presence of `command` (matches Cursor's discrimination rule).
     if "command" in raw:
+        if passthrough_raw:
+            raise ConfigError(
+                f"Server '{name}': 'passthrough' is only valid for HTTP "
+                "transports (type: streamable-http) — stdio backends already "
+                "run as zelosMCP-owned subprocesses."
+            )
+        if top_level_auth_bearer is not None:
+            raise ConfigError(
+                f"Server '{name}': top-level 'auth.bearer' is only valid for "
+                "passthrough HTTP backends; stdio backends should pass tokens "
+                "via 'env' instead."
+            )
+        if auth_provider is not None:
+            raise ConfigError(
+                f"Server '{name}': top-level 'auth.provider' is only valid "
+                "for passthrough HTTP backends; stdio backends should pass "
+                "tokens via 'env' instead."
+            )
+        if passthrough_pool is not None:
+            raise ConfigError(
+                f"Server '{name}': 'passthroughPool' is only valid for "
+                "passthrough HTTP backends."
+            )
+
         command = raw.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ConfigError(f"Server '{name}': 'command' must be a non-empty string")
@@ -385,6 +864,58 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             headers = _coerce_str_dict(raw["headers"], "headers", name)
 
         transport = "sse" if declared_type == "sse" else "http"
+
+        if passthrough_raw and transport != "http":
+            raise ConfigError(
+                f"Server '{name}': 'passthrough' is only valid for "
+                "type: streamable-http (got type: sse). The legacy SSE "
+                "transport is not supported for passthrough."
+            )
+
+        if not passthrough_raw and top_level_auth_bearer is not None:
+            raise ConfigError(
+                f"Server '{name}': top-level 'auth.bearer' is only valid "
+                "when 'passthrough: true' is also set. For non-passthrough "
+                "HTTP backends, supply tokens via 'headers' instead."
+            )
+
+        if not passthrough_raw and auth_provider is not None:
+            raise ConfigError(
+                f"Server '{name}': top-level 'auth.provider' is only valid "
+                "when 'passthrough: true' is also set. The provider needs "
+                "to mint tokens per-request, which only works for passthrough "
+                "HTTP backends; for non-passthrough HTTP, supply tokens via "
+                "'headers' instead."
+            )
+
+        if not passthrough_raw and passthrough_pool is not None:
+            raise ConfigError(
+                f"Server '{name}': 'passthroughPool' is only valid when "
+                "'passthrough: true' is also set."
+            )
+
+        # `scope=global` requires zelosMCP to terminate MCP on the
+        # `/<name>/mcp` path so the per-backend session manager can host
+        # wrappers there. Passthrough backends route `/<name>/mcp` through
+        # a streaming HTTP reverse proxy instead, so there's no place to
+        # plug wrappers in. Reject explicitly so misconfigs surface at
+        # parse time rather than mysteriously failing at runtime.
+        # `scope=aggregator` (the default) and `scope=catalog` both work
+        # — they're served by the aggregator at `/mcp`, not by the
+        # per-backend mount.
+        if (
+            passthrough_raw
+            and compress is not None
+            and compress.scope == "global"
+        ):
+            raise ConfigError(
+                f"Server '{name}': 'compress.scope' cannot be 'global' "
+                "when 'passthrough: true'. The /<name>/mcp route for "
+                "passthrough backends is a streaming reverse proxy that "
+                "doesn't terminate MCP, so wrappers can't be served "
+                "there. Use 'aggregator' (the default) or 'catalog'."
+            )
+
         return ServerSpec(
             name=name,
             transport=transport,
@@ -392,6 +923,11 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             headers=headers,
             reverse_proxy=reverse_proxy,
             compress=compress,
+            passthrough=passthrough_raw,
+            auth_bearer=top_level_auth_bearer,
+            passthrough_pool=passthrough_pool,
+            auth_provider=auth_provider,
+            auth_audience=auth_audience,
         )
 
     raise ConfigError(
