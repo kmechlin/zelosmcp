@@ -1,10 +1,12 @@
-# LocalMCP
+# zelosMCP
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 
-Wrap one or more MCP servers and re-expose them on stable local URLs. One Cursor or VSCode entry, every backend.
+> Named for **Zelos**, the Greek personification of zeal and rivalry — brother of Nike (victory) and Bia (force) and one of the four winged enforcers who stood beside Zeus. zelosMCP enforces a single contract across many MCP backends.
 
-LocalMCP runs a single web server that fronts any number of MCP servers — stdio commands, SSE endpoints, or Streamable HTTP URLs. Each one gets a fixed local address (`http://localhost:8000/<name>/mcp`), and a bare `http://localhost:8000/mcp` aggregates tools, prompts, and resources from every running backend under a `<server>__<tool>` namespace. Plus a comprehensive Cursor / Copilot rule generator, a live tool catalog UI, and a small REST control plane.
+Wrap one or more MCP servers and re-expose them on stable URLs. One Cursor or VSCode entry today, a cluster-wide router tomorrow.
+
+zelosMCP runs a single web server that fronts any number of MCP servers — stdio commands, SSE endpoints, or Streamable HTTP URLs. Each one gets a fixed local address (`http://localhost:8000/<name>/mcp`), and a bare `http://localhost:8000/mcp` aggregates tools, prompts, and resources from every running backend under a `<server>__<tool>` namespace. Plus a comprehensive Cursor / Copilot rule generator, a live tool catalog UI, and a small REST control plane.
 
 ## Quickstart
 
@@ -29,10 +31,10 @@ flowchart LR
     cursor["Cursor"]
     vscode["VSCode + Copilot"]
   end
-  subgraph proxy [LocalMCP]
+  subgraph proxy [zelosMCP]
     dispatch["dispatcher"]
     agg["Aggregator (/mcp)"]
-    builtin["BuiltinServer (/localmcp/mcp)"]
+    builtin["BuiltinServer (/zelosmcp/mcp)"]
     other["pincher / filesystem / docker /\nkubernetes / (your own ...)"]
     api["HTTP API + Web UI"]
   end
@@ -50,9 +52,20 @@ Three things to know:
 
 - **`/<name>/mcp`** is a raw passthrough to one backend (original tool names).
 - **`/mcp`** aggregates every running backend (names prefixed `<server>__`). This is what your IDE should connect to.
-- **`/localmcp/mcp`** is an always-on built-in MCP that exposes self-introspection tools — `localmcp__generate_cursor_rule`, `localmcp__get_aggregated_tool_catalog`, etc. — so the agent can drive LocalMCP itself.
+- **`/zelosmcp/mcp`** is an always-on built-in MCP that exposes self-introspection tools — `zelosmcp__generate_cursor_rule`, `zelosmcp__get_aggregated_tool_catalog`, etc. — so the agent can drive zelosMCP itself.
 
 Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequence): [docs/architecture.md](docs/architecture.md).
+
+## Future direction: Kubernetes-hosted MCP proxy + router
+
+zelosMCP starts as a developer-local proxy/aggregator (one Cursor or VSCode entry, many backends), but the same dispatcher + reverse-proxy + aggregator surface is deliberately built to run as a shared Kubernetes service:
+
+- **Multi-tenant routing.** The Cursor-compatible config schema (see [docs/configuration.md](docs/configuration.md)) already supports any number of stdio / SSE / streamable-HTTP backends per process, with per-backend reverse-proxy mounts and bearer-token injection. A team can deploy zelosMCP as a single in-cluster Service that fans out to managed MCP backends running as sidecars or sibling pods.
+- **Cluster-side backends.** The `kubernetes` and `docker` MCP backends already shipped with zelosMCP (see [docs/default-mcps.md](docs/default-mcps.md)) are the precedent — both are designed to operate against an in-cluster API. A hosted zelosMCP deployment can offer them centrally instead of asking every developer to mount `/var/run/docker.sock` and a kubeconfig locally.
+- **Stable HTTP surface.** `/<name>/mcp`, `/mcp`, `/zelosmcp/mcp`, and the `/api/*` REST control plane are all plain HTTP — they ingress through any standard cluster ingress / service-mesh layer without protocol gymnastics.
+- **Observability + savings.** The token-savings dashboard ([docs/dashboard.md](docs/dashboard.md)) and SSE log stream make a hosted deployment auditable per-team. The persistent SQLite store can be swapped for any aiosqlite-compatible path via `ZELOSMCP_SAVINGS_DB`, including a PVC-backed file or a sidecar database.
+
+Concrete in-cluster manifests are not yet published — the goal of this README is to document the local quickstart while flagging that the same code will be packaged as a Helm chart / operator in a follow-up release.
 
 ## Documentation
 
@@ -63,13 +76,13 @@ Deeper dive (component table, dispatcher flow, aggregator fan-out, lifespan sequ
 | Rancher Desktop setup (Docker daemon + kubeconfig) | [docs/setup-rancher-desktop.md](docs/setup-rancher-desktop.md) |
 | Makefile reference + volume-mount customization | [docs/makefile.md](docs/makefile.md) |
 | `mcpServers` config schema and `/api/start` lifecycle | [docs/configuration.md](docs/configuration.md) |
-| Reverse-proxy backend HTTP sidecars under LocalMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
+| Reverse-proxy backend HTTP sidecars under zelosMCP's port | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
 | Tool-list compression (`get_tool_schema` / `invoke_tool` wrappers) | [docs/compression.md](docs/compression.md) |
 | Default MCP backends (pincher + filesystem mandatory; docker / kubernetes default) | [docs/default-mcps.md](docs/default-mcps.md) |
 | Repositories panel (discover git repos + write rules + index in pincher) | [docs/repositories.md](docs/repositories.md) |
 | Cursor integration + dynamic `.mdc` rule generation | [docs/cursor-integration.md](docs/cursor-integration.md) |
 | VSCode + GitHub Copilot integration + `copilot-instructions.md` | [docs/vscode-integration.md](docs/vscode-integration.md) |
-| Built-in MCP at `/localmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |
+| Built-in MCP at `/zelosmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |
 | HTTP API reference (`/api/*` and the MCP routes) | [docs/http-api.md](docs/http-api.md) |
 
 Plus the interactive Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs) and ReDoc at [http://localhost:8000/redoc](http://localhost:8000/redoc).
@@ -81,19 +94,19 @@ pyproject.toml              # Package definition
 Dockerfile                  # Upstream community-friendly image (no corp cert handling)
 Makefile                    # Build + lifecycle targets
 configs/
-  default-localmcp.json     # Project-agnostic default backend set
+  default-zelosmcp.json     # Project-agnostic default backend set
   default-volumes.conf      # Default container volume mounts (host paths + named volumes)
 docker-tools/               # Cert-aware build infrastructure (corporate proxy environments)
-  Dockerfile                # Multi-stage: base-os -> extra-os -> localmcp
+  Dockerfile                # Multi-stage: base-os -> extra-os -> zelosmcp
   buildx.Dockerfile         # Cert-aware buildkit builder image
   README.md                 # Build flow + Makefile pointers
 docs/                       # All documentation (this README links into it)
-src/localmcp/
+src/zelosmcp/
   __init__.py
-  __main__.py               # python -m localmcp
+  __main__.py               # python -m zelosmcp
   app.py                    # Starlette app, ASGI dispatcher, OpenAPI routes
   aggregator.py             # Aggregator: union of tools/prompts at /mcp
-  builtin.py                # Always-on built-in MCP at /localmcp/mcp + rule generator
+  builtin.py                # Always-on built-in MCP at /zelosmcp/mcp + rule generator
   compression.py            # tool-list compression wrappers (get_tool_schema/invoke_tool)
   config.py                 # Cursor-compatible config parser + ServerSpec
   docs.py                   # in-app /api/docs markdown viewer

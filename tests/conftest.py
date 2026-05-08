@@ -14,7 +14,7 @@ from mcp.types import (
     TextContent,
     Tool,
 )
-from localmcp.proxy import ProxyState
+from zelosmcp.proxy import ProxyState
 
 
 class FakeResult:
@@ -146,8 +146,8 @@ def patch_proxy_deps():
         yield
 
     patches = [
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
         patch.object(
             __import__("mcp.server.streamable_http_manager", fromlist=["StreamableHTTPSessionManager"]).StreamableHTTPSessionManager,
             "run",

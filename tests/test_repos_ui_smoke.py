@@ -1,6 +1,6 @@
 """Smoke test: assert the Repositories UI markup is wired up.
 
-The UI is one big HTML template string in ``localmcp.ui.HTML_TEMPLATE``.
+The UI is one big HTML template string in ``zelosmcp.ui.HTML_TEMPLATE``.
 A regression in any of the markup blocks below would silently break the
 right-column panel or the middle-pane editor, so we lock in the structural
 landmarks. We only assert on stable IDs and class names — never on
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from localmcp.ui import HTML_TEMPLATE
+from zelosmcp.ui import HTML_TEMPLATE
 
 
 # ── Right-column collapsible panel ─────────────────────────────────────
@@ -82,7 +82,7 @@ class TestRepoDetailsView:
 
     def test_format_options_match_api(self):
         # The two format values must match RULE_RELATIVE_PATHS in
-        # localmcp.repos so the UI can't request something the backend
+        # zelosmcp.repos so the UI can't request something the backend
         # rejects.
         assert 'value="cursor-mdc"' in HTML_TEMPLATE
         assert 'value="copilot-instructions"' in HTML_TEMPLATE
@@ -127,8 +127,8 @@ class TestJsLandmarks:
         assert fn_name in HTML_TEMPLATE
 
     def test_localstorage_keys_used(self):
-        assert "localmcp:repos:expanded" in HTML_TEMPLATE
-        assert "localmcp:repos:filter" in HTML_TEMPLATE
+        assert "zelosmcp:repos:expanded" in HTML_TEMPLATE
+        assert "zelosmcp:repos:filter" in HTML_TEMPLATE
 
     def test_set_view_invocation_for_repo_details(self):
         # The middle-pane swap goes through the existing setView() helper.

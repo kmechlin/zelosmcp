@@ -1,8 +1,8 @@
 # Quickstart
 
-Get LocalMCP running and wired into your IDE in five minutes.
+Get zelosMCP running and wired into your IDE in five minutes.
 
-## Step 1 — Start LocalMCP
+## Step 1 — Start zelosMCP
 
 If you have Docker, this is a single command:
 
@@ -23,12 +23,12 @@ make up             # build image (if missing) + start container + load default 
 
 ### Cursor
 
-In the LocalMCP web UI, copy the **Cursor mcp.json (aggregated)** snippet into `.cursor/mcp.json` (per-project) or `~/.cursor/mcp.json` (global):
+In the zelosMCP web UI, copy the **Cursor mcp.json (aggregated)** snippet into `.cursor/mcp.json` (per-project) or `~/.cursor/mcp.json` (global):
 
 ```json
 {
   "mcpServers": {
-    "localmcp-aggregate": {
+    "zelosmcp-aggregate": {
       "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
@@ -36,7 +36,7 @@ In the LocalMCP web UI, copy the **Cursor mcp.json (aggregated)** snippet into `
 }
 ```
 
-The Cursor `.mdc` rule was already written for you by `make up` (at the path you picked in `make init-env`, default `.cursor/rules/localmcp.mdc`). It teaches the agent about every tool LocalMCP's aggregator exposes — so the agent picks `pincher__search` over recursive `grep`, `filesystem__edit_file` over `sed`, etc. Reload Cursor and you're done.
+The Cursor `.mdc` rule was already written for you by `make up` (at the path you picked in `make init-env`, default `.cursor/rules/zelosmcp.mdc`). It teaches the agent about every tool zelosMCP's aggregator exposes — so the agent picks `pincher__search` over recursive `grep`, `filesystem__edit_file` over `sed`, etc. Reload Cursor and you're done.
 
 Full reference (rule generator parameters, scoped rules, IDE specifics): [cursor-integration.md](cursor-integration.md).
 
@@ -47,7 +47,7 @@ VSCode uses a slightly different MCP config shape. Place this in `.vscode/mcp.js
 ```json
 {
   "servers": {
-    "localmcp-aggregate": {
+    "zelosmcp-aggregate": {
       "type": "http",
       "url": "http://localhost:8000/mcp"
     }
@@ -63,7 +63,7 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
   > .github/copilot-instructions.md
 ```
 
-Reload VSCode (Cmd+Shift+P → `Developer: Reload Window`) and Copilot has access to every LocalMCP tool plus the rule guiding which to use.
+Reload VSCode (Cmd+Shift+P → `Developer: Reload Window`) and Copilot has access to every zelosMCP tool plus the rule guiding which to use.
 
 Full reference: [vscode-integration.md](vscode-integration.md).
 
@@ -75,13 +75,13 @@ Open a new chat in your IDE. Ask:
 - **"Find every Python file that imports `asyncio` in this repo."** — agent calls `pincher__search` against the pre-built symbol index.
 - **"Summarize this codebase."** — agent calls `pincher__architecture`.
 
-If the agent doesn't pick the MCP tool, the rule may not have loaded — check the file lives at the path you configured (`.cursor/rules/localmcp.mdc` per-project or `~/.cursor/rules/localmcp.mdc` global) and reload the IDE.
+If the agent doesn't pick the MCP tool, the rule may not have loaded — check the file lives at the path you configured (`.cursor/rules/zelosmcp.mdc` per-project or `~/.cursor/rules/zelosmcp.mdc` global) and reload the IDE.
 
 ## When to refresh the rule
 
 The `.mdc` is a snapshot of the catalog at generation time. It auto-refreshes whenever you `make load` (or `make up`, which chains `load`). For ad-hoc regeneration after editing config or toggling backends manually, run `make rule` standalone.
 
-To switch between read-only and read-write tool access (controls whether the agent is allowed to call `[mutates]` and `[destructive]` tools), re-run `make init-env` — or set `LOCALMCP_RULE_ACCESS=read-only` in `.env` and `make rule` again. See [cursor-integration.md](cursor-integration.md#access-read-only-vs-read-write) for the access-mode reference.
+To switch between read-only and read-write tool access (controls whether the agent is allowed to call `[mutates]` and `[destructive]` tools), re-run `make init-env` — or set `ZELOSMCP_RULE_ACCESS=read-only` in `.env` and `make rule` again. See [cursor-integration.md](cursor-integration.md#access-read-only-vs-read-write) for the access-mode reference.
 
 ## Where next
 

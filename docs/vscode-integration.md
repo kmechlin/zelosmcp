@@ -1,6 +1,6 @@
 # VSCode + GitHub Copilot integration
 
-VSCode (with the GitHub Copilot extension's agent mode) speaks MCP and can consume LocalMCP just like Cursor can. The mechanics are identical to [cursor-integration.md](cursor-integration.md) — same `/api/cursor-rule` generator, same aggregator at `/mcp`. Only the wrapper file format and the IDE config-key spelling differ.
+VSCode (with the GitHub Copilot extension's agent mode) speaks MCP and can consume zelosMCP just like Cursor can. The mechanics are identical to [cursor-integration.md](cursor-integration.md) — same `/api/cursor-rule` generator, same aggregator at `/mcp`. Only the wrapper file format and the IDE config-key spelling differ.
 
 Read [cursor-integration.md](cursor-integration.md) first if you haven't; this page just lists the differences.
 
@@ -25,7 +25,7 @@ Aggregated entry — the recommended default:
 ```json
 {
   "servers": {
-    "localmcp-aggregate": {
+    "zelosmcp-aggregate": {
       "type": "http",
       "url": "http://localhost:8000/mcp"
     }
@@ -33,7 +33,7 @@ Aggregated entry — the recommended default:
 }
 ```
 
-VSCode prompts you to trust the server the first time it connects (a small banner in the chat view). Confirm and Copilot has access to every tool LocalMCP exposes.
+VSCode prompts you to trust the server the first time it connects (a small banner in the chat view). Confirm and Copilot has access to every tool zelosMCP exposes.
 
 > **Trust caveat:** if you start the MCP server directly from the `mcp.json` file (via the inline action), VSCode skips the trust prompt. The first-connection prompt is the canonical safety check; re-trigger via `MCP: Reset Trust` if you accidentally skipped it.
 
@@ -60,14 +60,14 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-write&format=copil
 
 ## Per-glob Copilot instructions (`applyTo:`)
 
-Copilot has a `.github/instructions/*.instructions.md` directory for guidance scoped to particular file patterns. LocalMCP's generator doesn't natively emit this format — wrap the body manually:
+Copilot has a `.github/instructions/*.instructions.md` directory for guidance scoped to particular file patterns. zelosMCP's generator doesn't natively emit this format — wrap the body manually:
 
 ```bash
 mkdir -p .github/instructions
 {
   printf -- '---\napplyTo: "**/*.py"\n---\n\n'
   curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions'
-} > .github/instructions/localmcp-python.instructions.md
+} > .github/instructions/zelosmcp-python.instructions.md
 ```
 
 ## Workflows
@@ -78,8 +78,8 @@ mkdir -p .github/instructions
 # 1. Open Command Palette, run `MCP: Open User Configuration`.
 #    Paste the aggregated `servers` JSON above.
 # 2. The instructions file was already written by `make up`
-#    (which chains `make rule`). It lives at LOCALMCP_RULE_FILE,
-#    default .cursor/rules/localmcp.mdc — but Copilot reads from
+#    (which chains `make rule`). It lives at ZELOSMCP_RULE_FILE,
+#    default .cursor/rules/zelosmcp.mdc — but Copilot reads from
 #    .github/copilot-instructions.md. Generate it once:
 mkdir -p .github
 curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
@@ -89,7 +89,7 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
 
 ### "I want this in source control with my repo"
 
-Same as above but commit `.vscode/mcp.json` and `.github/copilot-instructions.md`. Anyone cloning the repo + running LocalMCP at `http://localhost:8000` inherits the same setup.
+Same as above but commit `.vscode/mcp.json` and `.github/copilot-instructions.md`. Anyone cloning the repo + running zelosMCP at `http://localhost:8000` inherits the same setup.
 
 ### "I added a new backend — refresh"
 
@@ -97,7 +97,7 @@ Same as above but commit `.vscode/mcp.json` and `.github/copilot-instructions.md
 
 ## Sandboxing
 
-VSCode's MCP-server sandboxing only applies to stdio entries (`command:`/`args:`). LocalMCP is reached over `type: http`, so the sandbox doesn't apply. Restrict trust at the LocalMCP config level instead — only load backends you trust, and read [makefile.md](makefile.md#volume-mounts-localmcp_volumes_file) on the Docker-socket security tradeoff before enabling the `docker` backend.
+VSCode's MCP-server sandboxing only applies to stdio entries (`command:`/`args:`). zelosMCP is reached over `type: http`, so the sandbox doesn't apply. Restrict trust at the zelosMCP config level instead — only load backends you trust, and read [makefile.md](makefile.md#volume-mounts-zelosmcp_volumes_file) on the Docker-socket security tradeoff before enabling the `docker` backend.
 
 ## Common gotchas
 
@@ -108,5 +108,5 @@ VSCode's MCP-server sandboxing only applies to stdio entries (`command:`/`args:`
 ## See also
 
 - [cursor-integration.md](cursor-integration.md) — canonical reference for the rule generator parameters (this page links into it for shared content).
-- [built-in-mcp.md](built-in-mcp.md) — the `localmcp__generate_cursor_rule` MCP tool that backs `/api/cursor-rule`.
+- [built-in-mcp.md](built-in-mcp.md) — the `zelosmcp__generate_cursor_rule` MCP tool that backs `/api/cursor-rule`.
 - [VSCode MCP docs](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) — upstream Microsoft documentation.

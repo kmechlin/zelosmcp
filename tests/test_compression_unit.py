@@ -1,4 +1,4 @@
-"""Unit tests for localmcp.compression — pure helpers shared by the
+"""Unit tests for zelosmcp.compression — pure helpers shared by the
 aggregator and the per-backend `scope=global` wrapper."""
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
 
-from localmcp.compression import (
+from zelosmcp.compression import (
     compress_for_catalog,
     compressed_tool_list,
     handle_compressed_call,

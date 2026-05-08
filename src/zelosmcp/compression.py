@@ -29,7 +29,7 @@ from typing import Any
 
 from mcp.types import CallToolResult, ContentBlock, TextContent, Tool
 
-from localmcp.config import COMPRESS_LEVELS, COMPRESS_SCOPES
+from zelosmcp.config import COMPRESS_LEVELS, COMPRESS_SCOPES
 
 # Re-exported so callers (aggregator, per-backend wrapper, builtin tool)
 # don't have to import from config.py just for the level/scope lookup.

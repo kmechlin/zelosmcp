@@ -6,7 +6,7 @@ Reads and writes are serialized through a single asyncio lock so we never
 fight aiosqlite's own per-connection locking, and so aggregation queries
 see a consistent view even while the call hot-path is writing.
 
-Path is configurable via the ``LOCALMCP_SAVINGS_DB`` env var; tests pass
+Path is configurable via the ``ZELOSMCP_SAVINGS_DB`` env var; tests pass
 ``":memory:"`` to keep the schema in-process and forget it on shutdown.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any
 
 import aiosqlite
 
-logger = logging.getLogger("localmcp.savings")
+logger = logging.getLogger("zelosmcp.savings")
 
 
 _SCHEMA = [
@@ -74,17 +74,17 @@ _SCHEMA = [
 
 
 def resolve_db_path(explicit: str | None = None) -> str:
-    """Pick the SQLite path: explicit > env var > ``~/.localmcp/savings.sqlite``.
+    """Pick the SQLite path: explicit > env var > ``~/.zelosmcp/savings.sqlite``.
 
     Returns the literal string ``":memory:"`` unchanged for tests. Falls
     back to ``":memory:"`` when the home directory can't be created
     (sandboxed environments, read-only filesystems) so the proxy still
     boots — counters just don't survive restarts in that mode.
     """
-    candidate = explicit or os.environ.get("LOCALMCP_SAVINGS_DB")
+    candidate = explicit or os.environ.get("ZELOSMCP_SAVINGS_DB")
     if candidate:
         return candidate
-    home = Path.home() / ".localmcp"
+    home = Path.home() / ".zelosmcp"
     try:
         home.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as exc:

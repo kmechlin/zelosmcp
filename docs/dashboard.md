@@ -1,6 +1,6 @@
 # Token-savings dashboard
 
-LocalMCP ships with a savings dashboard that quantifies the token cost
+zelosMCP ships with a savings dashboard that quantifies the token cost
 the proxy layer is removing from the agent's bill. It lives at the
 **Savings** tab on the home page (`http://localhost:8000/`) and is
 backed by a JSON endpoint at `/api/savings` plus an SSE stream at
@@ -18,7 +18,7 @@ Three independent sources of savings are recorded:
    row per backend in `compression_snapshot`. Replaced on each
    `tools/list`.
 2. **Per-call token accounting** — every `call_tool` (raw or compressed
-   wrapper) routes through `localmcp.savings.measure_call`. Inputs
+   wrapper) routes through `zelosmcp.savings.measure_call`. Inputs
    (request arguments) and outputs (`content` + `structuredContent`)
    are token-counted, latency is measured, and a `call_events` row is
    appended.
@@ -30,12 +30,12 @@ Three independent sources of savings are recorded:
    poller also calls `pincher__stats` and stores the formatted summary
    verbatim.
 
-The aggregator excludes the always-on `localmcp__*` builtin from the
+The aggregator excludes the always-on `zelosmcp__*` builtin from the
 totals so the dashboard's own queries don't pollute their own metrics.
 
 ## Token counting
 
-By default LocalMCP uses [tiktoken](https://pypi.org/project/tiktoken/)
+By default zelosMCP uses [tiktoken](https://pypi.org/project/tiktoken/)
 with the `cl100k_base` encoding (gpt-4 / gpt-3.5-turbo). It's close
 enough to Anthropic's tokenizer for trend reporting and
 relative-compression ratios. Install via the optional extra:
@@ -52,15 +52,15 @@ dashboard exposes which mode is active in its header — look for
 ## Persistence
 
 Savings counters are stored in a SQLite database. By default it lives
-at `~/.localmcp/savings.sqlite`. Override with the
-`LOCALMCP_SAVINGS_DB` environment variable; pass `:memory:` to keep it
+at `~/.zelosmcp/savings.sqlite`. Override with the
+`ZELOSMCP_SAVINGS_DB` environment variable; pass `:memory:` to keep it
 process-local (counters reset on every restart). If the home directory
 isn't writable, the proxy falls back to in-memory automatically — the
 dashboard still works, but won't carry totals across restarts.
 
-When LocalMCP runs in Docker (`make up`), `~/.localmcp`
-resolves to `/root/.localmcp` inside the container. That directory is
-backed by the named volume `localmcp-savings` (see
+When zelosMCP runs in Docker (`make up`), `~/.zelosmcp`
+resolves to `/root/.zelosmcp` inside the container. That directory is
+backed by the named volume `zelosmcp-savings` (see
 [`configs/default-volumes.conf`](../configs/default-volumes.conf)), so
 the SQLite store survives `docker rm` and image rebuilds the same way
 the pincher index does. `make nuke` removes both — `make clean`
@@ -68,8 +68,8 @@ keeps them.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `LOCALMCP_SAVINGS_DB` | `~/.localmcp/savings.sqlite` | SQLite path. `:memory:` disables persistence. |
-| `LOCALMCP_PINCHER_POLL_SECS` | `60` | Pincher `stats` snapshot interval. `0` disables. |
+| `ZELOSMCP_SAVINGS_DB` | `~/.zelosmcp/savings.sqlite` | SQLite path. `:memory:` disables persistence. |
+| `ZELOSMCP_PINCHER_POLL_SECS` | `60` | Pincher `stats` snapshot interval. `0` disables. |
 
 ## Endpoints
 
@@ -83,7 +83,7 @@ keeps them.
 
 ## Schema
 
-Four tables (see `localmcp/savings_db.py`):
+Four tables (see `zelosmcp/savings_db.py`):
 
 - `compression_snapshot` (one row per backend) — last
   `tools/list` raw vs. compressed bytes/tokens.

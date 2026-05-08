@@ -1,4 +1,4 @@
-"""Unit tests for localmcp.proxy.ProxyState."""
+"""Unit tests for zelosmcp.proxy.ProxyState."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from localmcp.proxy import ProxyState
+from zelosmcp.proxy import ProxyState
 from tests.conftest import (
     fake_stdio_client,
     fake_sse_client,
@@ -136,10 +136,10 @@ def _apply_patches():
 
     return (
         mock_session,
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
         patch(
-            "localmcp.proxy.StreamableHTTPSessionManager.run",
+            "zelosmcp.proxy.StreamableHTTPSessionManager.run",
             patched_run,
         ),
     )
@@ -197,9 +197,9 @@ class TestLifecycle:
             yield
 
         with (
-            patch("localmcp.proxy.sse_client", side_effect=fake_sse_client),
-            patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
-            patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
+            patch("zelosmcp.proxy.sse_client", side_effect=fake_sse_client),
+            patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
+            patch("zelosmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
         ):
             p = ProxyState()
             await p.start("sse", url="http://fake/sse")
@@ -221,9 +221,9 @@ class TestLifecycle:
             yield
 
         with (
-            patch("localmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
-            patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
-            patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
+            patch("zelosmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
+            patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
+            patch("zelosmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
         ):
             p = ProxyState()
             await p.start("http", url="http://fake/mcp")
@@ -261,7 +261,7 @@ class TestLifecycle:
             raise ConnectionError("boom")
             yield  # pragma: no cover
 
-        with patch("localmcp.proxy.stdio_client", side_effect=failing_stdio):
+        with patch("zelosmcp.proxy.stdio_client", side_effect=failing_stdio):
             p = ProxyState()
             with pytest.raises(ConnectionError, match="boom"):
                 await p.start("stdio", command="bad command")

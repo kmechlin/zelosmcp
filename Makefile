@@ -1,5 +1,5 @@
 # ============================================================================
-# LocalMCP — Docker container lifecycle for the MCP proxy + aggregator.
+# zelosMCP — Docker container lifecycle for the MCP proxy + aggregator.
 #
 # Quickstart:
 #   make init-env   # optional one-time wizard: writes .env (USER_DATA_ROOT, ports, etc.)
@@ -20,8 +20,8 @@ GIT_BRANCH_NAME := $(shell git rev-parse --abbrev-ref HEAD | awk '{print A[split
 DOCKER_TOOLS_PATH ?= docker-tools
 DOCKERFILE ?= ${DOCKER_TOOLS_PATH}/Dockerfile
 PLATFORM ?= linux/arm64
-BUILDX_BUILDER_NAME ?= localmcp-builder
-BUILDX_IMAGE_NAME ?= localmcp-buildx
+BUILDX_BUILDER_NAME ?= zelosmcp-builder
+BUILDX_IMAGE_NAME ?= zelosmcp-buildx
 DOCKER_REGISTRY ?= host.docker.internal:5001
 SSH_KEY_FILE ?= $(HOME)/.ssh/id_rsa
 
@@ -49,38 +49,38 @@ USER_DATA_ROOT      ?= $(HOME)/workspace
 
 # HTTP listen surface. 127.0.0.1 means only this Mac can reach :8000;
 # 0.0.0.0 exposes it on the LAN.
-LOCALMCP_PORT       ?= 8000
-LOCALMCP_BIND_ADDR  ?= 127.0.0.1
+ZELOSMCP_PORT       ?= 8000
+ZELOSMCP_BIND_ADDR  ?= 127.0.0.1
 
 # Image + container identity.
-LOCALMCP_IMAGE_TAG  ?= localmcp:dev
-LOCALMCP_CONTAINER  ?= localmcp
+ZELOSMCP_IMAGE_TAG  ?= zelosmcp:dev
+ZELOSMCP_CONTAINER  ?= zelosmcp
 
 # Default config posted by `make load`. Override (e.g. via .env) to point
-# at configs/user-localmcp.json that `make init-env` writes when the user
+# at configs/user-zelosmcp.json that `make init-env` writes when the user
 # opts out of any default backend.
-LOCALMCP_CONFIG     ?= $(shell pwd)/configs/default-localmcp.json
-LOCALMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
+ZELOSMCP_CONFIG     ?= $(shell pwd)/configs/default-zelosmcp.json
+ZELOSMCP_VOLUMES_FILE ?= $(shell pwd)/configs/default-volumes.conf
 
 # Host paths bind-mounted in.
 KUBERNETES_CONFIG_FILE ?= $(HOME)/.kube/config
 DOCKER_SOCK_FILE       ?= /var/run/docker.sock
 
 # Cursor `.mdc` rule file: where it lands and what access mode it carries.
-# Default: per-project. Set to $(HOME)/.cursor/rules/localmcp.mdc for global.
-LOCALMCP_RULE_FILE   ?= .cursor/rules/localmcp.mdc
-LOCALMCP_RULE_ACCESS ?= read-write
+# Default: per-project. Set to $(HOME)/.cursor/rules/zelosmcp.mdc for global.
+ZELOSMCP_RULE_FILE   ?= .cursor/rules/zelosmcp.mdc
+ZELOSMCP_RULE_ACCESS ?= read-write
 
 # Auto-chain toggles for `make load`. Set to 0 in .env for fast CI loads.
-# LOCALMCP_WARM_ON_LOAD=1: load → index   (warms pincher's index for current repo)
-# LOCALMCP_RULE_ON_LOAD=1: load → rule    (regenerates Cursor .mdc to match loaded set)
-LOCALMCP_WARM_ON_LOAD ?= 1
-LOCALMCP_RULE_ON_LOAD ?= 1
+# ZELOSMCP_WARM_ON_LOAD=1: load → index   (warms pincher's index for current repo)
+# ZELOSMCP_RULE_ON_LOAD=1: load → rule    (regenerates Cursor .mdc to match loaded set)
+ZELOSMCP_WARM_ON_LOAD ?= 1
+ZELOSMCP_RULE_ON_LOAD ?= 1
 
 # Pincher per-repo `make index` target (advanced — usually auto-derived).
-LOCALMCP_PROJECT_NAME ?= $(PROJECT_NAME)
-LOCALMCP_PROJECT_REL  ?= $(shell python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$(git rev-parse --show-toplevel 2>/dev/null)" "$(USER_DATA_ROOT)" 2>/dev/null || echo "$(LOCALMCP_PROJECT_NAME)")
-LOCALMCP_PROJECT_PATH ?= /user_data_ro/$(LOCALMCP_PROJECT_REL)
+ZELOSMCP_PROJECT_NAME ?= $(PROJECT_NAME)
+ZELOSMCP_PROJECT_REL  ?= $(shell python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$(git rev-parse --show-toplevel 2>/dev/null)" "$(USER_DATA_ROOT)" 2>/dev/null || echo "$(ZELOSMCP_PROJECT_NAME)")
+ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 
 -include .env
 
@@ -103,7 +103,7 @@ HELP_SERVICE := load status tools rule index index-full ui kubeconfig clean-kube
 HELP_DEV     := init-env setup build rebuild cert logs shell vars
 
 help: ## Print every public verb grouped by section
-	@printf '\nLocalMCP — Docker container lifecycle for the MCP proxy + aggregator.\n\n'
+	@printf '\nzelosMCP — Docker container lifecycle for the MCP proxy + aggregator.\n\n'
 	@printf 'Quickstart:\n'
 	@printf '  make init-env       optional: interactive wizard, writes .env\n'
 	@printf '  make up             build (if missing) + start + load + index + rule\n\n'
@@ -132,17 +132,17 @@ vars: ## Print effective Make variable values
 	$(info USER_DATA_ROOT=$(USER_DATA_ROOT))
 	$(info KUBERNETES_CONFIG_FILE=$(KUBERNETES_CONFIG_FILE))
 	$(info DOCKER_SOCK_FILE=$(DOCKER_SOCK_FILE))
-	$(info LOCALMCP_PORT=$(LOCALMCP_PORT))
-	$(info LOCALMCP_BIND_ADDR=$(LOCALMCP_BIND_ADDR))
-	$(info LOCALMCP_IMAGE_TAG=$(LOCALMCP_IMAGE_TAG))
-	$(info LOCALMCP_CONTAINER=$(LOCALMCP_CONTAINER))
-	$(info LOCALMCP_CONFIG=$(LOCALMCP_CONFIG))
-	$(info LOCALMCP_VOLUMES_FILE=$(LOCALMCP_VOLUMES_FILE))
-	$(info LOCALMCP_RULE_FILE=$(LOCALMCP_RULE_FILE))
-	$(info LOCALMCP_RULE_ACCESS=$(LOCALMCP_RULE_ACCESS))
-	$(info LOCALMCP_PROJECT_PATH=$(LOCALMCP_PROJECT_PATH))
-	$(info LOCALMCP_WARM_ON_LOAD=$(LOCALMCP_WARM_ON_LOAD))
-	$(info LOCALMCP_RULE_ON_LOAD=$(LOCALMCP_RULE_ON_LOAD))
+	$(info ZELOSMCP_PORT=$(ZELOSMCP_PORT))
+	$(info ZELOSMCP_BIND_ADDR=$(ZELOSMCP_BIND_ADDR))
+	$(info ZELOSMCP_IMAGE_TAG=$(ZELOSMCP_IMAGE_TAG))
+	$(info ZELOSMCP_CONTAINER=$(ZELOSMCP_CONTAINER))
+	$(info ZELOSMCP_CONFIG=$(ZELOSMCP_CONFIG))
+	$(info ZELOSMCP_VOLUMES_FILE=$(ZELOSMCP_VOLUMES_FILE))
+	$(info ZELOSMCP_RULE_FILE=$(ZELOSMCP_RULE_FILE))
+	$(info ZELOSMCP_RULE_ACCESS=$(ZELOSMCP_RULE_ACCESS))
+	$(info ZELOSMCP_PROJECT_PATH=$(ZELOSMCP_PROJECT_PATH))
+	$(info ZELOSMCP_WARM_ON_LOAD=$(ZELOSMCP_WARM_ON_LOAD))
+	$(info ZELOSMCP_RULE_ON_LOAD=$(ZELOSMCP_RULE_ON_LOAD))
 
 init-env: ## Interactive wizard: walk through common config and write .env
 	@python3 scripts/init_env.py $(if $(FORCE),--force,)
@@ -181,31 +181,31 @@ setup-buildx: cert build-buildx-image
 
 setup: cert setup-buildx build ## One-shot first-time prep: cert + buildx + image build
 
-build: cert setup-buildx ## Build the LocalMCP image (incremental)
+build: cert setup-buildx ## Build the zelosMCP image (incremental)
 	docker buildx build --load \
 		--builder $(BUILDX_BUILDER_NAME) \
 		--progress plain \
-		--target localmcp \
+		--target zelosmcp \
 		--platform $(PLATFORM) \
 		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
 		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
 		--build-arg PINCHER_REPO=$(PINCHER_REPO) \
 		--build-arg PINCHER_REF=$(PINCHER_REF) \
-		--tag $(LOCALMCP_IMAGE_TAG) \
+		--tag $(ZELOSMCP_IMAGE_TAG) \
 		-f $(DOCKERFILE) \
 		.
 
-rebuild: cert setup-buildx ## Force-rebuild the LocalMCP image (--no-cache)
+rebuild: cert setup-buildx ## Force-rebuild the zelosMCP image (--no-cache)
 	docker buildx build --load --no-cache \
 		--builder $(BUILDX_BUILDER_NAME) \
 		--progress plain \
-		--target localmcp \
+		--target zelosmcp \
 		--platform $(PLATFORM) \
 		--build-arg PROJECT_BASE_IMAGE=$(PROJECT_BASE_IMAGE) \
 		--build-arg CERT=$(DOCKER_TOOLS_PATH)/cert.pem \
 		--build-arg PINCHER_REPO=$(PINCHER_REPO) \
 		--build-arg PINCHER_REF=$(PINCHER_REF) \
-		--tag $(LOCALMCP_IMAGE_TAG) \
+		--tag $(ZELOSMCP_IMAGE_TAG) \
 		-f $(DOCKERFILE) \
 		.
 
@@ -213,13 +213,13 @@ rebuild: cert setup-buildx ## Force-rebuild the LocalMCP image (--no-cache)
 # Kubeconfig (auto-called by `up`; exposed for manual re-add)
 # ============================================================================
 
-# Add a `localmcp` cluster + context to $(KUBERNETES_CONFIG_FILE) so the
+# Add a `zelosmcp` cluster + context to $(KUBERNETES_CONFIG_FILE) so the
 # bridge-networked container can reach the host's K8s API via
 # host.docker.internal:6443. Idempotent — safe to re-run. Skipped (with a
 # warning) when kubectl is missing or the kubeconfig file doesn't exist.
-# Agents pick the localmcp context per call via `kubernetes-mcp-server`'s
+# Agents pick the zelosmcp context per call via `kubernetes-mcp-server`'s
 # multi-cluster `context` arg. See docs/setup-rancher-desktop.md.
-kubeconfig: ## Add `localmcp` cluster + context to $(KUBERNETES_CONFIG_FILE)
+kubeconfig: ## Add `zelosmcp` cluster + context to $(KUBERNETES_CONFIG_FILE)
 	@if ! command -v kubectl >/dev/null 2>&1; then \
 		echo "(skip) kubeconfig: kubectl not found on PATH"; exit 0; \
 	fi; \
@@ -235,40 +235,40 @@ kubeconfig: ## Add `localmcp` cluster + context to $(KUBERNETES_CONFIG_FILE)
 	if [ -z "$$CURRENT_USER" ]; then \
 		echo "(skip) kubeconfig: could not resolve user for context '$$CURRENT_CTX'"; exit 0; \
 	fi; \
-	kubectl config set-cluster localmcp \
+	kubectl config set-cluster zelosmcp \
 		--kubeconfig="$(KUBERNETES_CONFIG_FILE)" \
 		--server=https://host.docker.internal:6443 \
 		--insecure-skip-tls-verify=true >/dev/null; \
-	kubectl config set-context localmcp \
+	kubectl config set-context zelosmcp \
 		--kubeconfig="$(KUBERNETES_CONFIG_FILE)" \
-		--cluster=localmcp \
+		--cluster=zelosmcp \
 		--user="$$CURRENT_USER" >/dev/null; \
-	echo "==> kubeconfig: 'localmcp' context added (cluster=localmcp -> https://host.docker.internal:6443, user=$$CURRENT_USER)"
+	echo "==> kubeconfig: 'zelosmcp' context added (cluster=zelosmcp -> https://host.docker.internal:6443, user=$$CURRENT_USER)"
 
-clean-kubeconfig: ## Remove the `localmcp` context + cluster from $(KUBERNETES_CONFIG_FILE)
-	@kubectl config delete-context localmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
-	@kubectl config delete-cluster localmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
-	@echo "==> kubeconfig: 'localmcp' context + cluster removed (if present)"
+clean-kubeconfig: ## Remove the `zelosmcp` context + cluster from $(KUBERNETES_CONFIG_FILE)
+	@kubectl config delete-context zelosmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
+	@kubectl config delete-cluster zelosmcp --kubeconfig="$(KUBERNETES_CONFIG_FILE)" 2>/dev/null || true
+	@echo "==> kubeconfig: 'zelosmcp' context + cluster removed (if present)"
 
 # ============================================================================
 # Container lifecycle
 # ============================================================================
 
-# Start the LocalMCP container. Volume mounts come from $(LOCALMCP_VOLUMES_FILE).
+# Start the zelosMCP container. Volume mounts come from $(ZELOSMCP_VOLUMES_FILE).
 # Auto-builds the image if it isn't loaded yet. After the container is healthy,
 # chains into `load` (which itself chains `index` and `rule`).
 up: kubeconfig ## Build (if missing) + start container + load default backends
-	@if [ ! -f "$(LOCALMCP_VOLUMES_FILE)" ]; then \
-		echo "ERROR: volumes file not found: $(LOCALMCP_VOLUMES_FILE)"; \
-		echo "       Override with LOCALMCP_VOLUMES_FILE=path/to/your.conf"; \
+	@if [ ! -f "$(ZELOSMCP_VOLUMES_FILE)" ]; then \
+		echo "ERROR: volumes file not found: $(ZELOSMCP_VOLUMES_FILE)"; \
+		echo "       Override with ZELOSMCP_VOLUMES_FILE=path/to/your.conf"; \
 		exit 2; \
 	fi
-	@if ! docker image inspect $(LOCALMCP_IMAGE_TAG) >/dev/null 2>&1; then \
-		echo "==> image $(LOCALMCP_IMAGE_TAG) not found locally; building it"; \
+	@if ! docker image inspect $(ZELOSMCP_IMAGE_TAG) >/dev/null 2>&1; then \
+		echo "==> image $(ZELOSMCP_IMAGE_TAG) not found locally; building it"; \
 		$(MAKE) build; \
 	fi
-	-docker rm -f $(LOCALMCP_CONTAINER) 2>/dev/null
-	@echo "==> mounting volumes from $(LOCALMCP_VOLUMES_FILE)"
+	-docker rm -f $(ZELOSMCP_CONTAINER) 2>/dev/null
+	@echo "==> mounting volumes from $(ZELOSMCP_VOLUMES_FILE)"
 	@export HOME='$(HOME)' \
 	        USER_DATA_ROOT='$(USER_DATA_ROOT)' \
 	        KUBERNETES_CONFIG_FILE='$(KUBERNETES_CONFIG_FILE)' \
@@ -280,101 +280,101 @@ up: kubeconfig ## Build (if missing) + start container + load default backends
 		echo "    -v $$spec" ; \
 		VOLUME_ARGS="$$VOLUME_ARGS -v $$spec" ; \
 	done < <(sed -e 's/[[:space:]]*\#.*$$//' -e '/^[[:space:]]*$$/d' \
-		"$(LOCALMCP_VOLUMES_FILE)") ; \
+		"$(ZELOSMCP_VOLUMES_FILE)") ; \
 	docker run -d \
-		--name $(LOCALMCP_CONTAINER) \
+		--name $(ZELOSMCP_CONTAINER) \
 		--restart unless-stopped \
 		--add-host host.docker.internal:host-gateway \
-		-p $(LOCALMCP_BIND_ADDR):$(LOCALMCP_PORT):$(LOCALMCP_PORT) \
+		-p $(ZELOSMCP_BIND_ADDR):$(ZELOSMCP_PORT):$(ZELOSMCP_PORT) \
 		$$VOLUME_ARGS \
-		$(LOCALMCP_IMAGE_TAG)
+		$(ZELOSMCP_IMAGE_TAG)
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
+		if curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
 			echo ""; \
-			echo "localmcp is up on http://localhost:$(LOCALMCP_PORT)"; \
+			echo "zelosmcp is up on http://localhost:$(ZELOSMCP_PORT)"; \
 			break; \
 		fi; \
 		sleep 1; \
 	done; \
-	if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
-		echo "localmcp did not become ready within 15s; check 'make logs'"; \
+	if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
+		echo "zelosmcp did not become ready within 15s; check 'make logs'"; \
 		exit 1; \
 	fi
 	@$(MAKE) --no-print-directory load
 
-down: ## Stop and remove the LocalMCP container
-	-docker rm -f $(LOCALMCP_CONTAINER)
+down: ## Stop and remove the zelosMCP container
+	-docker rm -f $(ZELOSMCP_CONTAINER)
 
 restart: ## Bounce the container (down + up)
 	$(MAKE) down
 	$(MAKE) up
 
 logs: ## Tail the container logs (-f, last 200 lines)
-	@docker logs -f --tail=200 $(LOCALMCP_CONTAINER)
+	@docker logs -f --tail=200 $(ZELOSMCP_CONTAINER)
 
 shell: ## Open a bash shell inside the running container
-	@if ! docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
-		echo "Container $(LOCALMCP_CONTAINER) is not running."; \
+	@if ! docker ps --filter name=^/$(ZELOSMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
+		echo "Container $(ZELOSMCP_CONTAINER) is not running."; \
 		echo "Start it first with: make up"; \
 		exit 1; \
 	fi
-	docker exec -ti $(LOCALMCP_CONTAINER) bash
+	docker exec -ti $(ZELOSMCP_CONTAINER) bash
 
 status: ## Print container + HTTP probe state
-	@if docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
-		docker ps --filter name=^/$(LOCALMCP_CONTAINER)$$ \
+	@if docker ps --filter name=^/$(ZELOSMCP_CONTAINER)$$ --format '{{.Names}}' | grep -q .; then \
+		docker ps --filter name=^/$(ZELOSMCP_CONTAINER)$$ \
 			--format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'; \
 	else \
-		echo "Container $(LOCALMCP_CONTAINER) is NOT running."; \
+		echo "Container $(ZELOSMCP_CONTAINER) is NOT running."; \
 		exit 1; \
 	fi
 	@printf "ui:          " && curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
-		http://localhost:$(LOCALMCP_PORT)/ || echo "(unreachable)"
-	@printf "api/status:  " && curl -sS http://localhost:$(LOCALMCP_PORT)/api/status \
+		http://localhost:$(ZELOSMCP_PORT)/ || echo "(unreachable)"
+	@printf "api/status:  " && curl -sS http://localhost:$(ZELOSMCP_PORT)/api/status \
 		| python3 -m json.tool 2>/dev/null || echo "(unreachable)"
 	@printf "/mcp:        " && curl -sS -o /dev/null -w "HTTP %{http_code} (503 no backend / 406 backend running on GET / 200 valid POST)\n" \
-		http://localhost:$(LOCALMCP_PORT)/mcp || echo "(unreachable)"
+		http://localhost:$(ZELOSMCP_PORT)/mcp || echo "(unreachable)"
 
 ui: ## Open the web UI in your default browser
-	@open http://localhost:$(LOCALMCP_PORT) 2>/dev/null \
-		|| echo "Open this URL manually:  http://localhost:$(LOCALMCP_PORT)"
+	@open http://localhost:$(ZELOSMCP_PORT) 2>/dev/null \
+		|| echo "Open this URL manually:  http://localhost:$(ZELOSMCP_PORT)"
 
 # ============================================================================
 # Backend lifecycle (load + chained warm-up)
 # ============================================================================
 
-# POST $(LOCALMCP_CONFIG) to /api/start. After backends start, chains:
-#   - `index` (when LOCALMCP_WARM_ON_LOAD=1) — warms pincher's index for the
+# POST $(ZELOSMCP_CONFIG) to /api/start. After backends start, chains:
+#   - `index` (when ZELOSMCP_WARM_ON_LOAD=1) — warms pincher's index for the
 #     current repo so it's hot in seconds. Pincher's WORKDIR auto-scan
 #     covers the rest of /user_data_ro in the background.
-#   - `rule`  (when LOCALMCP_RULE_ON_LOAD=1) — regenerates the Cursor .mdc
-#     file at $(LOCALMCP_RULE_FILE) so it reflects the loaded backend set.
-load: ## POST $(LOCALMCP_CONFIG); chains `index` and `rule`
-	@if [ ! -f "$(LOCALMCP_CONFIG)" ]; then \
-		echo "ERROR: config file not found: $(LOCALMCP_CONFIG)"; \
+#   - `rule`  (when ZELOSMCP_RULE_ON_LOAD=1) — regenerates the Cursor .mdc
+#     file at $(ZELOSMCP_RULE_FILE) so it reflects the loaded backend set.
+load: ## POST $(ZELOSMCP_CONFIG); chains `index` and `rule`
+	@if [ ! -f "$(ZELOSMCP_CONFIG)" ]; then \
+		echo "ERROR: config file not found: $(ZELOSMCP_CONFIG)"; \
 		exit 2; \
 	fi
-	@echo "==> validating $(LOCALMCP_CONFIG)"
-	@python3 -m json.tool "$(LOCALMCP_CONFIG)" > /dev/null
-	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status; then \
-		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+	@echo "==> validating $(ZELOSMCP_CONFIG)"
+	@python3 -m json.tool "$(ZELOSMCP_CONFIG)" > /dev/null
+	@if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status; then \
+		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
 	fi
-	@echo "==> POSTing config to http://localhost:$(LOCALMCP_PORT)/api/start"
+	@echo "==> POSTing config to http://localhost:$(ZELOSMCP_PORT)/api/start"
 	@RESP=$$(curl -sS -X POST -H "Content-Type: application/json" \
-		--data-binary @"$(LOCALMCP_CONFIG)" \
-		http://localhost:$(LOCALMCP_PORT)/api/start); \
+		--data-binary @"$(ZELOSMCP_CONFIG)" \
+		http://localhost:$(ZELOSMCP_PORT)/api/start); \
 	echo "$$RESP" | python3 -m json.tool 2>/dev/null || echo "$$RESP"
 	@echo ""
 	@echo "==> resulting status"
-	@curl -sS http://localhost:$(LOCALMCP_PORT)/api/status | python3 -m json.tool
-	@if [ "$(LOCALMCP_WARM_ON_LOAD)" = "1" ]; then \
+	@curl -sS http://localhost:$(ZELOSMCP_PORT)/api/status | python3 -m json.tool
+	@if [ "$(ZELOSMCP_WARM_ON_LOAD)" = "1" ]; then \
 		echo ""; \
 		$(MAKE) --no-print-directory index || \
 			echo "(index failed; run 'make index' manually once pincher is up)"; \
 	fi
-	@if [ "$(LOCALMCP_RULE_ON_LOAD)" = "1" ]; then \
+	@if [ "$(ZELOSMCP_RULE_ON_LOAD)" = "1" ]; then \
 		echo ""; \
 		$(MAKE) --no-print-directory rule || \
 			echo "(rule generation failed; run 'make rule' manually)"; \
@@ -383,30 +383,30 @@ load: ## POST $(LOCALMCP_CONFIG); chains `index` and `rule`
 # Force re-index of the current repo via pincher's `index` MCP tool. Auto-
 # chained from `load`. xxh3 content-hashing makes re-runs cheap. Override
 # the path explicitly when warming a sibling repo:
-#   make index LOCALMCP_PROJECT_PATH=/user_data_ro/code/myrepo
+#   make index ZELOSMCP_PROJECT_PATH=/user_data_ro/code/myrepo
 index: ## Force pincher index of the current repo (auto-chained from `load`)
-	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
-		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+	@if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
 	fi
-	@if ! docker exec $(LOCALMCP_CONTAINER) test -d "$(LOCALMCP_PROJECT_PATH)" 2>/dev/null; then \
-		echo "ERROR: $(LOCALMCP_PROJECT_PATH) does not exist inside $(LOCALMCP_CONTAINER)."; \
+	@if ! docker exec $(ZELOSMCP_CONTAINER) test -d "$(ZELOSMCP_PROJECT_PATH)" 2>/dev/null; then \
+		echo "ERROR: $(ZELOSMCP_PROJECT_PATH) does not exist inside $(ZELOSMCP_CONTAINER)."; \
 		echo "       Verify your repo is under $(USER_DATA_ROOT) on the host"; \
-		echo "       (LOCALMCP_PROJECT_NAME=$(LOCALMCP_PROJECT_NAME),"; \
-		echo "        LOCALMCP_PROJECT_REL=$(LOCALMCP_PROJECT_REL))."; \
+		echo "       (ZELOSMCP_PROJECT_NAME=$(ZELOSMCP_PROJECT_NAME),"; \
+		echo "        ZELOSMCP_PROJECT_REL=$(ZELOSMCP_PROJECT_REL))."; \
 		exit 1; \
 	fi
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
 		>/dev/null
-	@echo "==> pincher__index path=$(LOCALMCP_PROJECT_PATH) (force re-index of current repo)"
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@echo "==> pincher__index path=$(ZELOSMCP_PROJECT_PATH) (force re-index of current repo)"
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
-		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"$(LOCALMCP_PROJECT_PATH)"}}}' \
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"$(ZELOSMCP_PROJECT_PATH)"}}}' \
 		| python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",{}); c=r.get("content",[]); print(c[0]["text"][:500]) if c else print("(no content)")' 2>/dev/null \
 		|| echo "(call failed — pincher backend may not be running)"
 
@@ -415,18 +415,18 @@ index: ## Force pincher index of the current repo (auto-chained from `load`)
 # full-tree indexing. Use this verb when you need to re-do it now (after a
 # schema bump, after `make nuke`, or to confirm auto-scan completeness).
 index-full: ## Force pincher index of the entire /user_data_ro mount (on demand)
-	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
-		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+	@if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
 	fi
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
 		>/dev/null
 	@echo "==> pincher__index path=/user_data_ro (full $(USER_DATA_ROOT) — may take several minutes)"
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pincher__index","arguments":{"path":"/user_data_ro"}}}' \
@@ -436,17 +436,17 @@ index-full: ## Force pincher index of the entire /user_data_ro mount (on demand)
 # Print every aggregator tool grouped by backend. Same data the /catalog
 # page renders; handy after `make load` to confirm what's available.
 tools: ## Print aggregator tools grouped by backend prefix
-	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
-		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+	@if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
 	fi
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"makefile","version":"1"}}}' \
 		>/dev/null
-	@curl -sS -X POST http://localhost:$(LOCALMCP_PORT)/mcp \
+	@curl -sS -X POST http://localhost:$(ZELOSMCP_PORT)/mcp \
 		-H "Content-Type: application/json" \
 		-H "Accept: application/json, text/event-stream" \
 		-d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -456,18 +456,18 @@ from collections import defaultdict; groups=defaultdict(list); \
 [print(f"\n[{k}] ({len(v)} tools)") or [print(f"  {t}") for t in v] for k,v in sorted(groups.items())]'
 
 # Refresh the Cursor .mdc rule file. Auto-chained from `load`. Use
-# LOCALMCP_RULE_FILE / LOCALMCP_RULE_ACCESS to control where it lands and
+# ZELOSMCP_RULE_FILE / ZELOSMCP_RULE_ACCESS to control where it lands and
 # whether mutating tools are permitted.
-rule: ## Regenerate $(LOCALMCP_RULE_FILE) (auto-chained from `load`)
-	@if ! curl -sS -o /dev/null http://localhost:$(LOCALMCP_PORT)/api/status 2>/dev/null; then \
-		echo "ERROR: localmcp not reachable on port $(LOCALMCP_PORT)."; \
+rule: ## Regenerate $(ZELOSMCP_RULE_FILE) (auto-chained from `load`)
+	@if ! curl -sS -o /dev/null http://localhost:$(ZELOSMCP_PORT)/api/status 2>/dev/null; then \
+		echo "ERROR: zelosmcp not reachable on port $(ZELOSMCP_PORT)."; \
 		echo "       Run 'make up' first."; \
 		exit 1; \
 	fi
-	@mkdir -p "$$(dirname $(LOCALMCP_RULE_FILE))"
-	@curl -fsSL "http://localhost:$(LOCALMCP_PORT)/api/cursor-rule?access=$(LOCALMCP_RULE_ACCESS)" \
-		-o $(LOCALMCP_RULE_FILE)
-	@echo "==> wrote $(LOCALMCP_RULE_FILE) ($(LOCALMCP_RULE_ACCESS) mode, $$(wc -l < $(LOCALMCP_RULE_FILE)) lines)"
+	@mkdir -p "$$(dirname $(ZELOSMCP_RULE_FILE))"
+	@curl -fsSL "http://localhost:$(ZELOSMCP_PORT)/api/cursor-rule?access=$(ZELOSMCP_RULE_ACCESS)" \
+		-o $(ZELOSMCP_RULE_FILE)
+	@echo "==> wrote $(ZELOSMCP_RULE_FILE) ($(ZELOSMCP_RULE_ACCESS) mode, $$(wc -l < $(ZELOSMCP_RULE_FILE)) lines)"
 	@echo "    Restart Cursor (Cmd+Q) for the new rule to load."
 
 # ============================================================================
@@ -477,14 +477,14 @@ rule: ## Regenerate $(LOCALMCP_RULE_FILE) (auto-chained from `load`)
 clean: down ## Tear down container, image, builder, and registry-config helper
 	-docker buildx rm ${BUILDX_BUILDER_NAME}
 	-docker image rm ${BUILDX_IMAGE_NAME}
-	-docker image rm ${LOCALMCP_IMAGE_TAG}
+	-docker image rm ${ZELOSMCP_IMAGE_TAG}
 	-rm -f buildkitd.toml
 
 # `nuke` removes everything `clean` does PLUS persistent volumes (the
 # pincher SQLite index, savings DB, npx/uv caches, buildx state). Pincher
 # has to re-index from scratch on the next `make up`. Use `make clean`
 # when you want to keep caches.
-nuke: clean ## clean + remove every persistent localmcp-* Docker volume
+nuke: clean ## clean + remove every persistent zelosmcp-* Docker volume
 	@echo "==> stopping any leftover buildx containers for $(BUILDX_BUILDER_NAME)"
 	-@cids=$$(docker ps -aq -f name=buildx_buildkit_$(BUILDX_BUILDER_NAME) 2>/dev/null); \
 	if [ -n "$$cids" ]; then \
@@ -492,8 +492,8 @@ nuke: clean ## clean + remove every persistent localmcp-* Docker volume
 	else \
 		echo "    (none)"; \
 	fi
-	@echo "==> removing volumes whose name contains 'localmcp-'"
-	-@volumes=$$(docker volume ls -q -f name=localmcp- 2>/dev/null); \
+	@echo "==> removing volumes whose name contains 'zelosmcp-'"
+	-@volumes=$$(docker volume ls -q -f name=zelosmcp- 2>/dev/null); \
 	if [ -n "$$volumes" ]; then \
 		echo "$$volumes" | sed 's/^/    rm: /'; \
 		echo "$$volumes" | xargs docker volume rm; \

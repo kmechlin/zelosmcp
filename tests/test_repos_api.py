@@ -2,11 +2,11 @@
 HTTP surface.
 
 Coverage:
-  - ``localmcp.repos.discover_repos`` — shallow walk, skip-list, has_rule
+  - ``zelosmcp.repos.discover_repos`` — shallow walk, skip-list, has_rule
     flag, ro/rw prefix swap.
-  - ``localmcp.repos.is_under_scan_root`` / ``rule_target`` —
+  - ``zelosmcp.repos.is_under_scan_root`` / ``rule_target`` —
     path-safety helpers used by the POST handlers.
-  - ``localmcp.app._extract_pincher_indexed_paths`` — pincher__list payload
+  - ``zelosmcp.app._extract_pincher_indexed_paths`` — pincher__list payload
     -> set of indexed repo paths.
   - GET ``/api/repos`` — returns the discovered list, marks pincher_indexed
     when the running pincher backend lists the repo, and gracefully
@@ -16,10 +16,10 @@ Coverage:
   - POST ``/api/repos/index`` — forwards index calls to a stubbed pincher
     MCP and reflects the structured response.
 
-The scanner is configured via ``LOCALMCP_REPO_SCAN_ROOT`` /
-``LOCALMCP_REPO_RW_ROOT`` so we can point it at ``tmp_path`` instead of
+The scanner is configured via ``ZELOSMCP_REPO_SCAN_ROOT`` /
+``ZELOSMCP_REPO_RW_ROOT`` so we can point it at ``tmp_path`` instead of
 the real ``/user_data_ro`` mount. Each test patches
-``localmcp.repos._CACHE`` to start fresh.
+``zelosmcp.repos._CACHE`` to start fresh.
 """
 from __future__ import annotations
 
@@ -30,13 +30,13 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from localmcp import repos as repos_mod
-from localmcp.app import (
+from zelosmcp import repos as repos_mod
+from zelosmcp.app import (
     _extract_pincher_indexed_paths,
     _flatten_call_result,
     create_app,
 )
-from localmcp.manager import ProxyManager
+from zelosmcp.manager import ProxyManager
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -61,13 +61,13 @@ def repo_tree(tmp_path, monkeypatch):
     Layout::
 
         <tmp_path>/repo_a/.git/
-        <tmp_path>/repo_a/.cursor/rules/localmcp.mdc   (has_rule = True)
+        <tmp_path>/repo_a/.cursor/rules/zelosmcp.mdc   (has_rule = True)
         <tmp_path>/repo_b/.git
         <tmp_path>/notes/                              (no .git)
         <tmp_path>/skip/node_modules/inner/.git/       (skipped)
         <tmp_path>/repo_a/vendor/sub/.git/             (nested, not yielded)
 
-    The ``LOCALMCP_REPO_RW_ROOT`` env var is pointed at a sibling so the
+    The ``ZELOSMCP_REPO_RW_ROOT`` env var is pointed at a sibling so the
     prefix-swap logic has a real distinct path to map to.
     """
     ro_root = tmp_path / "user_data_ro"
@@ -77,7 +77,7 @@ def repo_tree(tmp_path, monkeypatch):
 
     (ro_root / "repo_a" / ".git").mkdir(parents=True)
     (ro_root / "repo_a" / ".cursor" / "rules").mkdir(parents=True)
-    (ro_root / "repo_a" / ".cursor" / "rules" / "localmcp.mdc").write_text("# old rule")
+    (ro_root / "repo_a" / ".cursor" / "rules" / "zelosmcp.mdc").write_text("# old rule")
     (ro_root / "repo_a" / "vendor" / "sub" / ".git").mkdir(parents=True)
 
     (ro_root / "repo_b" / ".git").mkdir(parents=True)
@@ -87,9 +87,9 @@ def repo_tree(tmp_path, monkeypatch):
 
     (ro_root / "skip" / "node_modules" / "inner" / ".git").mkdir(parents=True)
 
-    monkeypatch.setenv("LOCALMCP_REPO_SCAN_ROOT", str(ro_root))
-    monkeypatch.setenv("LOCALMCP_REPO_RW_ROOT", str(rw_root))
-    monkeypatch.setenv("LOCALMCP_REPO_SCAN_DEPTH", "4")
+    monkeypatch.setenv("ZELOSMCP_REPO_SCAN_ROOT", str(ro_root))
+    monkeypatch.setenv("ZELOSMCP_REPO_RW_ROOT", str(rw_root))
+    monkeypatch.setenv("ZELOSMCP_REPO_SCAN_DEPTH", "4")
     return SimpleNamespace(ro=ro_root, rw=rw_root)
 
 
@@ -143,9 +143,9 @@ class TestDiscoverRepos:
 
     def test_missing_root_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setenv(
-            "LOCALMCP_REPO_SCAN_ROOT", str(tmp_path / "does-not-exist")
+            "ZELOSMCP_REPO_SCAN_ROOT", str(tmp_path / "does-not-exist")
         )
-        monkeypatch.setenv("LOCALMCP_REPO_RW_ROOT", str(tmp_path / "rw"))
+        monkeypatch.setenv("ZELOSMCP_REPO_RW_ROOT", str(tmp_path / "rw"))
         out = repos_mod.discover_repos(refresh=True)
         assert out == []
 
@@ -174,8 +174,8 @@ class TestDiscoverRepos:
         deep = ro_root / "workspace" / "clients" / "acme" / "deep_repo"
         (deep / ".git").mkdir(parents=True)
         rw_root.mkdir()
-        monkeypatch.setenv("LOCALMCP_REPO_SCAN_ROOT", str(ro_root))
-        monkeypatch.setenv("LOCALMCP_REPO_RW_ROOT", str(rw_root))
+        monkeypatch.setenv("ZELOSMCP_REPO_SCAN_ROOT", str(ro_root))
+        monkeypatch.setenv("ZELOSMCP_REPO_RW_ROOT", str(rw_root))
         out = repos_mod.discover_repos(refresh=True)
         names = [r.name for r in out]
         assert "deep_repo" in names
@@ -197,7 +197,7 @@ class TestPathHelpers:
     def test_is_under_scan_root_rejects_lookalike_prefix(
         self, tmp_path, monkeypatch
     ):
-        monkeypatch.setenv("LOCALMCP_REPO_SCAN_ROOT", str(tmp_path / "ro"))
+        monkeypatch.setenv("ZELOSMCP_REPO_SCAN_ROOT", str(tmp_path / "ro"))
         # /tmp/ro_evil/... must NOT match /tmp/ro
         assert not repos_mod.is_under_scan_root(
             str(tmp_path / "ro_evil" / "x")
@@ -207,7 +207,7 @@ class TestPathHelpers:
         repo_ro = str(repo_tree.ro / "repo_a")
         target = repos_mod.rule_target(repo_ro, "cursor-mdc")
         assert target == str(
-            repo_tree.rw / "repo_a" / ".cursor" / "rules" / "localmcp.mdc"
+            repo_tree.rw / "repo_a" / ".cursor" / "rules" / "zelosmcp.mdc"
         )
 
     def test_rule_target_copilot(self, repo_tree):
@@ -277,7 +277,7 @@ class TestPincherListExtraction:
 
 def _make_app(repo_tree):
     """Build a ProxyManager+app pair with mandatory-merge disabled (so
-    nothing reaches out to /app/configs/mandatory-localmcp.json from inside
+    nothing reaches out to /app/configs/mandatory-zelosmcp.json from inside
     the test sandbox) and stub out the filesystem and pincher backends."""
     manager = ProxyManager(mandatory_config_path="")
     app = create_app(manager)
@@ -387,7 +387,7 @@ class TestApiRepoWriteRule:
         data = r.json()
         assert data["ok"] is True
         expected_target = str(
-            repo_tree.rw / "repo_a" / ".cursor" / "rules" / "localmcp.mdc"
+            repo_tree.rw / "repo_a" / ".cursor" / "rules" / "zelosmcp.mdc"
         )
         assert data["path"] == expected_target
         assert data["bytes"] > 0
@@ -399,7 +399,7 @@ class TestApiRepoWriteRule:
         write_args = calls[1].args[1]
         assert create_args["path"] == os.path.dirname(expected_target)
         assert write_args["path"] == expected_target
-        assert "LocalMCP" in write_args["content"]  # rule body sanity check
+        assert "zelosMCP" in write_args["content"]  # rule body sanity check
 
     @pytest.mark.asyncio
     async def test_copilot_format_writes_to_github_dir(self, repo_tree):

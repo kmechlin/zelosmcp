@@ -1,12 +1,12 @@
 # Rancher Desktop setup
 
-LocalMCP's container needs a Docker daemon to run on, and its `docker` MCP backend needs the Docker socket bind-mounted in. On macOS, [Rancher Desktop](https://rancherdesktop.io/) is the recommended way to provide both. This page covers install, the engine + admin-mode toggles, where the socket lives, and how it interacts with LocalMCP's `DOCKER_SOCK_FILE` Make variable.
+zelosMCP's container needs a Docker daemon to run on, and its `docker` MCP backend needs the Docker socket bind-mounted in. On macOS, [Rancher Desktop](https://rancherdesktop.io/) is the recommended way to provide both. This page covers install, the engine + admin-mode toggles, where the socket lives, and how it interacts with zelosMCP's `DOCKER_SOCK_FILE` Make variable.
 
 ## Why Rancher Desktop
 
-You need three things on macOS for LocalMCP to work end-to-end:
+You need three things on macOS for zelosMCP to work end-to-end:
 
-1. A Docker daemon to run the LocalMCP container itself.
+1. A Docker daemon to run the zelosMCP container itself.
 2. A Kubernetes cluster (k3s) for the `kubernetes` MCP backend to point `kubernetes-mcp-server` at.
 3. A Unix socket that the `mcp-server-docker` MCP backend can bind-mount in to query containers.
 
@@ -41,7 +41,7 @@ Rancher Desktop → **Preferences** → **Application** → **Administrative Acc
 
 This setting controls whether Rancher Desktop binds the daemon to `/var/run/docker.sock` (the canonical macOS path) or only to `~/.rd/docker.sock`.
 
-| Admin access | Socket paths exposed | LocalMCP override needed |
+| Admin access | Socket paths exposed | zelosMCP override needed |
 |---|---|---|
 | **Enabled** | `/var/run/docker.sock` (symlink → `~/.rd/docker.sock`) and `~/.rd/docker.sock` | None — `DOCKER_SOCK_FILE=/var/run/docker.sock` (the default) just works |
 | **Disabled** *(default since Rancher Desktop v1.9)* | `~/.rd/docker.sock` only | Override `DOCKER_SOCK_FILE=$HOME/.rd/docker.sock` AND switch docker context (see below) |
@@ -67,17 +67,17 @@ rancher-desktop   Rancher Desktop moby context              unix:///Users/<you>/
 
 If the active context is `default` and `/var/run/docker.sock` is a symlink to `~/.rd/docker.sock` (admin-access mode), you're set up for the canonical path.
 
-If you have **both** Docker Desktop and Rancher Desktop installed and admin access disabled on Rancher Desktop, the `default` context's `/var/run/docker.sock` likely points at Docker Desktop. Switch contexts to make Rancher Desktop the daemon LocalMCP uses:
+If you have **both** Docker Desktop and Rancher Desktop installed and admin access disabled on Rancher Desktop, the `default` context's `/var/run/docker.sock` likely points at Docker Desktop. Switch contexts to make Rancher Desktop the daemon zelosMCP uses:
 
 ```bash
 docker context use rancher-desktop
 ```
 
-## How LocalMCP picks up your daemon
+## How zelosMCP picks up your daemon
 
-The LocalMCP container is started by `make up`. It uses two daemons in different ways:
+The zelosMCP container is started by `make up`. It uses two daemons in different ways:
 
-1. **`docker run` itself** uses whichever daemon your **active `docker context`** points at. That's the daemon the LocalMCP container runs on.
+1. **`docker run` itself** uses whichever daemon your **active `docker context`** points at. That's the daemon the zelosMCP container runs on.
 2. **The `docker` MCP backend inside the container** talks to the daemon via the Unix socket bind-mounted into the container. The host path of that socket is configurable via the `DOCKER_SOCK_FILE` Make variable; container path is always `/var/run/docker.sock`.
 
 For a coherent setup the two should point at the same daemon. The default values do this for the common Docker-Desktop case:
@@ -106,7 +106,7 @@ See [makefile.md](makefile.md) for the full volume-mount config including `DOCKE
 
 ## Kubeconfig
 
-Rancher Desktop writes its kubeconfig to `~/.kube/config` (merging into any existing one), with `server: https://127.0.0.1:6443`. The `kubernetes` MCP backend in `default-localmcp.json` reads it via the `KUBERNETES_CONFIG_FILE` mount in [configs/default-volumes.conf](../configs/default-volumes.conf):
+Rancher Desktop writes its kubeconfig to `~/.kube/config` (merging into any existing one), with `server: https://127.0.0.1:6443`. The `kubernetes` MCP backend in `default-zelosmcp.json` reads it via the `KUBERNETES_CONFIG_FILE` mount in [configs/default-volumes.conf](../configs/default-volumes.conf):
 
 ```
 $KUBERNETES_CONFIG_FILE:/root/.kube/config:ro
@@ -118,27 +118,27 @@ Override the host path if your kubeconfig lives elsewhere:
 make up KUBERNETES_CONFIG_FILE=/path/to/your/kubeconfig
 ```
 
-### Bridge networking + the `localmcp` context
+### Bridge networking + the `zelosmcp` context
 
-LocalMCP runs in bridge networking (only `:8000` is published to the host — see [reverse-proxy.md](reverse-proxy.md)). That means `127.0.0.1` inside the container is the container itself, not your Mac. A kubeconfig pointing at `https://127.0.0.1:6443` is unreachable from inside the container as written.
+zelosMCP runs in bridge networking (only `:8000` is published to the host — see [reverse-proxy.md](reverse-proxy.md)). That means `127.0.0.1` inside the container is the container itself, not your Mac. A kubeconfig pointing at `https://127.0.0.1:6443` is unreachable from inside the container as written.
 
 Rather than rewriting your kubeconfig destructively, `make up` runs **`make kubeconfig`** as a prerequisite. It uses host-side `kubectl` to add a single new cluster + context to your existing kubeconfig:
 
 ```bash
-kubectl config set-cluster localmcp \
+kubectl config set-cluster zelosmcp \
   --server=https://host.docker.internal:6443 \
   --insecure-skip-tls-verify=true
-kubectl config set-context localmcp \
-  --cluster=localmcp \
+kubectl config set-context zelosmcp \
+  --cluster=zelosmcp \
   --user=<the-user-from-your-current-context>
 ```
 
 These commands are idempotent — running `make up` repeatedly is safe and does nothing on the second run. Your existing contexts and `current-context` are untouched.
 
-`kubernetes-mcp-server` is multi-cluster aware by default, so every tool call accepts an optional `context` argument. The agent passes `context: "localmcp"` to talk to your local cluster:
+`kubernetes-mcp-server` is multi-cluster aware by default, so every tool call accepts an optional `context` argument. The agent passes `context: "zelosmcp"` to talk to your local cluster:
 
 ```jsonc
-{ "name": "kubernetes__pods_list", "arguments": { "context": "localmcp" } }
+{ "name": "kubernetes__pods_list", "arguments": { "context": "zelosmcp" } }
 ```
 
 For remote clusters (EKS, AKS, GKE, …), pass that cluster's context name instead — they keep working through your kubeconfig as before.
@@ -148,14 +148,14 @@ For remote clusters (EKS, AKS, GKE, …), pass that cluster's context name inste
 Before pointing the agent at it:
 
 ```bash
-kubectl --context localmcp get nodes
+kubectl --context zelosmcp get nodes
 ```
 
 If that succeeds, the bridge-networked container will get the same result.
 
 #### TLS verification
 
-The auto-added `localmcp` cluster sets `insecure-skip-tls-verify: true` because Rancher Desktop / Docker Desktop's K8s API certificates have `127.0.0.1` and `localhost` in their SAN list, but **not** `host.docker.internal`. Strict TLS against the new server name would fail.
+The auto-added `zelosmcp` cluster sets `insecure-skip-tls-verify: true` because Rancher Desktop / Docker Desktop's K8s API certificates have `127.0.0.1` and `localhost` in their SAN list, but **not** `host.docker.internal`. Strict TLS against the new server name would fail.
 
 For local development this is fine — the cluster is loopback-only and reachable only via the host's docker bridge. If you want strict verification, the manual override is:
 
@@ -165,8 +165,8 @@ kubectl config view --raw \
   -o jsonpath="{.clusters[?(@.name==\"rancher-desktop\")].cluster.certificate-authority-data}" \
   | base64 -d > /tmp/rancher-ca.crt
 
-# 2. Re-create the localmcp cluster with proper CA + tls-server-name override.
-kubectl config set-cluster localmcp \
+# 2. Re-create the zelosmcp cluster with proper CA + tls-server-name override.
+kubectl config set-cluster zelosmcp \
   --server=https://host.docker.internal:6443 \
   --certificate-authority=/tmp/rancher-ca.crt \
   --embed-certs=true \
@@ -177,7 +177,7 @@ The `tls-server-name=127.0.0.1` makes the TLS handshake validate against `127.0.
 
 #### Cleanup
 
-If you want to remove the auto-added entries (e.g. before uninstalling LocalMCP):
+If you want to remove the auto-added entries (e.g. before uninstalling zelosMCP):
 
 ```bash
 make clean-kubeconfig
@@ -192,5 +192,5 @@ make clean-kubeconfig
 
 ## See also
 
-- [makefile.md](makefile.md) — `LOCALMCP_VOLUMES_FILE` format, all volume-mount Make variables
+- [makefile.md](makefile.md) — `ZELOSMCP_VOLUMES_FILE` format, all volume-mount Make variables
 - [default-mcps.md](default-mcps.md) — what each backend does and which mounts it needs
