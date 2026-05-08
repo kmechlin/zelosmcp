@@ -1,13 +1,13 @@
 # Configuration
 
-LocalMCP accepts the same `mcpServers` JSON shape Cursor uses in its own `mcp.json`. No extra fields are required. This page covers the schema, the three transport flavors, reserved names, and the `/api/start` lifecycle.
+zelosMCP accepts the same `mcpServers` JSON shape Cursor uses in its own `mcp.json`. No extra fields are required. This page covers the schema, the three transport flavors, reserved names, and the `/api/start` lifecycle.
 
 ## Where the config goes
 
-The config is **POST**-ed to `/api/start` — it's not a config file LocalMCP reads from disk on startup. There are two common ways to send it:
+The config is **POST**-ed to `/api/start` — it's not a config file zelosMCP reads from disk on startup. There are two common ways to send it:
 
 1. **Web UI** (`http://localhost:8000`) — paste into the Configuration textarea, click START.
-2. **`make load`** — POSTs the file at `$(LOCALMCP_CONFIG)` (default: [`configs/default-localmcp.json`](../configs/default-localmcp.json)).
+2. **`make load`** — POSTs the file at `$(ZELOSMCP_CONFIG)` (default: [`configs/default-zelosmcp.json`](../configs/default-zelosmcp.json)).
 3. **`curl`**:
 
    ```bash
@@ -16,7 +16,7 @@ The config is **POST**-ed to `/api/start` — it's not a config file LocalMCP re
      --data-binary @path/to/your-config.json
    ```
 
-The state lives in memory. Restart the LocalMCP container and you'll need to re-POST.
+The state lives in memory. Restart the zelosMCP container and you'll need to re-POST.
 
 ## Schema
 
@@ -52,7 +52,7 @@ For an MCP server you spawn as a subprocess. Discriminated by the **presence of 
 
 | Field | Required | Type | Notes |
 |---|---|---|---|
-| `command` | yes | string | Executable. Searched on `PATH` inside the LocalMCP container. |
+| `command` | yes | string | Executable. Searched on `PATH` inside the zelosMCP container. |
 | `args` | no | array of strings | Arguments. Default `[]`. |
 | `env` | no | object of strings | Extra env vars merged into the subprocess's environment. |
 | `cwd` | no | string | Working directory for the subprocess. |
@@ -79,7 +79,7 @@ For a remote MCP server speaking Server-Sent-Events. Discriminated by `type`.
 
 ### Streamable HTTP (`type: "streamable-http"`)
 
-For a remote MCP server speaking the streamable-HTTP transport (the same transport LocalMCP itself uses).
+For a remote MCP server speaking the streamable-HTTP transport (the same transport zelosMCP itself uses).
 
 ```json
 {
@@ -99,7 +99,7 @@ For a remote MCP server speaking the streamable-HTTP transport (the same transpo
 
 ### Reverse-proxy (`reverseProxy`)
 
-Any backend (stdio or remote) can declare an optional `reverseProxy` block alongside the transport fields above. When set, LocalMCP forwards HTTP requests on the configured `mount` path to the backend's HTTP sidecar — letting you expose a dashboard or REST API through LocalMCP's port without leaking the backend's own port.
+Any backend (stdio or remote) can declare an optional `reverseProxy` block alongside the transport fields above. When set, zelosMCP forwards HTTP requests on the configured `mount` path to the backend's HTTP sidecar — letting you expose a dashboard or REST API through zelosMCP's port without leaking the backend's own port.
 
 ```json
 "pincher": {
@@ -114,7 +114,7 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
 
 | Field | Required | Type | Notes |
 |---|---|---|---|
-| `mount` | yes | string | URL prefix on LocalMCP, e.g. `/pincher`. Must start with `/`, no trailing `/`. Cannot collide with reserved mounts. |
+| `mount` | yes | string | URL prefix on zelosMCP, e.g. `/pincher`. Must start with `/`, no trailing `/`. Cannot collide with reserved mounts. |
 | `upstream` | yes | string | Backend HTTP sidecar URL. Recommend a loopback host. |
 | `stripPrefix` | no | bool | Strip `mount` from the path before forwarding. Default `false`. |
 | `headers` | no | object of strings | Extra request headers. Override auto-injected `X-Forwarded-*`. |
@@ -124,7 +124,7 @@ See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the c
 
 ### Compression (`compress`)
 
-Every backend is compressed by default — LocalMCP automatically swaps each backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair on the aggregator at `/mcp` (`<backend>__get_tool_schema` and `<backend>__invoke_tool`), slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`. Add a `compress` block only when you want to override the default level/scope, or set `"compress": null` to opt the backend out entirely.
+Every backend is compressed by default — zelosMCP automatically swaps each backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair on the aggregator at `/mcp` (`<backend>__get_tool_schema` and `<backend>__invoke_tool`), slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`. Add a `compress` block only when you want to override the default level/scope, or set `"compress": null` to opt the backend out entirely.
 
 ```json
 "kubernetes": {
@@ -154,7 +154,7 @@ See [compression.md](compression.md) for the full reference, level comparison, a
 
 ## Reserved names
 
-A handful of `<name>` values collide with built-in HTTP routes; LocalMCP rejects them with a `ConfigError`:
+A handful of `<name>` values collide with built-in HTTP routes; zelosMCP rejects them with a `ConfigError`:
 
 | Name | Why |
 |---|---|
@@ -162,9 +162,9 @@ A handful of `<name>` values collide with built-in HTTP routes; LocalMCP rejects
 | `api` | Control plane at `/api/*`. |
 | `docs`, `redoc`, `openapi.json`, `openapi` | API docs at `/docs`, `/redoc`, `/openapi.json`. |
 | `static` | Reserved for future static-asset routes. |
-| `localmcp` | The always-on built-in MCP at `/localmcp/mcp`. |
+| `zelosmcp` | The always-on built-in MCP at `/zelosmcp/mcp`. |
 
-Names are matched case-insensitively. Pick a different name (e.g. `local-tools` instead of `localmcp`) if you really need that string.
+Names are matched case-insensitively. Pick a different name (e.g. `local-tools` instead of `zelosmcp`) if you really need that string.
 
 ## Deprecated `primaryMCP`
 
@@ -182,7 +182,7 @@ sequenceDiagram
   participant agg as Aggregator
   client->>api: { mcpServers: {...} }
   api->>mgr: stop_all()
-  Note over mgr: Stops user backends + aggregator.<br/>Built-in `localmcp` survives.
+  Note over mgr: Stops user backends + aggregator.<br/>Built-in `zelosmcp` survives.
   api->>mgr: parse_config()
   alt validation fails
     mgr-->>api: ConfigError
@@ -207,7 +207,7 @@ Beyond bulk replace via `/api/start`, individual backends can be toggled:
 | `POST /api/servers/<name>/stop` | Stop a single backend without affecting the others. |
 | `GET /api/servers/<name>` | One-server slice of `/api/status`. |
 
-These all refuse `<name> == "localmcp"` (the built-in is always-on and not toggleable).
+These all refuse `<name> == "zelosmcp"` (the built-in is always-on and not toggleable).
 
 ## Common errors
 
@@ -228,4 +228,4 @@ All of these come back as 400-status JSON: `{"ok": false, "error": "<message>"}`
 - [reverse-proxy.md](reverse-proxy.md) — full reference for the optional `reverseProxy` block.
 - [compression.md](compression.md) — full reference for the optional `compress` block.
 - [http-api.md](http-api.md) — full HTTP API reference for `/api/start` and friends.
-- [makefile.md](makefile.md) — `make load LOCALMCP_CONFIG=...` to push your own config.
+- [makefile.md](makefile.md) — `make load ZELOSMCP_CONFIG=...` to push your own config.

@@ -4,7 +4,7 @@ HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LOCALMCP</title>
+<title>ZELOSMCP</title>
 <style>
   :root {
     --black: #111111;
@@ -1126,7 +1126,7 @@ HTML_TEMPLATE = """\
 <!-- Top bar -->
 <div class="app-topbar">
   <div class="header">
-    <span class="wordmark">LOCALMCP</span>
+    <span class="wordmark">ZELOSMCP</span>
     <span class="header-spacer"></span>
     <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
@@ -1200,7 +1200,7 @@ HTML_TEMPLATE = """\
             <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
             <pre id="mcp-snippet-aggregate">{
   "mcpServers": {
-    "localmcp-aggregate": {
+    "zelosmcp-aggregate": {
       "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
@@ -1223,7 +1223,7 @@ HTML_TEMPLATE = """\
             <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
             <pre id="mcp-snippet">{
   "mcpServers": {
-    "localmcp-aggregate": {
+    "zelosmcp-aggregate": {
       "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
@@ -1260,7 +1260,7 @@ HTML_TEMPLATE = """\
             includes a curated playbook for the mandatory backends; <em>Available</em> emits a neutral catalog with no prioritization.
             <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
             inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
-            to make changes through the MCPs. Save the body below as <code>.cursor/rules/localmcp.mdc</code> in any
+            to make changes through the MCPs. Save the body below as <code>.cursor/rules/zelosmcp.mdc</code> in any
             workspace (or <code>~/.cursor/rules/</code> for global).
           </p>
           <div class="snippet">
@@ -1351,7 +1351,7 @@ HTML_TEMPLATE = """\
       <div class="section">
         <div class="section-label">Pincher session stats</div>
         <div class="card">
-          <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>LOCALMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
+          <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>ZELOSMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
         </div>
       </div>
     </section>
@@ -1439,13 +1439,13 @@ HTML_TEMPLATE = """\
         <div class="card">
           <p class="repo-paths" id="repo-details-paths">&mdash;</p>
           <p class="intro" style="margin: 0 0 12px 0;">
-            Generate a Cursor rule and write it to <code>.cursor/rules/localmcp.mdc</code> in the selected repo, or register the repo with pincher so its tools are queryable. The rule body is identical to the one produced by <strong>Cursor rule (.mdc)</strong> in the left nav &mdash; same generator, same knobs.
+            Generate a Cursor rule and write it to <code>.cursor/rules/zelosmcp.mdc</code> in the selected repo, or register the repo with pincher so its tools are queryable. The rule body is identical to the one produced by <strong>Cursor rule (.mdc)</strong> in the left nav &mdash; same generator, same knobs.
           </p>
 
           <div class="rule-write-form">
             <label for="repo-rule-format">Format</label>
             <select id="repo-rule-format">
-              <option value="cursor-mdc" selected>cursor-mdc (.cursor/rules/localmcp.mdc)</option>
+              <option value="cursor-mdc" selected>cursor-mdc (.cursor/rules/zelosmcp.mdc)</option>
               <option value="copilot-instructions">copilot-instructions (.github/copilot-instructions.md)</option>
             </select>
             <label for="repo-rule-tool-use">Tool use</label>
@@ -1639,10 +1639,10 @@ HTML_TEMPLATE = """\
   }
 
   // Cursor's `mcpServers` keys are display labels, not routing identifiers.
-  // Prefix them with `localmcp-` so it's obvious in Cursor's UI which entries
+  // Prefix them with `zelosmcp-` so it's obvious in Cursor's UI which entries
   // come from this proxy and so they don't collide with backend names a user
   // already has configured directly in their `mcp.json`.
-  const SNIPPET_PREFIX = "localmcp-";
+  const SNIPPET_PREFIX = "zelosmcp-";
 
   function buildSnippet(status) {
     const entries = {};
@@ -1671,7 +1671,7 @@ HTML_TEMPLATE = """\
   }
 
   // The aggregated snippet — single Cursor entry pointing at /mcp. The
-  // builtin's tools (`localmcp__*`) are always available here regardless
+  // builtin's tools (`zelosmcp__*`) are always available here regardless
   // of whether any user backend is running, so this snippet is stable.
   function buildAggregateSnippet(status) {
     return JSON.stringify({
@@ -2265,8 +2265,8 @@ HTML_TEMPLATE = """\
   let currentDetailsRepo = null;
   let reposLoadInflight = null;
   let reposFilterDebounce = null;
-  const REPOS_LS_EXPANDED = "localmcp:repos:expanded";
-  const REPOS_LS_FILTER = "localmcp:repos:filter";
+  const REPOS_LS_EXPANDED = "zelosmcp:repos:expanded";
+  const REPOS_LS_FILTER = "zelosmcp:repos:filter";
 
   function setReposCollapsed(collapsed, persist = true) {
     const collapse = document.getElementById("repos-collapse");
@@ -2395,8 +2395,8 @@ HTML_TEMPLATE = """\
       rulePill.className = "repo-pill" + (repo.has_rule ? " on" : "");
       rulePill.textContent = "rule";
       rulePill.title = repo.has_rule
-        ? "localmcp.mdc already exists"
-        : "no localmcp.mdc yet";
+        ? "zelosmcp.mdc already exists"
+        : "no zelosmcp.mdc yet";
       row.appendChild(rulePill);
 
       const piPill = document.createElement("span");
@@ -2817,8 +2817,8 @@ HTML_TEMPLATE = """\
 
   // ── Pincher dashboard iframe ────────────────────────────────────────
   // The dashboard is served by pincher itself on a loopback HTTP sidecar
-  // and reverse-proxied by LocalMCP under reverseProxy.mount (defaults
-  // to /pincher per configs/mandatory-localmcp.json). Read the live
+  // and reverse-proxied by zelosMCP under reverseProxy.mount (defaults
+  // to /pincher per configs/mandatory-zelosmcp.json). Read the live
   // mount from /api/status so renaming the backend or moving the mount
   // is handled transparently.
   function pincherDashboardUrl(status) {
@@ -3060,7 +3060,7 @@ CATALOG_HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LOCALMCP — Tool catalog</title>
+<title>ZELOSMCP — Tool catalog</title>
 <style>
   :root {
     --black: #111111;
@@ -3244,7 +3244,7 @@ CATALOG_HTML_TEMPLATE = """\
 <body>
 <div class="container">
   <div class="header">
-    <span class="wordmark">LOCALMCP</span>
+    <span class="wordmark">ZELOSMCP</span>
     <span class="header-spacer"></span>
     <a class="docs-link" href="/" target="_blank" rel="noopener">Web UI</a>
     <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>

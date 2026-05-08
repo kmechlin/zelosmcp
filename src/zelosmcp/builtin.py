@@ -1,9 +1,9 @@
-"""Always-on, in-process MCP server exposed at ``/localmcp/mcp`` and aggregated
-into ``/mcp`` as ``localmcp__*``.
+"""Always-on, in-process MCP server exposed at ``/zelosmcp/mcp`` and aggregated
+into ``/mcp`` as ``zelosmcp__*``.
 
-The builtin is structurally a :class:`localmcp.proxy.ProxyState` look-alike:
-it carries the same attributes the dispatcher in :mod:`localmcp.app` and the
-aggregator in :mod:`localmcp.aggregator` already iterate over (``name``,
+The builtin is structurally a :class:`zelosmcp.proxy.ProxyState` look-alike:
+it carries the same attributes the dispatcher in :mod:`zelosmcp.app` and the
+aggregator in :mod:`zelosmcp.aggregator` already iterate over (``name``,
 ``running``, ``error``, ``session_manager``, ``client_session``,
 ``backend_info``, ``subscribe_logs``/``unsubscribe_logs``, ``start``/``stop``).
 That keeps both endpoints zero-coupling to the builtin and lets a single
@@ -25,7 +25,7 @@ Tool surface:
   - ``generate_cursor_mcp_json`` — returns the same ``mcp.json`` snippet the
     UI shows, with optional per-backend variants.
   - ``start_server`` / ``stop_server`` — wrap ``ProxyManager.start_one`` /
-    ``stop_one``; refuse ``name == "localmcp"`` (would deadlock).
+    ``stop_one``; refuse ``name == "zelosmcp"`` (would deadlock).
   - ``reload_config`` — wrap ``ProxyManager.start_all`` with the same JSON
     shape ``/api/start`` accepts.
 """
@@ -54,11 +54,11 @@ from mcp.types import (
 )
 
 if TYPE_CHECKING:
-    from localmcp.manager import ProxyManager
+    from zelosmcp.manager import ProxyManager
 
-logger = logging.getLogger("localmcp")
+logger = logging.getLogger("zelosmcp")
 
-NAME = "localmcp"
+NAME = "zelosmcp"
 
 
 # ── Tool schemas ────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ _TOOLS: list[Tool] = [
         name="list_loaded_servers",
         description=(
             "Compact view of every backend currently registered with "
-            "localmcp: name, transport, running state, error, and "
+            "zelosmcp: name, transport, running state, error, and "
             "spec/backend-info."
         ),
         inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
@@ -196,7 +196,7 @@ _TOOLS: list[Tool] = [
         name="start_server",
         description=(
             "Start a single (already configured) backend by name. Refuses "
-            "`localmcp` (the builtin can't be stopped/started)."
+            "`zelosmcp` (the builtin can't be stopped/started)."
         ),
         inputSchema={
             "type": "object",
@@ -208,7 +208,7 @@ _TOOLS: list[Tool] = [
     Tool(
         name="stop_server",
         description=(
-            "Stop a single backend by name. Refuses `localmcp` (the "
+            "Stop a single backend by name. Refuses `zelosmcp` (the "
             "builtin can't be stopped)."
         ),
         inputSchema={
@@ -232,7 +232,7 @@ _TOOLS: list[Tool] = [
                     "description": (
                         "Cursor `mcp.json`-shape object with an "
                         "`mcpServers` map. Reserved names "
-                        "(`localmcp`, `mcp`, `api`, ...) are rejected."
+                        "(`zelosmcp`, `mcp`, `api`, ...) are rejected."
                     ),
                 },
             },
@@ -390,14 +390,14 @@ def _frontmatter(*, style: str, globs: str | None, access: str) -> str:
             globs = "**/*"
         return (
             "---\n"
-            f"description: LocalMCP backend tool catalog{desc_suffix}\n"
+            f"description: zelosMCP backend tool catalog{desc_suffix}\n"
             f"globs: {globs}\n"
             "alwaysApply: false\n"
             "---\n"
         )
     return (
         "---\n"
-        f"description: LocalMCP backend tool catalog{desc_suffix}\n"
+        f"description: zelosMCP backend tool catalog{desc_suffix}\n"
         "alwaysApply: true\n"
         "---\n"
     )
@@ -409,7 +409,7 @@ _DIRECTIVE_READ_ONLY = (
     "`[?]`. They modify backend state, and this rule is currently "
     "configured for safe inspection only. If a task requires mutation, "
     "ask the user to regenerate the rule with `access=read-write` "
-    "(e.g. via the Cursor rule panel in the LocalMCP web UI at "
+    "(e.g. via the Cursor rule panel in the zelosMCP web UI at "
     "`http://localhost:8000`).\n"
 )
 
@@ -462,7 +462,7 @@ _SELF_CHECK_GATE = (
 # ── Mandatory backend playbook ──────────────────────────────────────────
 #
 # When ``tool_use=priority`` and a backend listed in
-# ``configs/mandatory-localmcp.json`` is present in the catalog, the
+# ``configs/mandatory-zelosmcp.json`` is present in the catalog, the
 # generator emits a curated instruction block with the canonical
 # workflow for that backend. Content is filtered by ``access`` so a
 # read-only rule only mentions inspection tools and explicitly forbids
@@ -489,7 +489,7 @@ _PINCHER_PLAYBOOK_RO = (
     "- `Grep` to find a symbol by name (use `pincher__search`).\n"
     "- `Read` on 3+ files in sequence to understand one function "
     "(use `pincher__context`).\n"
-    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
     "because <specific reason>.\" Silent violations are not acceptable.\n\n"
     "Pincher indexes the repo into a byte-offset symbol store, a "
     "knowledge graph, and FTS5 full-text search — every retrieval is "
@@ -499,7 +499,7 @@ _PINCHER_PLAYBOOK_RO = (
     "unfamiliar project to get language breakdown, entry points, "
     "hotspot functions, and graph stats. Cheaper than reading files.\n"
     "- **Scope to the active project.** Always pass "
-    "`project=<basename of git toplevel>` (e.g. `localmcp` for this "
+    "`project=<basename of git toplevel>` (e.g. `zelosmcp` for this "
     "repo) when calling pincher tools — omitting it falls through to "
     "an empty `default` index. If the per-repo project isn't indexed, "
     "fall back to `project=user_data_ro` (the full-tree warm-index "
@@ -556,7 +556,7 @@ _PINCHER_PLAYBOOK_RW = (
     "- `Grep` to find a symbol by name (use `pincher__search`).\n"
     "- `Read` on 3+ files in sequence to understand one function "
     "(use `pincher__context`).\n"
-    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
     "because <specific reason>.\" Silent violations are not acceptable.\n\n"
     "Pincher indexes the repo into a byte-offset symbol store, a "
     "knowledge graph, and FTS5 full-text search — every retrieval is "
@@ -566,7 +566,7 @@ _PINCHER_PLAYBOOK_RW = (
     "unfamiliar project to get language breakdown, entry points, "
     "hotspot functions, and graph stats. Cheaper than reading files.\n"
     "- **Scope to the active project.** Always pass "
-    "`project=<basename of git toplevel>` (e.g. `localmcp` for this "
+    "`project=<basename of git toplevel>` (e.g. `zelosmcp` for this "
     "repo) when calling pincher tools — omitting it falls through to "
     "an empty `default` index. If the per-repo project isn't indexed, "
     "fall back to `project=user_data_ro` (the full-tree warm-index "
@@ -620,7 +620,7 @@ _FILESYSTEM_PLAYBOOK_RO = (
     "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
     "- `Read` on a path under the workspace when "
     "`filesystem__read_text_file` would work.\n"
-    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
     "because <specific reason>.\"\n\n"
     "The `filesystem` backend is a sandboxed file server: every path "
     "must live under one of the allowed directories returned by "
@@ -664,7 +664,7 @@ _FILESYSTEM_PLAYBOOK_RW = (
     "`filesystem__read_text_file` would work.\n"
     "- `sed`, `awk`, or `echo > file` for edits — use "
     "`filesystem__edit_file`.\n"
-    "If you violate, say so explicitly: \"Violating LocalMCP rule "
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
     "because <specific reason>.\"\n\n"
     "The `filesystem` backend is a sandboxed file server: every path "
     "must live under one of the allowed directories returned by "
@@ -723,7 +723,7 @@ def _render_mandatory_playbook(
         return ""
     header = (
         "## Mandatory backend playbook\n\n"
-        "These backends ship by default with LocalMCP and have a "
+        "These backends ship by default with zelosMCP and have a "
         "canonical workflow. Follow the guidance below before falling "
         "back to generic catalog usage.\n\n"
     )
@@ -802,7 +802,7 @@ def render_comprehensive_rule(
 
     if not user_backends:
         body = (
-            "\n# LocalMCP backends\n\n"
+            "\n# zelosMCP backends\n\n"
             "No user backends are currently loaded. POST a config to "
             "`/api/start` (or click START in the web UI) and regenerate "
             "this rule to get tool-specific guidance.\n\n"
@@ -813,7 +813,7 @@ def render_comprehensive_rule(
     backend_list = ", ".join(f"`{n}`" for n in user_backends)
     if tool_use == "priority":
         intro_paragraph = (
-            "Generated from the LocalMCP aggregator at "
+            "Generated from the zelosMCP aggregator at "
             "`http://localhost:8000/mcp`. Every tool below is reachable "
             "as `<server>__<tool>` (double underscore) on that single "
             "Cursor entry. Prefer these over shelling out — they return "
@@ -823,7 +823,7 @@ def render_comprehensive_rule(
         )
     else:
         intro_paragraph = (
-            "Generated from the LocalMCP aggregator at "
+            "Generated from the zelosMCP aggregator at "
             "`http://localhost:8000/mcp`. Every tool below is reachable "
             "as `<server>__<tool>` (double underscore) on that single "
             "Cursor entry. Paths inside the container's `/user_data_rw` "
@@ -834,7 +834,7 @@ def render_comprehensive_rule(
 
     lines: list[str] = [
         "",
-        "# LocalMCP backend tool catalog",
+        "# zelosMCP backend tool catalog",
         "",
         intro_paragraph,
         "",
@@ -920,7 +920,7 @@ def render_comprehensive_rule(
 
 # Method-name -> (client-session method, result attribute) for the four
 # capabilities the catalog snapshot includes. Sharing this table between
-# the HTTP `/api/catalog` endpoint and the MCP `localmcp__get_aggregated
+# the HTTP `/api/catalog` endpoint and the MCP `zelosmcp__get_aggregated
 # _tool_catalog` tool keeps the two surfaces guaranteed-equivalent.
 _CATALOG_CAPS: list[tuple[str, str, str]] = [
     ("tools", "list_tools", "tools"),
@@ -1066,7 +1066,7 @@ async def _h_generate_cursor_mcp_json(
     if shape == "aggregate":
         snippet = {
             "mcpServers": {
-                "localmcp-aggregate": {
+                "zelosmcp-aggregate": {
                     "type": "streamable-http",
                     "url": f"http://{host}/mcp",
                 }
@@ -1077,7 +1077,7 @@ async def _h_generate_cursor_mcp_json(
         for name, state in self_.manager.servers.items():
             if not state.running:
                 continue
-            servers[f"localmcp-{name}"] = {
+            servers[f"zelosmcp-{name}"] = {
                 "type": "streamable-http",
                 "url": f"http://{host}/{name}/mcp",
             }
@@ -1099,7 +1099,7 @@ async def _h_start_server(
         raise McpError(
             ErrorData(
                 code=INVALID_PARAMS,
-                message="Refusing to start/stop the builtin `localmcp` backend",
+                message="Refusing to start/stop the builtin `zelosmcp` backend",
             )
         )
     try:
@@ -1119,7 +1119,7 @@ async def _h_stop_server(
         raise McpError(
             ErrorData(
                 code=INVALID_PARAMS,
-                message="Refusing to start/stop the builtin `localmcp` backend",
+                message="Refusing to start/stop the builtin `zelosmcp` backend",
             )
         )
     try:
@@ -1147,7 +1147,7 @@ async def _h_reload_config(
 async def _h_list_compressed_tools(
     self_: "BuiltinServer", args: dict[str, Any]
 ) -> list[ContentBlock]:
-    from localmcp.compression import compress_for_catalog, COMPRESS_LEVELS
+    from zelosmcp.compression import compress_for_catalog, COMPRESS_LEVELS
 
     backend_filter = args.get("backend")
     level_override = args.get("level")
@@ -1209,7 +1209,7 @@ _HANDLERS: dict[str, ToolHandler] = {
 
 class BuiltinServer:
     """Always-on, in-process MCP server. Shape-compatible with
-    :class:`localmcp.proxy.ProxyState` so the dispatcher and aggregator
+    :class:`zelosmcp.proxy.ProxyState` so the dispatcher and aggregator
     treat it as just another backend."""
 
     name = NAME
@@ -1275,12 +1275,12 @@ class BuiltinServer:
     async def _run(self) -> None:
         """Lifecycle task — owns both transports of the in-process MCP.
 
-        Pattern mirrors :meth:`localmcp.proxy.ProxyState._run_backend`: every
+        Pattern mirrors :meth:`zelosmcp.proxy.ProxyState._run_backend`: every
         async context is entered and exited in this single task to dodge
         anyio cancel-scope cross-task issues. Two surfaces share one
         :class:`Server` instance:
 
-          - HTTP at ``/localmcp/mcp`` via a :class:`StreamableHTTPSessionManager`.
+          - HTTP at ``/zelosmcp/mcp`` via a :class:`StreamableHTTPSessionManager`.
           - In-memory :class:`ClientSession` consumed by the aggregator's
             fan-out at ``/mcp``.
         """
@@ -1292,7 +1292,7 @@ class BuiltinServer:
 
         try:
             async with AsyncExitStack() as stack:
-                # ── Transport 1: streamable-HTTP for /localmcp/mcp ──
+                # ── Transport 1: streamable-HTTP for /zelosmcp/mcp ──
                 self.session_manager = StreamableHTTPSessionManager(
                     app=srv,
                     event_store=None,
@@ -1334,7 +1334,7 @@ class BuiltinServer:
                 await self.client_session.initialize()
 
                 self.running = True
-                self._emit_log("Builtin MCP live (/localmcp/mcp + aggregator)")
+                self._emit_log("Builtin MCP live (/zelosmcp/mcp + aggregator)")
                 self._ready.set()
 
                 try:

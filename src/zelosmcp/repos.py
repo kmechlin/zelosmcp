@@ -16,9 +16,9 @@ into discovered repos so nested submodules don't double-count.
 The discovery root and depth are env-configurable so tests can point the
 scanner at ``tmp_path`` without mounting anything:
 
-  - ``LOCALMCP_REPO_SCAN_ROOT``  (default ``/user_data_ro``)
-  - ``LOCALMCP_REPO_SCAN_DEPTH`` (default ``4``)
-  - ``LOCALMCP_REPO_RW_ROOT``    (default ``/user_data_rw``)
+  - ``ZELOSMCP_REPO_SCAN_ROOT``  (default ``/user_data_ro``)
+  - ``ZELOSMCP_REPO_SCAN_DEPTH`` (default ``4``)
+  - ``ZELOSMCP_REPO_RW_ROOT``    (default ``/user_data_rw``)
 
 Results are cached for ``_CACHE_TTL_SECS`` so the right-column UI panel
 stays snappy on repeated opens; the ``refresh=True`` flag busts the cache
@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Iterable
 
-logger = logging.getLogger("localmcp.repos")
+logger = logging.getLogger("zelosmcp.repos")
 
 
 _DEFAULT_RO_ROOT = "/user_data_ro"
@@ -64,7 +64,7 @@ _SKIP_DIR_NAMES: frozenset[str] = frozenset({
 # Where we'd write the generated rule, relative to the repo root. Mirrors
 # the two ``format`` options of the cursor-rule generator.
 RULE_RELATIVE_PATHS: dict[str, str] = {
-    "cursor-mdc": ".cursor/rules/localmcp.mdc",
+    "cursor-mdc": ".cursor/rules/zelosmcp.mdc",
     "copilot-instructions": ".github/copilot-instructions.md",
 }
 
@@ -93,22 +93,22 @@ class DiscoveredRepo:
 
 
 def _scan_root() -> str:
-    return os.environ.get("LOCALMCP_REPO_SCAN_ROOT", _DEFAULT_RO_ROOT)
+    return os.environ.get("ZELOSMCP_REPO_SCAN_ROOT", _DEFAULT_RO_ROOT)
 
 
 def _rw_root() -> str:
-    return os.environ.get("LOCALMCP_REPO_RW_ROOT", _DEFAULT_RW_ROOT)
+    return os.environ.get("ZELOSMCP_REPO_RW_ROOT", _DEFAULT_RW_ROOT)
 
 
 def _scan_depth() -> int:
-    raw = os.environ.get("LOCALMCP_REPO_SCAN_DEPTH")
+    raw = os.environ.get("ZELOSMCP_REPO_SCAN_DEPTH")
     if not raw:
         return _DEFAULT_SCAN_DEPTH
     try:
         depth = int(raw)
     except ValueError:
         logger.warning(
-            "LOCALMCP_REPO_SCAN_DEPTH=%r is not an integer; using default %d",
+            "ZELOSMCP_REPO_SCAN_DEPTH=%r is not an integer; using default %d",
             raw,
             _DEFAULT_SCAN_DEPTH,
         )
@@ -125,7 +125,7 @@ def _is_repo(entry_path: str) -> bool:
 
 
 def _has_rule(repo_root_ro: str) -> bool:
-    """Quick stat to mark whether a localmcp.mdc already lives in the repo.
+    """Quick stat to mark whether a zelosmcp.mdc already lives in the repo.
     We only check the cursor-mdc location; the copilot variant is rarer and
     the UI surfaces a Save action that overwrites either."""
     return os.path.isfile(

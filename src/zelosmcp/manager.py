@@ -1,7 +1,7 @@
 """Coordinates many ProxyState instances behind one HTTP surface.
 
 The manager is what `app.py` actually talks to. It owns a per-name registry of
-:class:`localmcp.proxy.ProxyState` objects, tracks which one is the primary
+:class:`zelosmcp.proxy.ProxyState` objects, tracks which one is the primary
 (mirrored at ``/mcp`` instead of just ``/<name>/mcp``), and aggregates log
 subscriptions across all servers.
 """
@@ -19,24 +19,24 @@ from typing import Any
 import httpx
 from starlette.responses import JSONResponse
 
-from localmcp.aggregator import Aggregator
-from localmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
-from localmcp.config import ServerSpec, parse_config
-from localmcp.proxy import ProxyState
-from localmcp.savings import SavingsRecorder, TokenCounter
-from localmcp.savings_db import SavingsStore, resolve_db_path
+from zelosmcp.aggregator import Aggregator
+from zelosmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
+from zelosmcp.config import ServerSpec, parse_config
+from zelosmcp.proxy import ProxyState
+from zelosmcp.savings import SavingsRecorder, TokenCounter
+from zelosmcp.savings_db import SavingsStore, resolve_db_path
 
 
 # Default lookup order for the mandatory MCP set. First existing path wins.
 # - /app/configs is the root Dockerfile's runtime path.
-# - /opt/localmcp/configs is the cert-aware Dockerfile's runtime path.
+# - /opt/zelosmcp/configs is the cert-aware Dockerfile's runtime path.
 # - The repo-relative path lets developers run uvicorn directly from the
 #   working tree (tests can use ProxyManager(mandatory_config_path="") to
 #   skip mandatory entirely).
 _MANDATORY_PATH_CANDIDATES: tuple[str, ...] = (
-    "/app/configs/mandatory-localmcp.json",
-    "/opt/localmcp/configs/mandatory-localmcp.json",
-    str(Path(__file__).resolve().parent.parent.parent / "configs" / "mandatory-localmcp.json"),
+    "/app/configs/mandatory-zelosmcp.json",
+    "/opt/zelosmcp/configs/mandatory-zelosmcp.json",
+    str(Path(__file__).resolve().parent.parent.parent / "configs" / "mandatory-zelosmcp.json"),
 )
 
 
@@ -58,7 +58,7 @@ _HOP_BY_HOP: frozenset[str] = frozenset({
 })
 
 
-_log = logging.getLogger("localmcp.manager")
+_log = logging.getLogger("zelosmcp.manager")
 
 
 class ProxyManager:
@@ -66,7 +66,7 @@ class ProxyManager:
 
     def __init__(self, mandatory_config_path: str | None = None) -> None:
         # ``self.servers`` mixes user-configured ProxyStates with the
-        # always-on BuiltinServer (under the reserved key "localmcp").
+        # always-on BuiltinServer (under the reserved key "zelosmcp").
         # The builtin is ProxyState-shaped, so the dispatcher and
         # aggregator iterate over it transparently. Lifecycle methods
         # (start_all/stop_all/start_one/stop_one) explicitly skip it.
@@ -83,7 +83,7 @@ class ProxyManager:
         self._log_pumps: dict[str, asyncio.Task] = {}
         self.aggregator = Aggregator(self)
         # The BuiltinServer is ProxyState-shaped and pre-seeded so the
-        # dispatcher can route /localmcp/mcp from the very first request.
+        # dispatcher can route /zelosmcp/mcp from the very first request.
         # Its log pump is attached lazily from `start_builtin()` because
         # `_attach_log_pump` requires a running event loop.
         self.builtin = BuiltinServer(self)
@@ -114,10 +114,10 @@ class ProxyManager:
         self.savings: SavingsRecorder | None = None
         self._pincher_poll_task: asyncio.Task | None = None
         # How often to snapshot ``pincher__stats`` into the savings store.
-        # Configurable via ``LOCALMCP_PINCHER_POLL_SECS``; <=0 disables.
+        # Configurable via ``ZELOSMCP_PINCHER_POLL_SECS``; <=0 disables.
         try:
             self._pincher_poll_interval: float = float(
-                os.environ.get("LOCALMCP_PINCHER_POLL_SECS", "60")
+                os.environ.get("ZELOSMCP_PINCHER_POLL_SECS", "60")
             )
         except ValueError:
             self._pincher_poll_interval = 60.0
@@ -293,7 +293,7 @@ class ProxyManager:
 
     async def stop_all(self) -> None:
         """Stop every user-configured backend AND the aggregator. The
-        always-on builtin (`localmcp`) is intentionally preserved so its
+        always-on builtin (`zelosmcp`) is intentionally preserved so its
         tools remain available across config reloads."""
         await self.aggregator.stop()
         # Snapshot of stoppable (non-builtin) backends.
@@ -349,7 +349,7 @@ class ProxyManager:
 
     async def start_builtin(self) -> None:
         """Bring up the always-on builtin MCP. Called once from the
-        Starlette lifespan hook in :func:`localmcp.app.create_app` before
+        Starlette lifespan hook in :func:`zelosmcp.app.create_app` before
         any HTTP request arrives. Idempotent."""
         if self.builtin.running:
             return
@@ -361,7 +361,7 @@ class ProxyManager:
             self._attach_log_pump(self.builtin)
         # The aggregator depends on at least one running backend;
         # making sure it's live as soon as the builtin is up means
-        # /mcp can serve `localmcp__*` tools even when no user
+        # /mcp can serve `zelosmcp__*` tools even when no user
         # backend has been configured yet.
         if not self.aggregator.running:
             try:
@@ -408,7 +408,7 @@ class ProxyManager:
         """Open the savings store and start the pincher snapshot poller.
 
         Idempotent; tests may pass ``db_path=":memory:"`` (or set the
-        ``LOCALMCP_SAVINGS_DB`` env var) to skip on-disk state.
+        ``ZELOSMCP_SAVINGS_DB`` env var) to skip on-disk state.
         """
         if self.savings is not None:
             return
@@ -605,7 +605,7 @@ class ProxyManager:
             forwarded["X-Forwarded-Host"] = host_header
         if client_host:
             # Append onto any existing X-Forwarded-For chain so transparent
-            # proxies in front of LocalMCP keep their origin information.
+            # proxies in front of zelosMCP keep their origin information.
             existing_xff = next(
                 (v for k, v in headers if k.lower() == "x-forwarded-for"),
                 None,

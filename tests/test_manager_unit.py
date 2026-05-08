@@ -1,4 +1,4 @@
-"""Unit tests for localmcp.manager.ProxyManager."""
+"""Unit tests for zelosmcp.manager.ProxyManager."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from localmcp.manager import ProxyManager
+from zelosmcp.manager import ProxyManager
 from tests.conftest import (
     fake_stdio_client,
     fake_sse_client,
@@ -28,11 +28,11 @@ def _patches():
         yield
 
     return [
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.sse_client", side_effect=fake_sse_client),
-        patch("localmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
-        patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.sse_client", side_effect=fake_sse_client),
+        patch("zelosmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
     ]
 
 
@@ -87,9 +87,9 @@ class TestStartAll:
             m = ProxyManager(mandatory_config_path="")
             await m.start_all(_CONFIG)
             await m.start_all({"mcpServers": {"only": {"command": "echo"}}})
-            # `localmcp` is the always-on builtin; it lives alongside any
+            # `zelosmcp` is the always-on builtin; it lives alongside any
             # user-configured backends and survives start_all/stop_all.
-            user_names = [n for n in m.names() if n != "localmcp"]
+            user_names = [n for n in m.names() if n != "zelosmcp"]
             assert user_names == ["only"]
             assert m.primary is None
             await m.stop_all()
@@ -112,10 +112,10 @@ class TestStartAll:
             yield  # pragma: no cover
 
         with (
-            patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-            patch("localmcp.proxy.sse_client", side_effect=failing_sse),
-            patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
-            patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
+            patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+            patch("zelosmcp.proxy.sse_client", side_effect=failing_sse),
+            patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
+            patch("zelosmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
         ):
             m = ProxyManager(mandatory_config_path="")
             result = await m.start_all({
@@ -167,12 +167,12 @@ class TestStatus:
     async def test_status_when_empty(self):
         m = ProxyManager(mandatory_config_path="")
         s = m.status()
-        # `localmcp` is the always-on builtin; until its lifespan-managed
+        # `zelosmcp` is the always-on builtin; until its lifespan-managed
         # `start_builtin()` has run, `state.running` is still False, but the
         # row exists so the UI can render the slot.
         assert s["primary"] is None
         assert s["running"] is False
-        assert [row["name"] for row in s["servers"]] == ["localmcp"]
+        assert [row["name"] for row in s["servers"]] == ["zelosmcp"]
         assert s["servers"][0]["builtin"] is True
         assert s["servers"][0]["running"] is False
 

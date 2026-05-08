@@ -25,13 +25,13 @@ RESERVED_NAMES: frozenset[str] = frozenset({
     "openapi.json",
     "openapi",
     "static",
-    # `localmcp` is the always-on built-in backend (BuiltinServer in
-    # localmcp.builtin); reserved so user configs can't shadow it.
-    "localmcp",
+    # `zelosmcp` is the always-on built-in backend (BuiltinServer in
+    # zelosmcp.builtin); reserved so user configs can't shadow it.
+    "zelosmcp",
 })
 
 # Path prefixes a backend's reverseProxy.mount cannot claim. These either
-# host LocalMCP's own surface (/api/*, /docs, /redoc, /openapi.json,
+# host zelosMCP's own surface (/api/*, /docs, /redoc, /openapi.json,
 # /catalog) or are reserved by the MCP dispatcher (/, /mcp). Anything not
 # in this set is fair game.
 RESERVED_MOUNTS: frozenset[str] = frozenset({
@@ -60,10 +60,10 @@ class ConfigError(ValueError):
 class ReverseProxySpec:
     """HTTP reverse-proxy configuration for one backend.
 
-    When set, LocalMCP forwards HTTP requests on ``mount`` to ``upstream``,
+    When set, zelosMCP forwards HTTP requests on ``mount`` to ``upstream``,
     injecting a canonical ``X-Forwarded-*`` header set so the upstream knows
     its public-facing path. Lets you expose a backend's HTTP sidecar (e.g.
-    pincher's dashboard) through LocalMCP's port without leaking the
+    pincher's dashboard) through zelosMCP's port without leaking the
     backend's own port.
     """
 
@@ -179,7 +179,7 @@ def _validate_mount(server_name: str, mount: Any) -> str:
     """Normalize and validate a reverse-proxy mount path.
 
     Returns the canonical form (leading slash, no trailing slash). Rejects
-    values that would shadow LocalMCP's own routes or the MCP dispatcher.
+    values that would shadow zelosMCP's own routes or the MCP dispatcher.
     """
     if not isinstance(mount, str) or not mount:
         raise ConfigError(

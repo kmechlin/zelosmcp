@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""LocalMCP environment helper.
+"""zelosMCP environment helper.
 
 Walks the user through the most common Makefile variables and writes a
-working ``.env`` file. Optionally writes ``configs/user-localmcp.json``
-(a subset of ``configs/default-localmcp.json``) when the user opts out
+working ``.env`` file. Optionally writes ``configs/user-zelosmcp.json``
+(a subset of ``configs/default-zelosmcp.json``) when the user opts out
 of any default backend.
 
 Stdlib only — no extra dependencies. Auto-detects PLATFORM,
@@ -26,8 +26,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "default-localmcp.json"
-USER_CONFIG = REPO_ROOT / "configs" / "user-localmcp.json"
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "default-zelosmcp.json"
+USER_CONFIG = REPO_ROOT / "configs" / "user-zelosmcp.json"
 
 
 # ── Auto-detection ──────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ def main() -> int:
             return 1
 
     print(
-        "\nLocalMCP setup wizard.\n"
+        "\nzelosMCP setup wizard.\n"
         "Press Enter to accept the default shown in brackets.\n"
     )
 
@@ -135,10 +135,10 @@ def main() -> int:
     )
 
     # 2) HTTP surface
-    port = ask("HTTP port (LOCALMCP_PORT)", "8000")
+    port = ask("HTTP port (ZELOSMCP_PORT)", "8000")
     bind = ask(
         "Bind address — 127.0.0.1 (this Mac only) or 0.0.0.0 (LAN access) "
-        "(LOCALMCP_BIND_ADDR)",
+        "(ZELOSMCP_BIND_ADDR)",
         "127.0.0.1",
     )
 
@@ -189,15 +189,15 @@ def main() -> int:
     rule_scope = ask_choice(
         "Cursor rule scope: per-project or all your Cursor projects?",
         {
-            "a": "this project only (.cursor/rules/localmcp.mdc)",
-            "b": "all my Cursor projects ($HOME/.cursor/rules/localmcp.mdc)",
+            "a": "this project only (.cursor/rules/zelosmcp.mdc)",
+            "b": "all my Cursor projects ($HOME/.cursor/rules/zelosmcp.mdc)",
         },
         default="a",
     )
     if rule_scope == "a":
-        rule_file = ".cursor/rules/localmcp.mdc"
+        rule_file = ".cursor/rules/zelosmcp.mdc"
     else:
-        rule_file = f"{home}/.cursor/rules/localmcp.mdc"
+        rule_file = f"{home}/.cursor/rules/zelosmcp.mdc"
 
     # 7) Cursor rule access mode
     rw_default = ask_yes_no(
@@ -209,7 +209,7 @@ def main() -> int:
 
     # 8) Decide which config file `make load` should POST.
     if enable_k8s and enable_docker:
-        config_file = "configs/default-localmcp.json"
+        config_file = "configs/default-zelosmcp.json"
     else:
         with DEFAULT_CONFIG.open() as fh:
             cfg = json.load(fh)
@@ -222,7 +222,7 @@ def main() -> int:
         with USER_CONFIG.open("w") as fh:
             json.dump({"mcpServers": servers}, fh, indent=2)
             fh.write("\n")
-        config_file = "configs/user-localmcp.json"
+        config_file = "configs/user-zelosmcp.json"
         print(
             f"  wrote {USER_CONFIG.relative_to(REPO_ROOT)} "
             f"(subset of default config, {len(servers)} backend"
@@ -240,13 +240,13 @@ def main() -> int:
         "`-include .env`.",
         "",
         f"USER_DATA_ROOT={user_data}",
-        f"LOCALMCP_PORT={port}",
-        f"LOCALMCP_BIND_ADDR={bind}",
+        f"ZELOSMCP_PORT={port}",
+        f"ZELOSMCP_BIND_ADDR={bind}",
         f"DOCKERFILE={dockerfile}",
         f"PLATFORM={platform_value}",
-        f"LOCALMCP_CONFIG={config_file}",
-        f"LOCALMCP_RULE_FILE={rule_file}",
-        f"LOCALMCP_RULE_ACCESS={rule_access}",
+        f"ZELOSMCP_CONFIG={config_file}",
+        f"ZELOSMCP_RULE_FILE={rule_file}",
+        f"ZELOSMCP_RULE_ACCESS={rule_access}",
     ]
     if cert_name:
         lines.append(f"CORP_ROOT_AUTHORITY_CERT_NAME={cert_name}")

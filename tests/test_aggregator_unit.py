@@ -1,4 +1,4 @@
-"""Unit tests for localmcp.aggregator.Aggregator."""
+"""Unit tests for zelosmcp.aggregator.Aggregator."""
 from __future__ import annotations
 
 import asyncio
@@ -22,9 +22,9 @@ from mcp.types import (
     Tool,
 )
 
-from localmcp.aggregator import Aggregator, _split_qualified, SEP
-from localmcp.manager import ProxyManager
-from localmcp.proxy import ProxyState
+from zelosmcp.aggregator import Aggregator, _split_qualified, SEP
+from zelosmcp.manager import ProxyManager
+from zelosmcp.proxy import ProxyState
 from tests.conftest import (
     FakeResult,
     fake_stdio_client,
@@ -594,7 +594,7 @@ class TestLifecycle:
         async def patched_run(self):
             yield
 
-        with patch("localmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
+        with patch("zelosmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
             m = ProxyManager(mandatory_config_path="")
             agg = Aggregator(m)
             await agg.start()
@@ -610,7 +610,7 @@ class TestLifecycle:
         async def patched_run(self):
             yield
 
-        with patch("localmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
+        with patch("zelosmcp.aggregator.StreamableHTTPSessionManager.run", patched_run):
             m = ProxyManager(mandatory_config_path="")
             agg = Aggregator(m)
             await agg.start()
@@ -629,7 +629,7 @@ class TestLifecycle:
 
 # ── Compression scopes ─────────────────────────────────────────────────
 
-from localmcp.config import CompressSpec, ServerSpec  # noqa: E402
+from zelosmcp.config import CompressSpec, ServerSpec  # noqa: E402
 
 
 def _state_with_tools(name: str, tools: list[Tool]) -> tuple[ProxyState, AsyncMock]:

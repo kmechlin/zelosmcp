@@ -3,7 +3,7 @@
 # All other ARGS have to be declared within a stage.
 ARG PROJECT_BASE_IMAGE
 # pincherMCP source — defaults to kmechlin's fork branch with the
-# --basepath / --trust-proxy flags that configs/default-localmcp.json
+# --basepath / --trust-proxy flags that configs/default-zelosmcp.json
 # relies on. Switch back to upstream after the PR merges by overriding
 # both args at build time (see Makefile's PINCHER_REPO/PINCHER_REF).
 ARG PINCHER_REPO=https://github.com/kmechlin/pincherMCP.git
@@ -39,7 +39,7 @@ FROM base-os AS extra-os
 
 # Pincher build layer
 # pincherMCP — codebase intelligence MCP server, single Go binary. Built
-# once and COPY'd into the localmcp layer. Uses Debian-based golang image
+# once and COPY'd into the zelosmcp layer. Uses Debian-based golang image
 # so we can install the corp cert (Alpine variant doesn't share the Debian
 # extra-os stage's update-ca-certificates plumbing). Source is controlled
 # by the PINCHER_REPO / PINCHER_REF global ARGs.
@@ -54,11 +54,11 @@ FROM golang:1.24-bookworm AS pincher-build
       go build -trimpath -ldflags="-s -w" -o /pincher ./cmd/pinch/
 
 
-# LocalMCP layer
+# zelosMCP layer
 # The Cursor-blessed MCP proxy. Inherits the corp cert + git/curl from
 # `extra-os` so apt/pip/npm/uvx can clear the corporate proxy when
 # downloading runtimes and MCP backends at build time.
-FROM extra-os AS localmcp
+FROM extra-os AS zelosmcp
   # Node 22 (for npx-launched MCP backends like kubernetes-mcp-server,
   # @modelcontextprotocol/server-filesystem). Some npm packages compile
   # native deps - build-essential is already in base-os.
@@ -76,24 +76,24 @@ FROM extra-os AS localmcp
   # PATH by stdio-launched MCP backends as `pincher`.
   COPY --from=pincher-build /pincher /usr/local/bin/pincher
 
-  # COPY localmcp source from the build context (= repo root).
+  # COPY zelosmcp source from the build context (= repo root).
   # `.dockerignore` excludes .venv, .git, .pytest_cache, etc.
-  COPY pyproject.toml README.md /opt/localmcp/
+  COPY pyproject.toml README.md /opt/zelosmcp/
   # docs/*.md powers the in-app Documentation view (/api/docs[/{slug}]).
   # `.dockerignore` re-includes docs/**/*.md so the markdown files
   # actually ship in the image.
-  COPY docs /opt/localmcp/docs
-  COPY src /opt/localmcp/src
+  COPY docs /opt/zelosmcp/docs
+  COPY src /opt/zelosmcp/src
   # Mandatory MCP set merged into every /api/start payload by ProxyManager.
-  # See src/localmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
-  COPY configs/mandatory-localmcp.json /opt/localmcp/configs/mandatory-localmcp.json
+  # See src/zelosmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
+  COPY configs/mandatory-zelosmcp.json /opt/zelosmcp/configs/mandatory-zelosmcp.json
 
-  RUN pip install --no-cache-dir -e /opt/localmcp
+  RUN pip install --no-cache-dir -e /opt/zelosmcp
 
   # Pincher (kmechlin fork) auto-indexes its CWD shortly after spawn.
   # Point CWD at /user_data_ro so the mounted user source tree gets
   # indexed in the background — no manual `make index-full` needed.
-  # localmcp itself was installed editable above and is importable
+  # zelosmcp itself was installed editable above and is importable
   # from any CWD, so this doesn't affect uvicorn startup.
   # /user_data_ro is created here so spawned subprocesses have a valid
   # CWD even when no volume is mounted (in that case pincher's
@@ -101,4 +101,4 @@ FROM extra-os AS localmcp
   RUN mkdir -p /user_data_ro
   WORKDIR /user_data_ro
   EXPOSE 8000
-  CMD ["sh", "-c", "uvicorn localmcp.app:app --host 0.0.0.0 --port 8000"]
+  CMD ["sh", "-c", "uvicorn zelosmcp.app:app --host 0.0.0.0 --port 8000"]

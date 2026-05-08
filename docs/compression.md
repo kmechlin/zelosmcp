@@ -1,6 +1,6 @@
 # Tool-list compression
 
-LLMs see every MCP tool's full description and JSON schema in `tools/list`. With several backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. LocalMCP **compresses every backend by default** — swapping each backend's full tool surface for a small two-tool wrapper pair on the aggregator (`/mcp`) — so the schema-fetch token cost stays small without losing functionality. The `compress` block on a backend lets you override or disable that default.
+LLMs see every MCP tool's full description and JSON schema in `tools/list`. With several backends loaded that easily means 15-25 KB of tokens **before** the conversation starts. zelosMCP **compresses every backend by default** — swapping each backend's full tool surface for a small two-tool wrapper pair on the aggregator (`/mcp`) — so the schema-fetch token cost stays small without losing functionality. The `compress` block on a backend lets you override or disable that default.
 
 The agent flow becomes a two-step lookup:
 
@@ -9,7 +9,7 @@ The agent flow becomes a two-step lookup:
 
 For very large backends, level=`max` collapses the wrapper pair into a single `list_tools()` call — even the inlined catalog goes away from `tools/list`.
 
-> Inspired by [atlassian-labs/mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) (their compressed mode). LocalMCP implements the same idea natively in the aggregator instead of running mcp-compressor as a subprocess in front of each backend.
+> Inspired by [atlassian-labs/mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) (their compressed mode). zelosMCP implements the same idea natively in the aggregator instead of running mcp-compressor as a subprocess in front of each backend.
 
 ## Schema
 
@@ -41,7 +41,7 @@ The `compress` value can take any of these forms:
 | `"compress": null` | Opt **out** entirely. The backend's full tool surface flows through `/mcp` unchanged. |
 | `"compress": false` | Same as `null` — convenience opt-out. |
 
-The always-on builtin (`localmcp__*`) is never compressed — those tools are tiny and self-documenting, and compressing them would hide the discovery surface.
+The always-on builtin (`zelosmcp__*`) is never compressed — those tools are tiny and self-documenting, and compressing them would hide the discovery surface.
 
 ## Levels
 
@@ -66,7 +66,7 @@ The discovery / cursor-rule paths always see the compressed catalog when `compre
 
 ### When to pick which scope
 
-- **`catalog`** — you want the cursor rule and `localmcp__list_compressed_tools` to render compactly, but every direct MCP client connecting to the aggregator or to `/<name>/mcp` should see the full schema. Useful when you've curated the agent rule body but don't want to change the wire format for ad-hoc clients.
+- **`catalog`** — you want the cursor rule and `zelosmcp__list_compressed_tools` to render compactly, but every direct MCP client connecting to the aggregator or to `/<name>/mcp` should see the full schema. Useful when you've curated the agent rule body but don't want to change the wire format for ad-hoc clients.
 - **`aggregator`** (default, recommended) — agents going through the aggregator at `/mcp` (the typical Cursor / Claude Desktop / Copilot setup) see the compressed pair. Direct connections to a single backend at `/<name>/mcp` keep the full surface (useful for debugging, scripts that already know the backend's API).
 - **`global`** — you have clients that connect directly to `/<name>/mcp` and you want them to see the compression too. Both endpoints serve wrappers.
 
@@ -99,16 +99,16 @@ sequenceDiagram
 
 ## Discovery tool
 
-The always-on built-in MCP exposes a `localmcp__list_compressed_tools` tool that returns the compressed catalog as JSON for any backend with `compress` configured — independent of scope:
+The always-on built-in MCP exposes a `zelosmcp__list_compressed_tools` tool that returns the compressed catalog as JSON for any backend with `compress` configured — independent of scope:
 
 - `backend` (optional string): limit to a single backend by name.
 - `level` (optional string): re-render the catalog at a different level than what's configured. Useful for previewing what `level=high` would look like before changing the live config.
 
-The same catalog feeds the cursor-rule generator (`/api/cursor-rule` and `localmcp__generate_cursor_rule`), so a backend at `scope=catalog` still gets a compressed rule body — that's the point.
+The same catalog feeds the cursor-rule generator (`/api/cursor-rule` and `zelosmcp__generate_cursor_rule`), so a backend at `scope=catalog` still gets a compressed rule body — that's the point.
 
-## Defaults shipped with LocalMCP
+## Defaults shipped with zelosMCP
 
-Every backend (mandatory or user-supplied) gets `compress: { level: "medium", scope: "aggregator" }` automatically — no per-backend `compress` block is required. The explicit blocks you'll see in [configs/mandatory-localmcp.json](../configs/mandatory-localmcp.json) and [configs/default-localmcp.json](../configs/default-localmcp.json) are kept only as documentation; removing them does not change behavior.
+Every backend (mandatory or user-supplied) gets `compress: { level: "medium", scope: "aggregator" }` automatically — no per-backend `compress` block is required. The explicit blocks you'll see in [configs/mandatory-zelosmcp.json](../configs/mandatory-zelosmcp.json) and [configs/default-zelosmcp.json](../configs/default-zelosmcp.json) are kept only as documentation; removing them does not change behavior.
 
 To opt **out** for a specific backend, set `"compress": null` in its `mcpServers` entry. To keep the wrapper but stop summarising descriptions, set `"compress": { "level": "low" }` (full descriptions, no wrapper substitution at the wire).
 
@@ -128,5 +128,5 @@ curl -sS -X POST http://localhost:8000/mcp \
 
 - [docs/configuration.md](configuration.md) — the parent `mcpServers` schema.
 - [docs/default-mcps.md](default-mcps.md) — which backends ship with compression on by default.
-- [docs/built-in-mcp.md](built-in-mcp.md) — the `localmcp__list_compressed_tools` discovery tool.
+- [docs/built-in-mcp.md](built-in-mcp.md) — the `zelosmcp__list_compressed_tools` discovery tool.
 - [atlassian-labs/mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) — design reference for the wrapper-tool pattern and level taxonomy.

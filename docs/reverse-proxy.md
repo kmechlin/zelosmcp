@@ -2,18 +2,18 @@
 
 Some MCP backends ship more than just an MCP server — they also expose an HTTP REST API or a web dashboard on a sidecar port. [Pincher](default-mcps.md#pincher), for example, serves a self-contained codebase-intelligence dashboard at `<host>:8080/v1/dashboard` whenever it's launched with `--http`.
 
-Rather than punching a second hole through your container's network namespace and exposing each backend's port directly to the host, LocalMCP can **reverse-proxy** those endpoints under its own port. The pattern looks like this:
+Rather than punching a second hole through your container's network namespace and exposing each backend's port directly to the host, zelosMCP can **reverse-proxy** those endpoints under its own port. The pattern looks like this:
 
 ```mermaid
 flowchart LR
   client["Mac browser"]
-  localmcp["LocalMCP :8000"]
+  zelosmcp["zelosMCP :8000"]
   pincher["pincher 127.0.0.1:8080"]
-  client -->|"GET /pincher/v1/dashboard"| localmcp
-  localmcp -->|"GET /pincher/v1/dashboard\nX-Forwarded-Prefix: /pincher"| pincher
+  client -->|"GET /pincher/v1/dashboard"| zelosmcp
+  zelosmcp -->|"GET /pincher/v1/dashboard\nX-Forwarded-Prefix: /pincher"| pincher
 ```
 
-Only `:8000` is reachable from outside the container. Pincher's HTTP server stays on loopback. The browser sees the dashboard at `http://localhost:8000/pincher/v1/dashboard` exactly as if pincher were natively serving it on LocalMCP's port.
+Only `:8000` is reachable from outside the container. Pincher's HTTP server stays on loopback. The browser sees the dashboard at `http://localhost:8000/pincher/v1/dashboard` exactly as if pincher were natively serving it on zelosMCP's port.
 
 ## Schema
 
@@ -32,7 +32,7 @@ A backend's `mcpServers.<name>` entry can include an optional `reverseProxy` blo
 
 | Field | Required | Type | Default | Notes |
 |---|---|---|---|---|
-| `mount` | yes | string | — | URL prefix on LocalMCP. Must start with `/`, no trailing `/`, no `..`, no whitespace. Cannot collide with [reserved mounts](#reserved-mounts). |
+| `mount` | yes | string | — | URL prefix on zelosMCP. Must start with `/`, no trailing `/`, no `..`, no whitespace. Cannot collide with [reserved mounts](#reserved-mounts). |
 | `upstream` | yes | string | — | Backend HTTP sidecar URL. Must be `http://` or `https://` with a host. Recommend a loopback host (`127.0.0.1`, `localhost`) — see [Network isolation](#network-isolation). |
 | `stripPrefix` | no | bool | `false` | Strip `mount` from the request path before forwarding. Off by default — pincher and other prefix-aware servers prefer to see the original path plus `X-Forwarded-Prefix`. Turn on for upstreams that don't understand the header. |
 | `headers` | no | object of strings | `{}` | Extra headers to inject on the forwarded request. Override the auto-injected `X-Forwarded-*` set by repeating the same key here. |
@@ -55,12 +55,12 @@ Hop-by-hop headers per RFC 7230 §6.1 (`Connection`, `Keep-Alive`, `Transfer-Enc
 
 ### Reserved mounts
 
-The same way [`mcpServers` rejects names that collide with built-in routes](configuration.md#reserved-names), `reverseProxy.mount` rejects path prefixes that would shadow LocalMCP's own surface or the MCP dispatcher:
+The same way [`mcpServers` rejects names that collide with built-in routes](configuration.md#reserved-names), `reverseProxy.mount` rejects path prefixes that would shadow zelosMCP's own surface or the MCP dispatcher:
 
 | Mount | Why |
 |---|---|
 | `/` | Would intercept every route. |
-| `/api` | LocalMCP's control plane (`/api/*`). |
+| `/api` | zelosMCP's control plane (`/api/*`). |
 | `/mcp` | Aggregator endpoint. |
 | `/docs`, `/redoc`, `/openapi.json` | API docs. |
 | `/catalog` | Standalone catalog page. |
@@ -69,7 +69,7 @@ Two backends also can't claim **overlapping** mounts. `/foo` and `/foo/bar` are 
 
 ## Routing precedence
 
-When LocalMCP receives a request, it checks dispatch options in this order:
+When zelosMCP receives a request, it checks dispatch options in this order:
 
 1. **`/mcp`** → aggregator.
 2. **`/<name>/mcp`** → that backend's MCP session.
@@ -80,12 +80,12 @@ When LocalMCP receives a request, it checks dispatch options in this order:
 
 ## Network isolation
 
-The whole point of reverse-proxying is so backends can stay on the container's loopback while LocalMCP gates external access on its single port. Two pieces have to line up:
+The whole point of reverse-proxying is so backends can stay on the container's loopback while zelosMCP gates external access on its single port. Two pieces have to line up:
 
 1. **Bind the backend's HTTP server to `127.0.0.1:<port>`**, not `:<port>` or `0.0.0.0:<port>`.
-2. **Set `upstream` to the matching loopback URL** (e.g. `http://127.0.0.1:8080`). LocalMCP, sharing the namespace, reaches it directly.
+2. **Set `upstream` to the matching loopback URL** (e.g. `http://127.0.0.1:8080`). zelosMCP, sharing the namespace, reaches it directly.
 
-The default pincher entry in [`configs/default-localmcp.json`](../configs/default-localmcp.json) demonstrates the pattern:
+The default pincher entry in [`configs/default-zelosmcp.json`](../configs/default-zelosmcp.json) demonstrates the pattern:
 
 ```json
 "pincher": {
@@ -98,16 +98,16 @@ The default pincher entry in [`configs/default-localmcp.json`](../configs/defaul
 }
 ```
 
-`--trust-proxy` (a [pincher feature](https://github.com/kwad77/pincherMCP)) tells pincher to honour `X-Forwarded-Prefix` so its embedded dashboard JS rewrites its `/v1/...` fetch calls under the prefix automatically. With it on, LocalMCP can leave `stripPrefix: false` and forward paths verbatim.
+`--trust-proxy` (a [pincher feature](https://github.com/kwad77/pincherMCP)) tells pincher to honour `X-Forwarded-Prefix` so its embedded dashboard JS rewrites its `/v1/...` fetch calls under the prefix automatically. With it on, zelosMCP can leave `stripPrefix: false` and forward paths verbatim.
 
-LocalMCP runs in **bridge networking** with explicit port publishing (`docker run -p $LOCALMCP_BIND_ADDR:8000:8000 ...`). The default `LOCALMCP_BIND_ADDR=127.0.0.1` means only your Mac can reach `:8000`, and the container's loopback is fully isolated from the host's. Backend sidecars on `127.0.0.1:<port>` inside the container stay there; the Mac can't reach them at all. (Set `LOCALMCP_BIND_ADDR=0.0.0.0` if you want LAN access on `:8000`.)
+zelosMCP runs in **bridge networking** with explicit port publishing (`docker run -p $ZELOSMCP_BIND_ADDR:8000:8000 ...`). The default `ZELOSMCP_BIND_ADDR=127.0.0.1` means only your Mac can reach `:8000`, and the container's loopback is fully isolated from the host's. Backend sidecars on `127.0.0.1:<port>` inside the container stay there; the Mac can't reach them at all. (Set `ZELOSMCP_BIND_ADDR=0.0.0.0` if you want LAN access on `:8000`.)
 
 ### How to verify
 
 Check the actual bind from inside the container — pincher should appear once, on loopback:
 
 ```bash
-docker exec localmcp \
+docker exec zelosmcp \
   awk '$2 ~ /:1F90$/ { print }' /proc/net/tcp
 # Expect: ... 0100007F:1F90 ... LISTEN
 # (0100007F = 127.0.0.1 byte-reversed; 1F90 = 8080)
@@ -119,7 +119,7 @@ If you see `00000000:1F90` in that list, pincher is bound to all interfaces and 
 
 The default config wires pincher's REST + dashboard at `http://localhost:8000/pincher/v1/...`. After `make up`:
 
-| Original (direct, blocked) | Through LocalMCP |
+| Original (direct, blocked) | Through zelosMCP |
 |---|---|
 | `http://localhost:8080/v1/dashboard` | `http://localhost:8000/pincher/v1/dashboard` |
 | `http://localhost:8080/v1/openapi.json` | `http://localhost:8000/pincher/v1/openapi.json` |
@@ -172,7 +172,7 @@ The backend is running but its HTTP sidecar isn't listening at the configured `u
 
 - The backend was launched without its HTTP flag (e.g. pincher missing `--http 127.0.0.1:8080`).
 - Wrong port in `upstream`.
-- The backend is bound to a loopback address that's outside the LocalMCP container's namespace — under bridge networking, only ports inside the container can be reached as `127.0.0.1` from LocalMCP's reverse proxy.
+- The backend is bound to a loopback address that's outside the zelosMCP container's namespace — under bridge networking, only ports inside the container can be reached as `127.0.0.1` from zelosMCP's reverse proxy.
 
 ### "Two backends both want `/foo` — config rejected"
 
@@ -180,10 +180,10 @@ Mount overlap. `parse_config` rejects `/foo` + `/foo` (exact dup) and `/foo` + `
 
 ### "My OpenAPI client builds the wrong URL behind the proxy"
 
-Tools that consume OpenAPI specs need the backend itself to advertise its base path, not just LocalMCP. Pincher does this via `--trust-proxy` + `X-Forwarded-*` headers, which LocalMCP injects automatically. For other backends, check whether they have an equivalent setting (Spring Boot's `server.forward-headers-strategy=framework`, FastAPI's `root_path`, etc.).
+Tools that consume OpenAPI specs need the backend itself to advertise its base path, not just zelosMCP. Pincher does this via `--trust-proxy` + `X-Forwarded-*` headers, which zelosMCP injects automatically. For other backends, check whether they have an equivalent setting (Spring Boot's `server.forward-headers-strategy=framework`, FastAPI's `root_path`, etc.).
 
 ## See also
 
 - [configuration.md](configuration.md) — the parent `mcpServers` schema.
 - [default-mcps.md](default-mcps.md#pincher) — pincher's reverse-proxy entry in the default config.
-- [architecture.md](architecture.md) — how reverse-proxy fits into LocalMCP's overall dispatch.
+- [architecture.md](architecture.md) — how reverse-proxy fits into zelosMCP's overall dispatch.

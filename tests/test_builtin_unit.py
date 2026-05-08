@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from localmcp.builtin import (
+from zelosmcp.builtin import (
     NAME,
     _HANDLERS,
     _TOOLS,
@@ -264,7 +264,7 @@ class TestRenderComprehensiveRule:
         _, _, mdc_body = mdc_after.partition("---\n")  # remove second ---
         assert mdc_body == copi
         # Body still carries the directive + per-tool entry.
-        assert "# LocalMCP backend tool catalog" in copi
+        assert "# zelosMCP backend tool catalog" in copi
         assert "Access mode: READ-ONLY" in copi
         assert "`fs__read_text_file`" in copi
 
@@ -493,7 +493,7 @@ class TestRenderComprehensiveRule:
         assert "Pre-flight check (run BEFORE every response)" in out
         assert "MANDATORY:" in out
         assert "Forbidden fallbacks" in out
-        assert "Violating LocalMCP rule because" in out
+        assert "Violating zelosMCP rule because" in out
         assert "FIRST tool call MUST be a `pincher__*` tool" in out
         assert "FIRST tool call MUST be a `filesystem__*` tool" in out
 
@@ -528,7 +528,7 @@ class TestRenderComprehensiveRule:
         assert "## Mandatory backend playbook" not in out
 
     def test_full_default_set_renders_cleanly(self):
-        """Smoke test: a default-localmcp.json-shaped catalog renders
+        """Smoke test: a default-zelosmcp.json-shaped catalog renders
         every backend as its own section with per-tool entries."""
         catalog = {
             "filesystem": _backend(
@@ -635,7 +635,7 @@ class TestToolHandlers:
 
     @pytest.mark.asyncio
     async def test_generate_cursor_rule_handler_default_read_only(self):
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         # builtin not started: catalog is empty -> rule reports no backends.
@@ -650,7 +650,7 @@ class TestToolHandlers:
 
     @pytest.mark.asyncio
     async def test_generate_cursor_rule_access_read_write(self):
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_rule"](
@@ -663,7 +663,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_rejects_bad_access(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown access"):
@@ -675,7 +675,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_format_copilot_instructions(self):
         """Handler accepts `format=copilot-instructions` and returns a
         body without the YAML frontmatter."""
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_rule"](
@@ -691,7 +691,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_rejects_bad_format(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown format"):
@@ -703,7 +703,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_rejects_bad_style(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown style"):
@@ -715,7 +715,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_default_tool_use_is_priority(self):
         """Default `tool_use=priority` produces a body containing the
         priority directive even when no backends are loaded."""
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_rule"](m.builtin, {})
@@ -754,7 +754,7 @@ class TestToolHandlers:
     async def test_generate_cursor_rule_rejects_bad_tool_use(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="Unknown tool_use"):
@@ -764,12 +764,12 @@ class TestToolHandlers:
 
     @pytest.mark.asyncio
     async def test_get_aggregated_tool_catalog_returns_full_payload(self):
-        """`localmcp__get_aggregated_tool_catalog` must return rich
+        """`zelosmcp__get_aggregated_tool_catalog` must return rich
         Tool/Prompt/Resource payloads (with inputSchema for tools), not
         just names. The HTTP `/api/catalog` shares the same helper, so
         this also locks in that endpoint's shape."""
-        from localmcp.builtin import collect_backend_full_catalog
-        from localmcp.manager import ProxyManager
+        from zelosmcp.builtin import collect_backend_full_catalog
+        from zelosmcp.manager import ProxyManager
 
         # Synthesize a manager whose only "running" backend is a stub
         # client_session that mimics filesystem's tool surface.
@@ -828,8 +828,8 @@ class TestToolHandlers:
         from mcp.shared.exceptions import McpError
         from mcp.types import ErrorData, METHOD_NOT_FOUND, Tool
 
-        from localmcp.builtin import collect_backend_full_catalog
-        from localmcp.manager import ProxyManager
+        from zelosmcp.builtin import collect_backend_full_catalog
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
 
@@ -858,15 +858,15 @@ class TestToolHandlers:
 
     @pytest.mark.asyncio
     async def test_generate_cursor_mcp_json_aggregate(self):
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         result = await _HANDLERS["generate_cursor_mcp_json"](
             m.builtin, {"shape": "aggregate", "host": "127.0.0.1:9000"}
         )
         snippet = json.loads(result[0].text)
-        assert "localmcp-aggregate" in snippet["mcpServers"]
-        assert snippet["mcpServers"]["localmcp-aggregate"]["url"] == (
+        assert "zelosmcp-aggregate" in snippet["mcpServers"]
+        assert snippet["mcpServers"]["zelosmcp-aggregate"]["url"] == (
             "http://127.0.0.1:9000/mcp"
         )
 
@@ -874,7 +874,7 @@ class TestToolHandlers:
     async def test_start_server_refuses_self_targeting(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="builtin"):
@@ -886,7 +886,7 @@ class TestToolHandlers:
     async def test_start_server_requires_name(self):
         from mcp.shared.exceptions import McpError
 
-        from localmcp.manager import ProxyManager
+        from zelosmcp.manager import ProxyManager
 
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(McpError, match="`name` is required"):

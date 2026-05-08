@@ -4,14 +4,14 @@ Three measurement sources land here:
 
 1. **Compression snapshots** — produced by the aggregator each time
    ``list_tools`` runs. Compares the JSON-serialized full backend tool
-   catalog against the wrapper-pair view that LocalMCP actually returns.
+   catalog against the wrapper-pair view that zelosMCP actually returns.
 2. **Per-call token accounting** — every ``call_tool`` (raw or compressed)
    contributes input/output token counts plus latency.
 3. **Pincher self-reported savings** — pincher already returns BPE-correct
    counts via the ``_meta`` envelope and a ``pincher__stats`` summary.
    We probe both shapes and persist them verbatim alongside.
 
-Counters live in the SQLite store from :mod:`localmcp.savings_db`. The
+Counters live in the SQLite store from :mod:`zelosmcp.savings_db`. The
 recorder is the only thing instrumented call sites import — it owns lock
 contention, error swallowing, and the broadcast hook the SSE endpoint
 listens on.
@@ -24,9 +24,9 @@ import logging
 import time
 from typing import Any, Awaitable, Callable
 
-from localmcp.savings_db import SavingsStore
+from zelosmcp.savings_db import SavingsStore
 
-logger = logging.getLogger("localmcp.savings")
+logger = logging.getLogger("zelosmcp.savings")
 
 
 # Encoding name used for the optional tiktoken backend. cl100k_base is the
@@ -222,10 +222,10 @@ def render_call_output_text(call_result: Any) -> str:
 
 
 # Built-in / introspection backends excluded from dashboard totals so the
-# dashboard's own queries don't pollute its metrics. ``localmcp__*`` is
+# dashboard's own queries don't pollute its metrics. ``zelosmcp__*`` is
 # the always-on built-in MCP; the recorder still writes events for it
 # (useful for debugging) but the public aggregations subtract it.
-_EXCLUDE_FROM_TOTALS: tuple[str, ...] = ("localmcp",)
+_EXCLUDE_FROM_TOTALS: tuple[str, ...] = ("zelosmcp",)
 
 
 # Cap a single tokenization payload before falling back to the heuristic.

@@ -1,4 +1,4 @@
-"""Integration tests for the localmcp ASGI app (multi-MCP version)."""
+"""Integration tests for the zelosmcp ASGI app (multi-MCP version)."""
 from __future__ import annotations
 
 import asyncio
@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from localmcp.app import create_app
-from localmcp.manager import ProxyManager
+from zelosmcp.app import create_app
+from zelosmcp.manager import ProxyManager
 from tests.conftest import (
     fake_stdio_client,
     fake_sse_client,
@@ -44,11 +44,11 @@ def _apply_patches():
 
     return (
         mock_session,
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.sse_client", side_effect=fake_sse_client),
-        patch("localmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
-        patch("localmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.sse_client", side_effect=fake_sse_client),
+        patch("zelosmcp.proxy.streamablehttp_client", side_effect=fake_http_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.StreamableHTTPSessionManager.run", patched_run),
     )
 
 
@@ -70,7 +70,7 @@ class TestUIRoute:
             r = await c.get("/")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
-        assert "LOCALMCP" in r.text
+        assert "ZELOSMCP" in r.text
 
     @pytest.mark.asyncio
     async def test_index_contains_mcp_json_snippet(self):
@@ -177,7 +177,7 @@ class TestStatusAPI:
         data = r.json()
         assert data["running"] is False
         assert data["primary"] is None
-        # `localmcp` is the always-on builtin row; only user backends matter here.
+        # `zelosmcp` is the always-on builtin row; only user backends matter here.
         user_servers = [s for s in data["servers"] if not s.get("builtin")]
         assert user_servers == []
 
@@ -269,12 +269,12 @@ class TestStartAPI:
             app, manager = _fresh()
             async with _client(app) as c:
                 await c.post("/api/start", json=_STDIO_CONFIG)
-                user = {n for n in manager.names() if n != "localmcp"}
+                user = {n for n in manager.names() if n != "zelosmcp"}
                 assert user == {"alpha", "beta"}
                 await c.post("/api/start", json={
                     "mcpServers": {"gamma": {"command": "echo", "args": ["g"]}},
                 })
-                user = {n for n in manager.names() if n != "localmcp"}
+                user = {n for n in manager.names() if n != "zelosmcp"}
                 assert user == {"gamma"}
             await manager.stop_all()
 
@@ -365,7 +365,7 @@ class TestStopAPI:
                 await c.post("/api/start", json=_STDIO_CONFIG)
                 r = await c.post("/api/stop")
             assert r.status_code == 200
-            user = [n for n in manager.names() if n != "localmcp"]
+            user = [n for n in manager.names() if n != "zelosmcp"]
             assert user == []
 
 
@@ -569,7 +569,7 @@ class TestFullLifecycle:
                 assert user == []
 
 
-# ── Built-in MCP (/localmcp/mcp + /api/cursor-rule + aggregate) ─────────
+# ── Built-in MCP (/zelosmcp/mcp + /api/cursor-rule + aggregate) ─────────
 
 
 @asynccontextmanager
@@ -615,7 +615,7 @@ class TestCursorRuleEndpoint:
             assert r.status_code == 200
             assert r.headers["content-type"].startswith("text/markdown")
             assert "alwaysApply: true" in r.text
-            assert "# LocalMCP backends" in r.text
+            assert "# zelosMCP backends" in r.text
             # No user backends -> generator emits the "no backends loaded" body.
             assert "No user backends are currently loaded" in r.text
             # Default access is read-only -> directive is present.
@@ -750,9 +750,9 @@ class TestCursorRuleEndpoint:
 
 class TestBuiltinMcp:
     @pytest.mark.asyncio
-    async def test_aggregate_exposes_localmcp_tools(self):
+    async def test_aggregate_exposes_zelosmcp_tools(self):
         """With no user backends configured, /mcp still serves the eight
-        `localmcp__*` tools provided by the built-in."""
+        `zelosmcp__*` tools provided by the built-in."""
         app, _ = _fresh()
         async with _lifespan(app):
             async with _client(app) as c:
@@ -776,7 +776,7 @@ class TestBuiltinMcp:
             data = r.json()
             names = {t["name"] for t in data["result"]["tools"]}
             expected = {
-                f"localmcp__{n}"
+                f"zelosmcp__{n}"
                 for n in (
                     "generate_cursor_rule",
                     "list_loaded_servers",
@@ -790,8 +790,8 @@ class TestBuiltinMcp:
             assert expected <= names
 
     @pytest.mark.asyncio
-    async def test_localmcp_mcp_direct_route_unprefixed(self):
-        """At /localmcp/mcp the same tools appear without the `localmcp__`
+    async def test_zelosmcp_mcp_direct_route_unprefixed(self):
+        """At /zelosmcp/mcp the same tools appear without the `zelosmcp__`
         namespace prefix (raw passthrough)."""
         app, _ = _fresh()
         async with _lifespan(app):
@@ -807,9 +807,9 @@ class TestBuiltinMcp:
                     },
                 }
                 headers = {"Accept": "application/json, text/event-stream"}
-                await c.post("/localmcp/mcp", json=init, headers=headers)
+                await c.post("/zelosmcp/mcp", json=init, headers=headers)
                 r = await c.post(
-                    "/localmcp/mcp",
+                    "/zelosmcp/mcp",
                     json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
                     headers=headers,
                 )
@@ -817,11 +817,11 @@ class TestBuiltinMcp:
             names = {t["name"] for t in data["result"]["tools"]}
             assert "generate_cursor_rule" in names
             # No prefix at the direct route.
-            assert not any(n.startswith("localmcp__") for n in names)
+            assert not any(n.startswith("zelosmcp__") for n in names)
 
     @pytest.mark.asyncio
     async def test_aggregate_call_tool_round_trip(self):
-        """Round-trip a `tools/call` of `localmcp__generate_cursor_rule`
+        """Round-trip a `tools/call` of `zelosmcp__generate_cursor_rule`
         at /mcp and assert the body is the same shape /api/cursor-rule
         returns."""
         app, _ = _fresh()
@@ -846,7 +846,7 @@ class TestBuiltinMcp:
                         "id": 2,
                         "method": "tools/call",
                         "params": {
-                            "name": "localmcp__generate_cursor_rule",
+                            "name": "zelosmcp__generate_cursor_rule",
                             "arguments": {},
                         },
                     },
@@ -876,8 +876,8 @@ class TestCatalogEndpoint:
             assert r.status_code == 200
             assert r.headers["content-type"].startswith("application/json")
             data = r.json()
-            assert "localmcp" in data
-            row = data["localmcp"]
+            assert "zelosmcp" in data
+            row = data["zelosmcp"]
             assert row["transport"] == "builtin"
             assert row["running"] is True
             tools = row["tools"]
@@ -907,7 +907,7 @@ class TestCatalogEndpoint:
 
     @pytest.mark.asyncio
     async def test_api_catalog_matches_mcp_tool(self):
-        """`/api/catalog` and `localmcp__get_aggregated_tool_catalog` use
+        """`/api/catalog` and `zelosmcp__get_aggregated_tool_catalog` use
         the same helper, so the JSON they emit must be identical."""
         app, _ = _fresh()
         async with _lifespan(app):
@@ -932,7 +932,7 @@ class TestCatalogEndpoint:
                     json={
                         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                         "params": {
-                            "name": "localmcp__get_aggregated_tool_catalog",
+                            "name": "zelosmcp__get_aggregated_tool_catalog",
                             "arguments": {},
                         },
                     },
@@ -1088,7 +1088,7 @@ class TestReverseProxy:
         async with _lifespan(app):
             # Skip _apply_patches so start_all is never called — the spec is
             # injected directly into _specs but no ProxyState exists.
-            from localmcp.config import parse_config
+            from zelosmcp.config import parse_config
             specs, _ = parse_config(_PROXY_CONFIG)
             manager._specs = {s.name: s for s in specs}
 
@@ -1299,8 +1299,8 @@ async def _compress_test_env():
         yield mock_session
 
     with (
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
     ):
         app, manager = _fresh()
         async with _lifespan(app):
@@ -1431,7 +1431,7 @@ class TestPerBackendGlobalScope:
 
 
 class TestBuiltinListCompressedTools:
-    """The builtin `localmcp__list_compressed_tools` tool surfaces the
+    """The builtin `zelosmcp__list_compressed_tools` tool surfaces the
     aggregator's catalog cache for any backend with compress configured —
     independent of scope, so scope=catalog backends still show up."""
 
@@ -1451,7 +1451,7 @@ class TestBuiltinListCompressedTools:
                     json={
                         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                         "params": {
-                            "name": "localmcp__list_compressed_tools",
+                            "name": "zelosmcp__list_compressed_tools",
                             "arguments": {},
                         },
                     },
@@ -1479,7 +1479,7 @@ class TestBuiltinListCompressedTools:
                     json={
                         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                         "params": {
-                            "name": "localmcp__list_compressed_tools",
+                            "name": "zelosmcp__list_compressed_tools",
                             "arguments": {},
                         },
                     },
@@ -1504,7 +1504,7 @@ class TestBuiltinListCompressedTools:
                     json={
                         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                         "params": {
-                            "name": "localmcp__list_compressed_tools",
+                            "name": "zelosmcp__list_compressed_tools",
                             "arguments": {"level": "high"},
                         },
                     },

@@ -18,21 +18,21 @@ from starlette.responses import (
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 
-from localmcp.builtin import (
+from zelosmcp.builtin import (
     collect_backend_full_catalog,
     render_comprehensive_rule,
 )
-from localmcp.config import ConfigError
-from localmcp.docs import list_docs, read_doc
-from localmcp.manager import ProxyManager
-from localmcp.repos import (
+from zelosmcp.config import ConfigError
+from zelosmcp.docs import list_docs, read_doc
+from zelosmcp.manager import ProxyManager
+from zelosmcp.repos import (
     RULE_RELATIVE_PATHS,
     discover_repos,
     is_under_scan_root,
     rule_target,
     to_rw_path,
 )
-from localmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
+from zelosmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -41,7 +41,7 @@ SCHEMA = SchemaGenerator(
     {
         "openapi": "3.0.3",
         "info": {
-            "title": "LocalMCP",
+            "title": "zelosMCP",
             "version": "0.3.0",
             "description": (
                 "Wrap one or more MCP servers and re-expose them on stable local URLs.\n\n"
@@ -53,9 +53,9 @@ SCHEMA = SchemaGenerator(
                 "verbatim; reads are routed to the originating backend via a "
                 "URI->backend cache populated from `resources/list`, with a fan-out "
                 "fallback for URIs not previously listed.\n"
-                "- `/localmcp/mcp` is the always-on built-in MCP that exposes "
+                "- `/zelosmcp/mcp` is the always-on built-in MCP that exposes "
                 "self-introspection and Cursor-rule-generation tools "
-                "(`localmcp__*` at /mcp). It survives configuration reloads."
+                "(`zelosmcp__*` at /mcp). It survives configuration reloads."
             ),
         },
         "servers": [{"url": "http://localhost:8000"}],
@@ -72,7 +72,7 @@ _SWAGGER_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>LocalMCP API</title>
+  <title>zelosMCP API</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
 </head>
 <body>
@@ -97,7 +97,7 @@ _REDOC_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>LocalMCP API</title>
+  <title>zelosMCP API</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>body { margin: 0; padding: 0; }</style>
 </head>
@@ -172,7 +172,7 @@ def create_app(manager: ProxyManager | None = None):
         """
         responses:
           200:
-            description: Swagger UI for the LocalMCP HTTP API.
+            description: Swagger UI for the zelosMCP HTTP API.
         """
         return HTMLResponse(_SWAGGER_HTML)
 
@@ -180,7 +180,7 @@ def create_app(manager: ProxyManager | None = None):
         """
         responses:
           200:
-            description: ReDoc rendering of the LocalMCP HTTP API.
+            description: ReDoc rendering of the zelosMCP HTTP API.
         """
         return HTMLResponse(_REDOC_HTML)
 
@@ -390,7 +390,7 @@ def create_app(manager: ProxyManager | None = None):
               description, inputSchema where applicable). Capabilities
               the backend doesn't implement (`-32601`) are returned as
               empty lists. Both this endpoint and the
-              `localmcp__get_aggregated_tool_catalog` MCP tool return
+              `zelosmcp__get_aggregated_tool_catalog` MCP tool return
               the same shape.
             content:
               application/json:
@@ -671,11 +671,11 @@ def create_app(manager: ProxyManager | None = None):
         """
         summary: List git repositories discovered under the read-only mount.
         description: |
-          Walks ``/user_data_ro`` (or whatever ``LOCALMCP_REPO_SCAN_ROOT``
+          Walks ``/user_data_ro`` (or whatever ``ZELOSMCP_REPO_SCAN_ROOT``
           points at) shallowly, returning every directory containing a
           ``.git`` entry. Each result includes the read-only path, the
           read-write twin under ``/user_data_rw`` (used by the filesystem
-          MCP for writes), whether a ``.cursor/rules/localmcp.mdc`` already
+          MCP for writes), whether a ``.cursor/rules/zelosmcp.mdc`` already
           exists, and whether pincher has indexed the repo as a project.
           Results are cached for 30 s; pass ``refresh=1`` to bust the cache.
         tags: [introspection]
@@ -702,7 +702,7 @@ def create_app(manager: ProxyManager | None = None):
                 result = await pi.client_session.call_tool("list", {})
                 indexed = _extract_pincher_indexed_paths(result)
             except Exception as exc:
-                logging.getLogger("localmcp").info(
+                logging.getLogger("zelosmcp").info(
                     "pincher__list failed during /api/repos: %s", exc
                 )
         out = []
@@ -721,7 +721,7 @@ def create_app(manager: ProxyManager | None = None):
           the running ``filesystem`` MCP backend. The target directory is
           computed by swapping the read-only mount prefix for the
           read-write one (e.g. ``/user_data_ro/foo`` ->
-          ``/user_data_rw/foo/.cursor/rules/localmcp.mdc``). Filesystem's
+          ``/user_data_rw/foo/.cursor/rules/zelosmcp.mdc``). Filesystem's
           own sandbox refuses writes outside ``/user_data_rw``, so this
           handler trusts that gate after a single prefix check.
         tags: [introspection]
@@ -843,12 +843,12 @@ def create_app(manager: ProxyManager | None = None):
     @contextlib.asynccontextmanager
     async def lifespan(app):
         # Start the always-on builtin MCP before serving any traffic so
-        # /localmcp/mcp answers immediately and the aggregator can already
+        # /zelosmcp/mcp answers immediately and the aggregator can already
         # fan tools/list out to the builtin's in-memory client session.
         try:
             await manager.start_builtin()
         except Exception as exc:  # never fail the whole app on builtin startup
-            logging.getLogger("localmcp").error(
+            logging.getLogger("zelosmcp").error(
                 "builtin failed to start: %s", exc, exc_info=True
             )
         # Bring up the reverse-proxy httpx client so the dispatcher can
@@ -857,7 +857,7 @@ def create_app(manager: ProxyManager | None = None):
         try:
             await manager.start_http_client()
         except Exception as exc:
-            logging.getLogger("localmcp").error(
+            logging.getLogger("zelosmcp").error(
                 "reverse-proxy client failed to start: %s", exc, exc_info=True
             )
         try:
@@ -940,7 +940,7 @@ def create_app(manager: ProxyManager | None = None):
 
             # Reverse-proxy dispatch: a backend may declare a
             # `reverseProxy.mount` so its HTTP sidecar is reachable
-            # under LocalMCP's port. Match on the original (un-stripped)
+            # under zelosMCP's port. Match on the original (un-stripped)
             # path since mounts are absolute. /<name>/mcp wins above so
             # a backend named `pincher` mounted at `/pincher` keeps
             # `/pincher/mcp` for MCP and routes `/pincher/v1/...` here.

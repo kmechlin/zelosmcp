@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compare LocalMCP's aggregator (`/mcp`) against every raw backend
+"""Compare zelosMCP's aggregator (`/mcp`) against every raw backend
 (`/<name>/mcp`) so you can quantify the combined effect of compression
 *and* aggregation across the whole stack.
 
-What it does (against a running LocalMCP instance):
+What it does (against a running zelosMCP instance):
 
 1. Discovers all running backends from ``GET /api/status`` (stdlib only —
    no extra deps to bootstrap the discovery step).
@@ -34,7 +34,7 @@ Usage::
     .venv/bin/python scripts/compare_aggregator_mcp.py
     .venv/bin/python scripts/compare_aggregator_mcp.py \
         --backends pincher,filesystem \
-        --call pincher.architecture:'{"project":"localmcp"}' \
+        --call pincher.architecture:'{"project":"zelosmcp"}' \
         --call filesystem.list_allowed_directories \
         --out-dir tmp/mcp_compare
 """
@@ -204,7 +204,7 @@ def discover_backends(base_url: str) -> list[dict[str, Any]]:
     except urllib.error.URLError as exc:
         raise SystemExit(
             f"Could not reach {url}: {exc}\n"
-            f"Is LocalMCP running? Try `make up`."
+            f"Is zelosMCP running? Try `make up`."
         ) from exc
     return [s for s in data.get("servers", []) if s.get("running")]
 
@@ -323,7 +323,7 @@ def print_report(
 ) -> None:
     print()
     print("=" * 96)
-    print(f"LocalMCP aggregator vs raw backends — tokenizer={TOKENIZER}")
+    print(f"zelosMCP aggregator vs raw backends — tokenizer={TOKENIZER}")
     print("=" * 96)
     print(f"  aggregator  : {agg.url}")
     for name, raw in raws.items():
@@ -660,7 +660,7 @@ def main() -> int:
     parser.add_argument(
         "--base-url",
         default="http://localhost:8000",
-        help="LocalMCP base URL (default %(default)s)",
+        help="zelosMCP base URL (default %(default)s)",
     )
     parser.add_argument(
         "--out-dir",
@@ -683,7 +683,7 @@ def main() -> int:
         help=(
             "Run a sample tools/call on both endpoints and compare. "
             'Examples: "pincher.architecture", '
-            '"pincher.search:{\\"query\\":\\"foo\\",\\"project\\":\\"localmcp\\"}", '
+            '"pincher.search:{\\"query\\":\\"foo\\",\\"project\\":\\"zelosmcp\\"}", '
             '"filesystem.list_allowed_directories". Repeatable.'
         ),
     )

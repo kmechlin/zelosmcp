@@ -1,9 +1,9 @@
-"""Unit tests for localmcp.config.parse_config / ServerSpec."""
+"""Unit tests for zelosmcp.config.parse_config / ServerSpec."""
 from __future__ import annotations
 
 import pytest
 
-from localmcp.config import (
+from zelosmcp.config import (
     COMPRESS_LEVELS,
     COMPRESS_SCOPES,
     CompressSpec,
@@ -117,7 +117,7 @@ class TestRemote:
 class TestNames:
     @pytest.mark.parametrize(
         "name",
-        ["api", "mcp", "docs", "redoc", "openapi.json", "localmcp"],
+        ["api", "mcp", "docs", "redoc", "openapi.json", "zelosmcp"],
     )
     def test_reserved_names_rejected(self, name):
         with pytest.raises(ConfigError, match="reserved"):

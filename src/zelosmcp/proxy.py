@@ -15,15 +15,15 @@ from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool
 
-from localmcp.compression import (
+from zelosmcp.compression import (
     compressed_tool_list,
     handle_compressed_call,
     wrapper_tool_names,
 )
-from localmcp.config import CompressSpec
-from localmcp.savings import measure_call
+from zelosmcp.config import CompressSpec
+from zelosmcp.savings import measure_call
 
-logger = logging.getLogger("localmcp")
+logger = logging.getLogger("zelosmcp")
 
 
 def _take_streams(ctx: Any) -> tuple[Any, Any]:

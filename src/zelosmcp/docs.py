@@ -2,7 +2,7 @@
 
 Files served are read-only and shipped in the repo / image:
 
-- ``<repo>/docs/*.md`` (or ``/app/docs/*.md`` / ``/opt/localmcp/docs/*.md``
+- ``<repo>/docs/*.md`` (or ``/app/docs/*.md`` / ``/opt/zelosmcp/docs/*.md``
   in Docker, depending on which Dockerfile built the image).
 
 Slugs are derived from filenames (lowercase, ``.md`` stripped). Reads
@@ -16,7 +16,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-logger = logging.getLogger("localmcp.docs")
+logger = logging.getLogger("zelosmcp.docs")
 
 
 # ── Filesystem discovery ────────────────────────────────────────────────
@@ -28,7 +28,7 @@ def _docs_root() -> Path | None:
     Tried in order:
 
     - editable install: ``parents[2]`` of this file is the repo root when
-      installed via ``pip install -e .`` (e.g. ``/opt/localmcp/docs`` in
+      installed via ``pip install -e .`` (e.g. ``/opt/zelosmcp/docs`` in
       the corp-cert image, ``<repo>/docs`` on a host checkout).
     - upstream Dockerfile image: ``/app/docs``.
     - cwd fallback: ``<cwd>/docs``.
@@ -36,7 +36,7 @@ def _docs_root() -> Path | None:
     candidates = (
         Path(__file__).resolve().parents[2] / "docs",
         Path("/app/docs"),
-        Path("/opt/localmcp/docs"),
+        Path("/opt/zelosmcp/docs"),
         Path.cwd() / "docs",
     )
     for c in candidates:

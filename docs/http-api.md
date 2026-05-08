@@ -1,6 +1,6 @@
 # HTTP API reference
 
-LocalMCP exposes a small REST control plane plus the MCP routes themselves. The interactive Swagger UI lives at [`/docs`](http://localhost:8000/docs); ReDoc at [`/redoc`](http://localhost:8000/redoc); the underlying spec at [`/openapi.json`](http://localhost:8000/openapi.json). This page is the human-readable summary.
+zelosMCP exposes a small REST control plane plus the MCP routes themselves. The interactive Swagger UI lives at [`/docs`](http://localhost:8000/docs); ReDoc at [`/redoc`](http://localhost:8000/redoc); the underlying spec at [`/openapi.json`](http://localhost:8000/openapi.json). This page is the human-readable summary.
 
 ## Endpoint table
 
@@ -16,13 +16,13 @@ LocalMCP exposes a small REST control plane plus the MCP routes themselves. The 
 | POST | `/api/servers/{name}/start` | Start a single configured server |
 | POST | `/api/servers/{name}/stop` | Stop a single server |
 | GET | `/api/logs` | SSE stream of activity logs (each line tagged `[<name>]`) |
-| GET | `/api/catalog` | JSON snapshot of every backend's tools / prompts / resources / templates with full payloads (`inputSchema`, etc.). Same shape as `localmcp__get_aggregated_tool_catalog`. |
+| GET | `/api/catalog` | JSON snapshot of every backend's tools / prompts / resources / templates with full payloads (`inputSchema`, etc.). Same shape as `zelosmcp__get_aggregated_tool_catalog`. |
 | GET | `/api/cursor-rule` | Comprehensive agent-instructions body. Query params: `access`, `format`, `style`, `globs`. Returns `text/markdown`. |
 | GET | `/api/repos` | List git repos discovered under `/user_data_ro`. Query param `refresh=1` busts the 30 s cache. See [docs/repositories.md](repositories.md). |
 | POST | `/api/repos/write-rule` | Generate a Cursor / Copilot rule and write it into a discovered repo via the `filesystem` MCP. |
 | POST | `/api/repos/index` | Forward a repo path to `pincher__index` so its symbols are queryable. |
 | ANY | `/<name>/mcp` | Streamable-HTTP MCP endpoint for a named backend (raw passthrough) |
-| ANY | `/localmcp/mcp` | Always-on built-in MCP (raw passthrough) — self-introspection + rule-generation tools |
+| ANY | `/zelosmcp/mcp` | Always-on built-in MCP (raw passthrough) — self-introspection + rule-generation tools |
 | ANY | `/mcp` | **Recommended.** Aggregated Streamable-HTTP MCP — union of every running backend (incl. the built-in), namespaced as `<server>__<tool>` |
 
 ## `/api/cursor-rule` query params in detail
@@ -52,7 +52,7 @@ curl -sS http://localhost:8000/api/status | jq
   "primary": null,
   "running": true,
   "servers": [
-    { "name": "localmcp",    "running": true,  "builtin": true,  "transport": "builtin", ... },
+    { "name": "zelosmcp",    "running": true,  "builtin": true,  "transport": "builtin", ... },
     { "name": "filesystem",  "running": true,  "builtin": false, "transport": "stdio",   ... },
     { "name": "pincher",     "running": true,  "builtin": false, "transport": "stdio",   ... }
   ]
@@ -66,7 +66,7 @@ curl -sS http://localhost:8000/api/status | jq
 ```bash
 curl -sS -X POST http://localhost:8000/api/start \
   -H 'Content-Type: application/json' \
-  --data-binary @configs/default-localmcp.json | jq
+  --data-binary @configs/default-zelosmcp.json | jq
 ```
 
 ```json
@@ -94,7 +94,7 @@ Server-Sent Events; each line is `data: [HH:MM:SS] [<name>] <message>`. Open mul
 
 ```bash
 curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only' \
-  > .cursor/rules/localmcp.mdc
+  > .cursor/rules/zelosmcp.mdc
 ```
 
 ### Generate a Copilot custom-instructions file
@@ -108,14 +108,14 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
 
 ```bash
 curl -fsSL 'http://localhost:8000/api/cursor-rule?style=scoped&globs=**/*.py' \
-  > .cursor/rules/localmcp-python.mdc
+  > .cursor/rules/zelosmcp-python.mdc
 ```
 
 ### Generate a neutral catalog rule (no prioritization)
 
 ```bash
 curl -fsSL 'http://localhost:8000/api/cursor-rule?tool_use=available' \
-  > .cursor/rules/localmcp.mdc
+  > .cursor/rules/zelosmcp.mdc
 ```
 
 ### Snapshot the full tool catalog
@@ -125,7 +125,7 @@ curl -sS http://localhost:8000/api/catalog | jq 'keys'
 ```
 
 ```json
-["docker", "filesystem", "kubernetes", "localmcp", "pincher"]
+["docker", "filesystem", "kubernetes", "zelosmcp", "pincher"]
 ```
 
 ```bash
@@ -145,7 +145,7 @@ curl -sS -X POST http://localhost:8000/api/servers/docker/stop  | jq
 curl -sS -X POST http://localhost:8000/api/servers/docker/start | jq
 ```
 
-Refuses `localmcp` (the built-in is always-on).
+Refuses `zelosmcp` (the built-in is always-on).
 
 ### Stop everything
 
@@ -153,7 +153,7 @@ Refuses `localmcp` (the built-in is always-on).
 curl -sS -X POST http://localhost:8000/api/stop | jq
 ```
 
-User backends shut down; the built-in MCP at `/localmcp/mcp` (and its tools surfaced as `localmcp__*` at `/mcp`) keep running.
+User backends shut down; the built-in MCP at `/zelosmcp/mcp` (and its tools surfaced as `zelosmcp__*` at `/mcp`) keep running.
 
 ## Status / start response shapes
 
@@ -182,7 +182,7 @@ User backends shut down; the built-in MCP at `/localmcp/mcp` (and its tools surf
 }
 ```
 
-`spec` echoes back the JSON config sent to `/api/start`. `running` at the top level excludes the always-on `localmcp` builtin so the boolean still means "any user-configured backend is up".
+`spec` echoes back the JSON config sent to `/api/start`. `running` at the top level excludes the always-on `zelosmcp` builtin so the boolean still means "any user-configured backend is up".
 
 ### `POST /api/start`
 
@@ -201,7 +201,7 @@ User backends shut down; the built-in MCP at `/localmcp/mcp` (and its tools surf
 
 ## MCP routes
 
-The streamable-HTTP MCP routes (`/<name>/mcp`, `/localmcp/mcp`, `/mcp`) speak the [MCP protocol](https://modelcontextprotocol.io/) directly. They're not REST — calling them with curl requires constructing JSON-RPC envelopes.
+The streamable-HTTP MCP routes (`/<name>/mcp`, `/zelosmcp/mcp`, `/mcp`) speak the [MCP protocol](https://modelcontextprotocol.io/) directly. They're not REST — calling them with curl requires constructing JSON-RPC envelopes.
 
 A round-trip example (initialize + tools/list at `/mcp`):
 
@@ -228,5 +228,5 @@ For programmatic MCP clients, point at `http://localhost:8000/mcp` over streamab
 ## See also
 
 - [configuration.md](configuration.md) — the JSON schema `/api/start` accepts.
-- [built-in-mcp.md](built-in-mcp.md) — the seven `localmcp__*` tools and how they relate to the HTTP API.
+- [built-in-mcp.md](built-in-mcp.md) — the seven `zelosmcp__*` tools and how they relate to the HTTP API.
 - [`/docs`](http://localhost:8000/docs) — interactive Swagger UI for the same endpoints.

@@ -1,9 +1,9 @@
 # Default MCP backends
 
-LocalMCP ships with two layers of pre-wired MCP backends:
+zelosMCP ships with two layers of pre-wired MCP backends:
 
-- **Mandatory** ([`configs/mandatory-localmcp.json`](../configs/mandatory-localmcp.json)) — `pincher` and `filesystem` are merged into every `/api/start` payload before parsing. User configs can override their args/env (same-name entries win), but you don't have to copy them into your own config to get them running.
-- **Default** ([`configs/default-localmcp.json`](../configs/default-localmcp.json)) — `kubernetes` and `docker` ship in the file `make load` POSTs by default. Drop them, change them, or replace the whole file by overriding `LOCALMCP_CONFIG`.
+- **Mandatory** ([`configs/mandatory-zelosmcp.json`](../configs/mandatory-zelosmcp.json)) — `pincher` and `filesystem` are merged into every `/api/start` payload before parsing. User configs can override their args/env (same-name entries win), but you don't have to copy them into your own config to get them running.
+- **Default** ([`configs/default-zelosmcp.json`](../configs/default-zelosmcp.json)) — `kubernetes` and `docker` ship in the file `make load` POSTs by default. Drop them, change them, or replace the whole file by overriding `ZELOSMCP_CONFIG`.
 
 | Backend | Layer | Upstream | Transport | Purpose |
 |---|---|---|---|---|
@@ -31,7 +31,7 @@ The web UI's right-column **Repositories** panel uses `filesystem__write_file` a
 }
 ```
 
-The `/user_data_rw` argument is the sandbox — the server will refuse to read or write outside it. Inside the LocalMCP container, `/user_data_rw` is bind-mounted (read/write) to your host's `$USER_DATA_ROOT` (default `$HOME`). The same host directory is also mounted read-only at `/user_data_ro` for backends like pincher that should not be able to write.
+The `/user_data_rw` argument is the sandbox — the server will refuse to read or write outside it. Inside the zelosMCP container, `/user_data_rw` is bind-mounted (read/write) to your host's `$USER_DATA_ROOT` (default `$HOME`). The same host directory is also mounted read-only at `/user_data_ro` for backends like pincher that should not be able to write.
 
 ### Tool surface (14 tools)
 
@@ -51,7 +51,7 @@ The `/user_data_rw` argument is the sandbox — the server will refuse to read o
 | `get_file_info` | `stat`-style metadata. |
 | `list_allowed_directories` | Sandbox roots the server is operating on. |
 
-All tools annotate their MCP `readOnlyHint` correctly, so the [LocalMCP rule generator](built-in-mcp.md) classifies them precisely (read-only inspection vs. mutating edit vs. destructive overwrite).
+All tools annotate their MCP `readOnlyHint` correctly, so the [zelosMCP rule generator](built-in-mcp.md) classifies them precisely (read-only inspection vs. mutating edit vs. destructive overwrite).
 
 ### Mounts needed
 
@@ -77,12 +77,12 @@ All tools annotate their MCP `readOnlyHint` correctly, so the [LocalMCP rule gen
 }
 ```
 
-`pincher` is pre-built into the LocalMCP container image (Go binary copied in from a multi-stage build — see the `pincher-build` stages in [`Dockerfile`](../Dockerfile) and [`docker-tools/Dockerfile`](../docker-tools/Dockerfile)). `--data-dir /tmp/pincher` puts the SQLite index DB at a path mounted to a named Docker volume, so the index survives container restarts.
+`pincher` is pre-built into the zelosMCP container image (Go binary copied in from a multi-stage build — see the `pincher-build` stages in [`Dockerfile`](../Dockerfile) and [`docker-tools/Dockerfile`](../docker-tools/Dockerfile)). `--data-dir /tmp/pincher` puts the SQLite index DB at a path mounted to a named Docker volume, so the index survives container restarts.
 
 Bump the version pin via the `PINCHER_VERSION` build arg:
 
 ```bash
-docker build --build-arg PINCHER_VERSION=v0.3.0 -t localmcp .
+docker build --build-arg PINCHER_VERSION=v0.3.0 -t zelosmcp .
 ```
 
 ### Tool surface (15 tools)
@@ -125,9 +125,9 @@ docker build --build-arg PINCHER_VERSION=v0.3.0 -t localmcp .
 ### Mounts needed
 
 - `$USER_DATA_ROOT -> /user_data_ro` read-only (the host tree being indexed)
-- `localmcp-pincher -> /tmp/pincher` (named volume — persists the SQLite index DB plus its WAL/SHM siblings across container restarts)
+- `zelosmcp-pincher -> /tmp/pincher` (named volume — persists the SQLite index DB plus its WAL/SHM siblings across container restarts)
 
-Pincher's WORKDIR is set to `/user_data_ro` in the container, so the kmechlin fork auto-indexes the entire user tree in the background a few minutes after spawn — no manual warm-up required. For the active git repo, `make load` chains `make index` so the current repo is queryable in seconds (toggle via `LOCALMCP_WARM_ON_LOAD=0`). Use `make index-full` on demand to force a re-scan of the whole `/user_data_ro` mount; pincher's auto-scan covers the same ground asynchronously.
+Pincher's WORKDIR is set to `/user_data_ro` in the container, so the kmechlin fork auto-indexes the entire user tree in the background a few minutes after spawn — no manual warm-up required. For the active git repo, `make load` chains `make index` so the current repo is queryable in seconds (toggle via `ZELOSMCP_WARM_ON_LOAD=0`). Use `make index-full` on demand to force a re-scan of the whole `/user_data_ro` mount; pincher's auto-scan covers the same ground asynchronously.
 
 ### Stable symbol IDs
 
@@ -136,14 +136,14 @@ Every symbol gets a human-readable ID that survives re-indexing:
 ```
 {file_path}::{qualified_name}#{kind}
 
-e.g.  "src/localmcp/aggregator.py::Aggregator.list_tools#Method"
+e.g.  "src/zelosmcp/aggregator.py::Aggregator.list_tools#Method"
 ```
 
 When a file is renamed, pincher records a redirect in `symbol_moves`. The `symbol` tool resolves stale IDs transparently — agents don't get "not found" because a file moved.
 
 ### Mutability classification
 
-Pincher's MCP server doesn't currently ship `readOnlyHint` / `destructiveHint` annotations on every tool, so the LocalMCP rule generator falls back to its name-prefix heuristic. `index` and `fetch` get tagged `[?]` (uncertain — they do mutate the index DB, but not the workspace itself); `search` / `query` / `symbol` etc. get tagged `[?]` too despite being pure reads. In `read-only` rule mode they're all blocked; in `read-write` mode they're all allowed. If precise classification matters, switch the rule to `read-write` for development sessions where you need pincher.
+Pincher's MCP server doesn't currently ship `readOnlyHint` / `destructiveHint` annotations on every tool, so the zelosMCP rule generator falls back to its name-prefix heuristic. `index` and `fetch` get tagged `[?]` (uncertain — they do mutate the index DB, but not the workspace itself); `search` / `query` / `symbol` etc. get tagged `[?]` too despite being pure reads. In `read-only` rule mode they're all blocked; in `read-write` mode they're all allowed. If precise classification matters, switch the rule to `read-write` for development sessions where you need pincher.
 
 ### Gotchas
 
@@ -190,8 +190,8 @@ Plus a `docker_compose` prompt and per-container stats/logs resources.
 ### Gotchas
 
 - **Security:** mounting the Docker socket is effectively root-on-host. Only run this backend on dev machines.
-- **No MCP annotations:** the upstream server doesn't ship `readOnlyHint` / `destructiveHint` annotations. The LocalMCP rule generator falls back to a name-prefix heuristic to classify mutability — `list_*` reads as `[?]` (uncertain) in read-only mode unless you switch to read-write.
-- **Daemon mismatch:** if the LocalMCP container runs on Docker Desktop but `DOCKER_SOCK_FILE` points at Rancher Desktop's socket, the bind-mount fails. Both sides have to align — see [setup-rancher-desktop.md](setup-rancher-desktop.md#how-localmcp-picks-up-your-daemon).
+- **No MCP annotations:** the upstream server doesn't ship `readOnlyHint` / `destructiveHint` annotations. The zelosMCP rule generator falls back to a name-prefix heuristic to classify mutability — `list_*` reads as `[?]` (uncertain) in read-only mode unless you switch to read-write.
+- **Daemon mismatch:** if the zelosMCP container runs on Docker Desktop but `DOCKER_SOCK_FILE` points at Rancher Desktop's socket, the bind-mount fails. Both sides have to align — see [setup-rancher-desktop.md](setup-rancher-desktop.md#how-zelosmcp-picks-up-your-daemon).
 
 ---
 
@@ -210,20 +210,20 @@ Plus a `docker_compose` prompt and per-container stats/logs resources.
 
 Reads the kubeconfig at `/root/.kube/config` (mounted from your host).
 
-### Cluster routing — the `localmcp` context
+### Cluster routing — the `zelosmcp` context
 
-LocalMCP runs in bridge networking, so the container's `127.0.0.1` is the container itself, not your Mac. Reaching Rancher Desktop / Docker Desktop's K8s API at `https://127.0.0.1:6443` from inside the container won't work directly.
+zelosMCP runs in bridge networking, so the container's `127.0.0.1` is the container itself, not your Mac. Reaching Rancher Desktop / Docker Desktop's K8s API at `https://127.0.0.1:6443` from inside the container won't work directly.
 
-`make up` solves this by adding a **`localmcp`** cluster + context to your `~/.kube/config` (idempotent host-side `kubectl config set-cluster/set-context`) that points at `https://host.docker.internal:6443`. Your existing contexts and `current-context` are unchanged.
+`make up` solves this by adding a **`zelosmcp`** cluster + context to your `~/.kube/config` (idempotent host-side `kubectl config set-cluster/set-context`) that points at `https://host.docker.internal:6443`. Your existing contexts and `current-context` are unchanged.
 
-The agent then uses the localmcp context for in-cluster work:
+The agent then uses the zelosmcp context for in-cluster work:
 
 ```jsonc
 // Multi-cluster mode is on by default — every tool accepts `context`.
-{ "name": "kubernetes__pods_list", "arguments": { "context": "localmcp" } }
+{ "name": "kubernetes__pods_list", "arguments": { "context": "zelosmcp" } }
 ```
 
-For remote clusters (EKS, AKS, GKE, …) just pass that cluster's context name instead. You can verify the localmcp context from the host first: `kubectl --context localmcp get nodes`.
+For remote clusters (EKS, AKS, GKE, …) just pass that cluster's context name instead. You can verify the zelosmcp context from the host first: `kubectl --context zelosmcp get nodes`.
 
 To remove the auto-added entries: `make clean-kubeconfig`.
 
@@ -247,7 +247,7 @@ All tools annotate `readOnlyHint` / `destructiveHint` correctly, so destructive 
 
 ### Gotchas
 
-- **Auth credential helpers:** if your kubeconfig uses `exec`-based auth (cloud SSO, AWS EKS, etc.), the helper binary needs to exist inside the LocalMCP container, not just on your host. For Rancher Desktop's local k3s this isn't an issue — auth is via embedded certs in the kubeconfig.
+- **Auth credential helpers:** if your kubeconfig uses `exec`-based auth (cloud SSO, AWS EKS, etc.), the helper binary needs to exist inside the zelosMCP container, not just on your host. For Rancher Desktop's local k3s this isn't an issue — auth is via embedded certs in the kubeconfig.
 - **Namespacing:** by default tools target whatever namespace is set as `current` in the kubeconfig context. Pass `namespace=` explicitly when you want to scope a query.
 
 ---
@@ -256,4 +256,4 @@ All tools annotate `readOnlyHint` / `destructiveHint` correctly, so destructive 
 
 Anything in the [MCP server catalog](https://github.com/modelcontextprotocol/servers) (or any custom server you've built) can be added — see [configuration.md](configuration.md) for the JSON schema and [makefile.md](makefile.md) for how to load a custom config.
 
-Stdio backends spawn `npx -y …` or `uvx …` from inside the LocalMCP container, so the runtime needs to be available there. The container ships with Python 3.12 + `uv`/`uvx`/`pipx` and Node.js 22 + `npx` preinstalled, which covers virtually all published MCP servers.
+Stdio backends spawn `npx -y …` or `uvx …` from inside the zelosMCP container, so the runtime needs to be available there. The container ships with Python 3.12 + `uv`/`uvx`/`pipx` and Node.js 22 + `npx` preinstalled, which covers virtually all published MCP servers.

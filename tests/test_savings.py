@@ -8,14 +8,14 @@ import pytest
 
 from mcp.types import TextContent
 
-from localmcp.savings import (
+from zelosmcp.savings import (
     SavingsRecorder,
     TokenCounter,
     extract_pincher_meta,
     measure_call,
     render_call_output_text,
 )
-from localmcp.savings_db import SavingsStore, resolve_db_path
+from zelosmcp.savings_db import SavingsStore, resolve_db_path
 
 from tests.conftest import FakeResult, make_pincher_call_result
 
@@ -200,7 +200,7 @@ async def test_non_pincher_call_does_not_record_meta():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_excludes_localmcp_from_totals():
+async def test_snapshot_excludes_zelosmcp_from_totals():
     store = SavingsStore(":memory:")
     await store.open()
     try:
@@ -208,7 +208,7 @@ async def test_snapshot_excludes_localmcp_from_totals():
         # One call for a real backend, one for the built-in.
         for backend, tool in [
             ("pincher", "search"),
-            ("localmcp", "list_loaded_servers"),
+            ("zelosmcp", "list_loaded_servers"),
         ]:
             await recorder.record_call(
                 backend=backend, tool=tool,
@@ -220,7 +220,7 @@ async def test_snapshot_excludes_localmcp_from_totals():
         snap = await recorder.snapshot()
         assert snap["calls"]["totals"]["calls"] == 1
         backends = [b["backend"] for b in snap["calls"]["per_backend"]]
-        assert "localmcp" not in backends
+        assert "zelosmcp" not in backends
         assert "pincher" in backends
     finally:
         await store.close()
@@ -348,13 +348,13 @@ async def test_snapshot_shape_and_top_tools_ordering():
 
 def test_resolve_db_path_uses_env(tmp_path, monkeypatch):
     target = str(tmp_path / "custom.sqlite")
-    monkeypatch.setenv("LOCALMCP_SAVINGS_DB", target)
+    monkeypatch.setenv("ZELOSMCP_SAVINGS_DB", target)
     assert resolve_db_path() == target
 
 
 def test_resolve_db_path_explicit_wins(tmp_path, monkeypatch):
     target = str(tmp_path / "explicit.sqlite")
-    monkeypatch.setenv("LOCALMCP_SAVINGS_DB", str(tmp_path / "env.sqlite"))
+    monkeypatch.setenv("ZELOSMCP_SAVINGS_DB", str(tmp_path / "env.sqlite"))
     assert resolve_db_path(target) == target
 
 

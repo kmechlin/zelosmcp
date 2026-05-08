@@ -25,18 +25,18 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
 from mcp.types import METHOD_NOT_FOUND, Tool
 
-from localmcp.compression import (
+from zelosmcp.compression import (
     compressed_tool_list,
     handle_compressed_call,
     wrapper_tool_names,
 )
-from localmcp.savings import measure_call
+from zelosmcp.savings import measure_call
 
 if TYPE_CHECKING:
-    from localmcp.manager import ProxyManager
-    from localmcp.proxy import ProxyState
+    from zelosmcp.manager import ProxyManager
+    from zelosmcp.proxy import ProxyState
 
-logger = logging.getLogger("localmcp")
+logger = logging.getLogger("zelosmcp")
 
 SEP = "__"
 
@@ -55,7 +55,7 @@ class Aggregator:
         # every list_tools(). The compression scope determines whether
         # the aggregator's own tools/list output uses the wrappers (in
         # {aggregator, global}) or the full prefixed list (catalog).
-        # Either way the cache is filled so /localmcp/list_compressed_tools
+        # Either way the cache is filled so /zelosmcp/list_compressed_tools
         # and the cursor-rule generator can render the compressed view.
         self.compressed_catalog: dict[str, dict[str, Tool]] = {}
 
@@ -98,7 +98,7 @@ class Aggregator:
         self._resource_origin.clear()
         try:
             async with AsyncExitStack() as stack:
-                server = Server("localmcp-aggregate")
+                server = Server("zelosmcp-aggregate")
                 self._register_handlers(server)
 
                 self.session_manager = StreamableHTTPSessionManager(
@@ -150,7 +150,7 @@ class Aggregator:
                 compress = spec.compress if spec is not None else None
                 backend_tools = list(getattr(r, "tools", []) or [])
                 # Cache the full catalog whenever compression is configured
-                # so docs/discovery surfaces (`localmcp__list_compressed_tools`,
+                # so docs/discovery surfaces (`zelosmcp__list_compressed_tools`,
                 # cursor-rule generator) see the compressed view regardless
                 # of scope.
                 if compress is not None:
