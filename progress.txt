@@ -211,3 +211,32 @@ Commands/checks run:
   - Passed with no whitespace errors.
 Gotcha: The stale-term search pattern itself and historical progress entries intentionally preserve old wording as task history, so future verifier passes should distinguish contextual progress/plan matches from actionable source/docs/test wording.
 Follow-ups: Parent should re-run verifier for docs-update and leave ledger.yaml unchanged until that verification passes. No production behavior changes were needed.
+
+Task: verifier-docs-update-after-f0b134b
+Outcome: Verification did not pass after blocker fix commit f0b134b. Commits c023fdc, 4370d4d, and f0b134b all exist, the docs describe the non-max wrapper trio, search_tools(query, limit?) targeted catalog search, and level=max single list_tools behavior, and the requested focused pytest suites pass. However, tests/test_app_integration.py still contains an actionable stale aggregator-compression expectation that asserts only alpha__get_tool_schema and alpha__invoke_tool; the focused test now fails because alpha__search_tools is correctly present. ledger.yaml was left unchanged, so docs-update remains pending.
+Commands/checks run:
+- git --no-pager status --short
+  - Showed only untracked local files configs/user-zelosmcp.json and tool-search-plan.md before verifier edits; they were not staged.
+- git --no-pager log --oneline --decorate -18
+  - Confirmed f0b134b is HEAD, with 4370d4d and c023fdc present in local history.
+- git --no-pager show --stat --oneline --name-status --no-ext-diff c023fdc 4370d4d f0b134b
+  - Confirmed c023fdc and 4370d4d updated compression docs/progress, and f0b134b updated the prior non-doc blocker areas: src/zelosmcp/aggregator.py, app.py, config.py, savings.py, ui.py, passthrough/gating tests, and progress.txt.
+- git --no-pager diff -- .
+  - No tracked diff before verifier edits.
+- rg "wrapper pair|wrapper-pair|wrapper_pair|compressed pair|compressed-pair|two-tool|two tool|only.*get_tool_schema.*invoke_tool|get_tool_schema.*invoke_tool-only|invoke_tool-only" .
+  - Remaining broad stale-term matches were historical/contextual in progress.txt and the original planning artifact, but a narrower app-integration read found an actionable stale assertion not covered by the broad wording pattern.
+- rg "search_tools\\(query, limit\\?\\)|wrapper trio|level=max|single `list_tools`|get_tool_schema.*search_tools.*invoke_tool|search_tools" docs
+  - Confirmed affected docs describe search_tools, wrapper trio behavior, and max single-list_tools behavior.
+- rg "wrapper_tool_names|compressed_tool_list|make_search_tools_wrapper|def search_catalog|op == \"search_tools\"|level == \"max\"|search_tools" src/zelosmcp/compression.py
+  - Confirmed implementation exposes search_tools in the non-max wrapper path and preserves max as list_tools.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
+  - Passed: 108 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py tests/test_aggregator_unit.py
+  - Passed: 79 passed.
+- git --no-pager diff --check
+  - Passed with no whitespace errors.
+- rg "assert names == \\[\"alpha__get_tool_schema\", \"alpha__invoke_tool\"\\]|wrapper pair|only.*wrapper|get_tool_schema \\+ invoke_tool" tests/test_app_integration.py
+  - Found stale wording/assertion in TestCompressedAggregatorIntegration.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration::test_aggregator_serves_wrappers_when_scope_aggregator
+  - Failed: assertion still expects only alpha__get_tool_schema and alpha__invoke_tool; actual names include alpha__search_tools.
+Risks/follow-ups: Update tests/test_app_integration.py so aggregator scope compression expects the non-max wrapper trio and, if appropriate, exercises alpha__search_tools through /mcp. Re-run the stale-term search, the requested focused suites, git diff --check, and the app integration compression coverage before marking docs-update complete.
