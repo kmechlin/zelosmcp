@@ -68,7 +68,7 @@ The discovery / cursor-rule paths always see the compressed catalog when `compre
 ### When to pick which scope
 
 - **`catalog`** — you want the cursor rule and `zelosmcp__list_compressed_tools` to render compactly, but every direct MCP client connecting to the aggregator or to `/<name>/mcp` should see the full schema. Useful when you've curated the agent rule body but don't want to change the wire format for ad-hoc clients.
-- **`aggregator`** (default, recommended) — agents going through the aggregator at `/mcp` (the typical Cursor / Claude Desktop / Copilot setup) see the compressed pair. Direct connections to a single backend at `/<name>/mcp` keep the full surface (useful for debugging, scripts that already know the backend's API).
+- **`aggregator`** (default, recommended) — agents going through the aggregator at `/mcp` (the typical Cursor / Claude Desktop / Copilot setup) see the compressed wrapper surface: the non-`max` wrapper trio, or the single `list_tools` wrapper at `level=max`. Direct connections to a single backend at `/<name>/mcp` keep the full surface (useful for debugging, scripts that already know the backend's API).
 - **`global`** — you have clients that connect directly to `/<name>/mcp` and you want them to see the compression too. Both endpoints serve wrappers.
 
 ## Agent-side flow

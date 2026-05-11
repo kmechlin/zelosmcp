@@ -12,7 +12,7 @@ Three independent sources of savings are recorded:
 
 1. **Tool-list compression** — every time a client calls `tools/list`
    against `/mcp`, the aggregator already builds two views of each
-   compressed backend (full prefixed catalog vs. the wrapper-pair
+   compressed backend (full prefixed catalog vs. the configured wrapper
    surface from [`docs/compression.md`](compression.md)). The recorder
    serializes both shapes, counts tokens against each, and stores one
    row per backend in `compression_snapshot`. Replaced on each

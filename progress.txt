@@ -158,3 +158,15 @@ Commands/checks run:
 - ReadLints on the changed docs
   - No linter errors found.
 Risks/follow-ups: Fix stale pair terminology before marking docs-update complete. Re-run the stale-term rg plus git diff --check after the doc fix. Git startup was slow for the first batch of commands, but all completed successfully.
+
+Task: docs-update verifier follow-up
+Outcome: Fixed the stale pair terminology called out by verifier in docs/compression.md, docs/oauth-passthrough.md, and docs/dashboard.md. The docs now describe the configured compressed wrapper surface without implying only two wrappers; docs/compression.md explicitly covers the non-max wrapper trio and the single list_tools wrapper at level=max in the scope guidance.
+Commands/checks run:
+- rg "wrapper pair|wrapper-pair|compressed pair|compressed-pair" docs
+  - Passed: no matches found.
+- ReadLints on docs/compression.md, docs/oauth-passthrough.md, and docs/dashboard.md
+  - No linter errors found.
+- git diff --check
+  - Passed with no whitespace errors.
+Gotcha: docs/dashboard.md was outside the original docs-update ledger file list but contained user-facing stale wrapper-pair wording, so docs-update needs to include it for terminology consistency.
+Follow-ups: Parent should invoke verifier again before marking docs-update complete in ledger.yaml. Do not change ledger.yaml from this follow-up.

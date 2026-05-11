@@ -320,4 +320,4 @@ For implementers: the passthrough flow lives across these files.
 - [configuration.md](configuration.md#oauth-passthrough-passthrough) — schema reference
 - [cursor-integration.md](cursor-integration.md) — Cursor `mcp.json` patterns
 - [reverse-proxy.md](reverse-proxy.md) — non-MCP HTTP forwarding (different feature)
-- [compression.md](compression.md) — wrapper-pair compression model that passthrough backends inherit
+- [compression.md](compression.md) — compressed wrapper model that passthrough backends inherit
