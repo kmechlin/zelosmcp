@@ -1,0 +1,18 @@
+Task: red-compression-unit-tests
+Outcome: Added focused red unit coverage in tests/test_compression_unit.py for planned search_tools wrapper exposure, compressed wrapper list ordering, name/description/parameter search matches, query validation, limit handling, and no-match responses.
+Commands run:
+- pytest tests/test_compression_unit.py
+  - Collection failed because zelosmcp was not importable without the src path in this environment.
+- PYTHONPATH=src pytest tests/test_compression_unit.py
+  - Collection failed because the global pytest environment was missing aiosqlite.
+- uv run pytest tests/test_compression_unit.py
+  - Collection failed because uv did not run pytest with the src path.
+- PYTHONPATH=src uv run pytest tests/test_compression_unit.py
+  - Collection failed because uv selected an external pytest missing project dependencies.
+- uv run python -c "import sys; import aiosqlite; print(sys.executable); print(aiosqlite.__version__)"
+  - Confirmed aiosqlite is installed in .venv.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py
+  - Red result: 13 failed, 21 passed.
+Expected red failures: wrapper_tool_names and compressed_tool_list still expose only get_tool_schema/invoke_tool for non-max levels, and handle_compressed_call still treats search_tools as an unknown op. Existing max-list behavior continued to pass.
+Gotcha: In this checkout, focused tests need the src path plus pytest installed in the uv execution environment: PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py.
+Follow-ups: Implement the pure search helper, search_tools wrapper builder, and handle_compressed_call branch without changing level=max; then rerun the focused compression unit tests.
