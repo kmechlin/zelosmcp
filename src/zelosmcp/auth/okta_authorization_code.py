@@ -84,6 +84,7 @@ class OktaAuthorizationCodeProvider(AuthProvider):
         name: str,
         issuer: str,
         client_id: str,
+        client_secret: str | None = None,
         redirect_uri: str | None = None,
         scopes: tuple[str, ...] = ("openid", "profile", "email"),
         membership_hint: str | None = None,
@@ -106,6 +107,7 @@ class OktaAuthorizationCodeProvider(AuthProvider):
         self._name = name
         self._issuer = issuer.rstrip("/")
         self._client_id = client_id
+        self._client_secret = client_secret
         self._redirect_uri = (
             redirect_uri
             or f"http://localhost:8000/api/auth/{name}/callback"
@@ -278,21 +280,40 @@ class OktaAuthorizationCodeProvider(AuthProvider):
                 timeout=httpx.Timeout(self._timeout),
                 verify=_httpx_verify(),
             ) as client:
+                token_data = {
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "code_verifier": verifier,
+                }
+                auth = None
+                if self._client_secret:
+                    auth = (self._client_id, self._client_secret)
+                else:
+                    token_data["client_id"] = self._client_id
                 resp = await client.post(
                     self.token_url,
-                    data={
-                        "grant_type": "authorization_code",
-                        "client_id": self._client_id,
-                        "code": code,
-                        "redirect_uri": redirect_uri,
-                        "code_verifier": verifier,
-                    },
+                    data=token_data,
+                    auth=auth,
                     headers={"Accept": "application/json"},
                 )
                 resp.raise_for_status()
                 token_payload = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
-            msg = f"token exchange failed: {exc}"
+            detail = ""
+            response = getattr(exc, "response", None)
+            if response is not None:
+                try:
+                    body = response.json()
+                    err = body.get("error")
+                    desc = body.get("error_description")
+                    if err or desc:
+                        detail = f" ({err}: {desc})"
+                except ValueError:
+                    text = response.text.strip()
+                    if text:
+                        detail = f" ({text[:500]})"
+            msg = f"token exchange failed: {exc}{detail}"
             await self._store.update_device_session(
                 session_id=state, state="error", error_message=msg
             )
@@ -519,6 +540,7 @@ def _factory(spec, store):
         name=spec.name,
         issuer=spec.issuer or "",
         client_id=spec.client_id or "",
+        client_secret=spec.client_secret,
         redirect_uri=spec.redirect_uri,
         scopes=tuple(spec.scopes) if spec.scopes else
             ("openid", "profile", "email"),

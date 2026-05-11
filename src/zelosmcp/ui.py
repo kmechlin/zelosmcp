@@ -2162,13 +2162,20 @@ HTML_TEMPLATE = """\
     refreshCursorRule(currentStatus);
   }
 
-  // Refetch /api/catalog whenever the running-backends set changes (same
-  // signature pattern as refreshCursorRule). On success, re-render any
+  // Refetch /api/catalog whenever the running-backends set or auth readiness
+  // changes. OAuth-passthrough catalogs can become available after a provider
+  // connects even when the backend process itself never restarted.
+  // On success, re-render any
   // currently-expanded inline catalog blocks AND the center-pane
   // "Server details" view if one is currently selected.
   async function refreshCatalog(status) {
     const sig = (status.servers || [])
-      .map((s) => s.name + ":" + (s.running ? "1" : "0"))
+      .map((s) => [
+        s.name,
+        s.running ? "1" : "0",
+        s.auth_state || "",
+        s.auth_provider || "",
+      ].join(":"))
       .join(",");
     if (sig === lastCatalogSig) return;
     if (catalogInFlight) return;
@@ -2318,6 +2325,7 @@ HTML_TEMPLATE = """\
     currentDetailsServer = name;
     setView("server-details");
     renderServerDetails(name);
+    refreshCatalog(currentStatus);
   }
 
   function renderServerDetails(name) {
@@ -3437,8 +3445,13 @@ HTML_TEMPLATE = """\
         setConnectModalStatus("Connected as " + who, "complete");
         try { sse.close(); } catch (e) {}
         connectModalSse = null;
-        // Refresh the cards so the connected state shows up.
-        setTimeout(() => { closeConnectModal(); loadConnections(); }, 1500);
+        // Refresh the cards and server catalog state so auth-gated
+        // passthrough backends populate their details pane immediately.
+        setTimeout(() => {
+          closeConnectModal();
+          loadConnections();
+          refreshStatus();
+        }, 1500);
       } else if (frame.state === "expired") {
         setConnectModalStatus("Code expired. Click Connect again.", "error");
         try { sse.close(); } catch (e) {}
@@ -3513,6 +3526,7 @@ HTML_TEMPLATE = """\
       return;
     }
     loadConnections();
+    refreshStatus();
   }
 
   // Click outside modal to close.

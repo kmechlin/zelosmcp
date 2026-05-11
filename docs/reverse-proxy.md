@@ -25,7 +25,10 @@ A backend's `mcpServers.<name>` entry can include an optional `reverseProxy` blo
   "args": ["--data-dir", "/tmp/pincher", "--http", "127.0.0.1:8080", "--trust-proxy"],
   "reverseProxy": {
     "mount": "/pincher",
-    "upstream": "http://127.0.0.1:8080"
+    "upstream": "http://127.0.0.1:8080",
+    "openapi": {
+      "path": "/v1/openapi.json"
+    }
   }
 }
 ```
@@ -37,6 +40,13 @@ A backend's `mcpServers.<name>` entry can include an optional `reverseProxy` blo
 | `stripPrefix` | no | bool | `false` | Strip `mount` from the request path before forwarding. Off by default — pincher and other prefix-aware servers prefer to see the original path plus `X-Forwarded-Prefix`. Turn on for upstreams that don't understand the header. |
 | `headers` | no | object of strings | `{}` | Extra headers to inject on the forwarded request. Override the auto-injected `X-Forwarded-*` set by repeating the same key here. |
 | `auth.bearer` | no | string | — | Bearer token attached as `Authorization: Bearer <value>` when the caller hasn't supplied their own. Supports `${ENV_VAR}` interpolation; missing variables fail config-parse. |
+| `openapi.path` | no | string | — | Upstream OpenAPI JSON path relative to `upstream`, e.g. `/v1/openapi.json`. zelosMCP fetches it from running backends and merges its operations into `/openapi.json` under `mount`, so `/docs` shows the proxied API too. |
+
+### OpenAPI contracts
+
+When `openapi.path` is configured, zelosMCP keeps its own OpenAPI document as the base and imports the upstream contract server-side. Imported paths are mounted under the public proxy prefix. For example, pincher's upstream `/v1/search` appears in zelosMCP's `/openapi.json` as `/pincher/v1/search`.
+
+Contract fetch failures are non-fatal: zelosMCP still returns its own OpenAPI document and records skipped upstreams in the `x-zelosmcp-openapi-warnings` extension. Only path-style contracts are supported; absolute OpenAPI URLs are rejected so the contract stays tied to the configured reverse-proxy upstream.
 
 ### Auto-injected headers
 

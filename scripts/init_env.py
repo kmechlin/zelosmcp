@@ -271,22 +271,22 @@ def main() -> int:
         }
 
     enable_okta_provider = ask_yes_no(
-        "Configure the nike_okta provider?", False,
+        "Configure the okta provider?", False,
     )
     if enable_okta_provider:
         okta_issuer = ask(
             "Okta authorization server issuer URL "
             "(e.g. https://nike.okta.com/oauth2/default) "
             "(ZELOSMCP_OKTA_ISSUER)",
-            "",
+            "https://nike.okta.com/oauth2/aus27z7p76as9Dz0H1t7",
         )
         okta_client_id = ask(
             "Okta App client_id (ZELOSMCP_OKTA_CLIENT_ID)",
-            "",
+            "nike.niketech.zelosmcp",
         )
         okta_redirect_uri = ask(
             "Okta redirect URI (ZELOSMCP_OKTA_REDIRECT_URI)",
-            "http://localhost:8000/api/auth/nike_okta/callback",
+            "http://localhost:8000/auth/okta/callback",
         )
         okta_membership_hint = ask(
             "Okta authorized-group display string for the Connections "
@@ -301,7 +301,7 @@ def main() -> int:
             auth_env["ZELOSMCP_OKTA_REDIRECT_URI"] = okta_redirect_uri
         if okta_membership_hint:
             auth_env["ZELOSMCP_OKTA_MEMBERSHIP_HINT"] = okta_membership_hint
-        providers_block["nike_okta"] = {
+        providers_block["okta"] = {
             "type": "okta_authorization_code",
             "issuer": "${ZELOSMCP_OKTA_ISSUER}",
             "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",

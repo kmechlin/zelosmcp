@@ -247,6 +247,23 @@ class TestParseAuthProvidersOktaAuthorizationCode:
             == "http://localhost:8000/api/auth/okta/callback"
         )
 
+    def test_okta_authorization_code_client_secret_redacted(self, monkeypatch):
+        monkeypatch.setenv("OKTA_SECRET", "super-secret")
+        out = parse_auth_providers({
+            "providers": {
+                "okta": {
+                    "type": "okta_authorization_code",
+                    "issuer": "https://nike.okta.com/oauth2/default",
+                    "client_id": "0oa.x",
+                    "client_secret": "${OKTA_SECRET}",
+                }
+            }
+        })
+        spec = out["okta"]
+        assert spec.client_secret == "super-secret"
+        assert spec.to_status()["client_secret"] == "***"
+        assert spec.to_status(redacted=False)["client_secret"] == "super-secret"
+
     def test_okta_authorization_code_rejects_bad_redirect_uri(self):
         with pytest.raises(ConfigError, match="redirect_uri"):
             parse_auth_providers({

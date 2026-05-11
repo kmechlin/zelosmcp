@@ -164,6 +164,113 @@ class TestOpenAPI:
         assert r.status_code == 200
         assert "redoc" in r.text.lower()
 
+    @pytest.mark.asyncio
+    async def test_openapi_json_merges_reverse_proxy_contract(self):
+        captured: dict = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured["url"] = str(req.url)
+            captured["headers"] = dict(req.headers)
+            return httpx.Response(
+                200,
+                json={
+                    "openapi": "3.0.3",
+                    "info": {"title": "Alpha", "version": "1.0.0"},
+                    "paths": {
+                        "/v1/search": {
+                            "post": {
+                                "summary": "Search alpha",
+                                "requestBody": {
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "$ref": "#/components/schemas/SearchRequest"
+                                            }
+                                        }
+                                    }
+                                },
+                                "responses": {"200": {"description": "OK"}},
+                            }
+                        }
+                    },
+                    "components": {
+                        "schemas": {
+                            "SearchRequest": {
+                                "type": "object",
+                                "properties": {"q": {"type": "string"}},
+                            }
+                        }
+                    },
+                },
+            )
+
+        cfg = {
+            "mcpServers": {
+                "alpha": {
+                    "command": "echo",
+                    "args": ["a"],
+                    "reverseProxy": {
+                        "mount": "/alpha",
+                        "upstream": "http://upstream.test",
+                        "openapi": {"path": "/v1/openapi.json"},
+                    },
+                },
+            }
+        }
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=cfg)
+                    r = await c.get("/openapi.json")
+
+        assert r.status_code == 200
+        spec = r.json()
+        operation = spec["paths"]["/alpha/v1/search"]["post"]
+        assert operation["tags"] == ["alpha"]
+        schema = operation["requestBody"]["content"]["application/json"]["schema"]
+        assert schema["$ref"] == "#/components/schemas/alpha_SearchRequest"
+        assert "alpha_SearchRequest" in spec["components"]["schemas"]
+        assert captured["url"] == "http://upstream.test/v1/openapi.json"
+        assert captured["headers"]["x-forwarded-prefix"] == "/alpha"
+
+    @pytest.mark.asyncio
+    async def test_openapi_json_survives_upstream_contract_failure(self):
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, json={"error": "not ready"})
+
+        cfg = {
+            "mcpServers": {
+                "alpha": {
+                    "command": "echo",
+                    "args": ["a"],
+                    "reverseProxy": {
+                        "mount": "/alpha",
+                        "upstream": "http://upstream.test",
+                        "openapi": {"path": "/v1/openapi.json"},
+                    },
+                },
+            }
+        }
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=cfg)
+                    r = await c.get("/openapi.json")
+
+        assert r.status_code == 200
+        spec = r.json()
+        assert "/api/status" in spec["paths"]
+        assert "/alpha/v1/search" not in spec["paths"]
+        warnings = spec["x-zelosmcp-openapi-warnings"]
+        assert warnings[0]["backend"] == "alpha"
+        assert warnings[0]["path"] == "/v1/openapi.json"
+
 
 # ── Status API ──────────────────────────────────────────────────────────
 

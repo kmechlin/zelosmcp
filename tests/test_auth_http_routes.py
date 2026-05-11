@@ -435,6 +435,63 @@ class TestAuthCodeCallback:
             await manager.stop_auth_store()
 
     @pytest.mark.asyncio
+    async def test_legacy_okta_callback_resolves_provider_from_state(self):
+        app, manager = _fresh()
+        await manager.start_auth_store(db_path=":memory:")
+        await manager.start_auth_providers({
+            "providers": {
+                "nike_okta": {
+                    "type": "okta_authorization_code",
+                    "issuer": "https://nike.okta.com/oauth2/default",
+                    "client_id": "0oa.test",
+                    "redirect_uri": "http://localhost:8000/auth/okta/callback",
+                }
+            }
+        })
+        provider = manager.auth_registry.get("nike_okta")
+        session = await provider.start_device_flow("anonymous")
+
+        def handler(request):
+            url = str(request.url)
+            if url.endswith("/v1/token"):
+                return httpx.Response(200, json={
+                    "access_token": "okta_access",
+                    "refresh_token": "okta_refresh",
+                    "expires_in": 3600,
+                    "scope": "openid profile email",
+                })
+            if url.endswith("/v1/userinfo"):
+                return httpx.Response(200, json={
+                    "preferred_username": "kmechl@nike.com",
+                    "picture": None,
+                })
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        real_client = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs["transport"] = transport
+            return real_client(*args, **kwargs)
+
+        try:
+            with patch(
+                "zelosmcp.auth.okta_authorization_code.AsyncClient",
+                side_effect=factory,
+            ):
+                async with _client(app) as c:
+                    r = await c.get(
+                        f"/auth/okta/callback?code=abc&state={session.session_id}"
+                    )
+            assert r.status_code == 200
+            assert "Authorization complete" in r.text
+            identity = await provider.status("anonymous")
+            assert identity.ready is True
+            assert identity.identity.username == "kmechl@nike.com"
+        finally:
+            await manager.stop_auth_store()
+
+    @pytest.mark.asyncio
     async def test_callback_unknown_provider_404(self):
         app, _ = _fresh()
         async with _client(app) as c:

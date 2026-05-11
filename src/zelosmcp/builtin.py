@@ -52,6 +52,11 @@ from mcp.types import (
     TextContent,
     Tool,
 )
+from zelosmcp.passthrough_pool import (
+    PassthroughChallengeError,
+    hash_authorization,
+    inbound_authorization,
+)
 
 if TYPE_CHECKING:
     from zelosmcp.manager import ProxyManager
@@ -986,6 +991,96 @@ async def collect_backend_full_catalog(
                 entry[label] = {"error": str(exc)}
                 continue
             items = getattr(r, attr, []) or []
+            entry[label] = [_dump_item(item) for item in items]
+        out[name] = entry
+
+    user_key = hash_authorization(inbound_authorization.get())
+    for name, state in manager.servers.items():
+        if skip_self and name == NAME:
+            continue
+        if not getattr(state, "running", False):
+            continue
+        if not getattr(state, "is_passthrough", False):
+            continue
+        if name in out:
+            continue
+
+        entry = {
+            "transport": (state.backend_info or {}).get("transport"),
+            "running": True,
+            "passthrough": True,
+        }
+        spec = manager._specs.get(name)
+        provider = manager.auth_registry.get_for_backend(
+            name,
+            spec.auth_provider if spec is not None else None,
+        )
+        if provider is not None:
+            try:
+                ready = await provider.is_ready(user_key)
+            except Exception as exc:
+                entry["tools"] = {"error": f"auth provider status failed: {exc}"}
+                entry["prompts"] = []
+                entry["resources"] = []
+                entry["resourceTemplates"] = []
+                out[name] = entry
+                continue
+            if not ready:
+                entry["tools"] = {
+                    "error": f"auth provider '{provider.name}' is not connected"
+                }
+                entry["prompts"] = []
+                entry["resources"] = []
+                entry["resourceTemplates"] = []
+                out[name] = entry
+                continue
+
+        try:
+            session = await manager.aggregator._passthrough_session(state)
+        except PassthroughChallengeError as exc:
+            cached = list(getattr(state, "passthrough_catalog", {}).values())
+            entry["tools"] = (
+                [_dump_item(item) for item in cached]
+                if cached
+                else {"error": str(exc)}
+            )
+            entry["prompts"] = []
+            entry["resources"] = []
+            entry["resourceTemplates"] = []
+            out[name] = entry
+            continue
+        except Exception as exc:
+            entry["tools"] = {"error": str(exc)}
+            entry["prompts"] = []
+            entry["resources"] = []
+            entry["resourceTemplates"] = []
+            out[name] = entry
+            continue
+
+        for label, fn_name, attr in _CATALOG_CAPS:
+            try:
+                fn = getattr(session, fn_name)
+            except AttributeError:
+                entry[label] = []
+                continue
+            try:
+                r = await fn()
+            except McpError as exc:
+                if getattr(exc.error, "code", None) == METHOD_NOT_FOUND:
+                    entry[label] = []
+                else:
+                    entry[label] = {"error": str(exc)}
+                continue
+            except Exception as exc:
+                entry[label] = {"error": str(exc)}
+                continue
+            items = getattr(r, attr, []) or []
+            if label == "tools":
+                state.passthrough_catalog = {
+                    getattr(item, "name", ""): item
+                    for item in items
+                    if getattr(item, "name", None)
+                }
             entry[label] = [_dump_item(item) for item in items]
         out[name] = entry
     return out

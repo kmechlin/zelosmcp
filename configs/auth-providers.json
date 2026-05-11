@@ -11,7 +11,7 @@
         "workflow"
       ]
     },
-    "nike_okta": {
+    "okta": {
       "type": "okta_authorization_code",
       "issuer": "${ZELOSMCP_OKTA_ISSUER}",
       "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",

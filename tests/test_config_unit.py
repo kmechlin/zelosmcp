@@ -222,12 +222,16 @@ class TestReverseProxy:
             "stripPrefix": True,
             "headers": {"X-Custom": "yes"},
             "auth": {"bearer": "literal-token"},
+            "openapi": {"path": "/v1/openapi.json"},
         }))
         rp = specs[0].reverse_proxy
         assert rp is not None
         assert rp.strip_prefix is True
         assert rp.headers == {"X-Custom": "yes"}
         assert rp.auth_bearer == "literal-token"
+        assert rp.openapi is not None
+        assert rp.openapi.path == "/v1/openapi.json"
+        assert rp.to_status()["openapi"] == {"path": "/v1/openapi.json"}
 
     def test_remote_backend_can_have_proxy(self):
         specs, _ = parse_config({
@@ -329,6 +333,25 @@ class TestReverseProxy:
                 "mount": "/alpha",
                 "upstream": "http://x:8080",
                 "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
+            }))
+
+    @pytest.mark.parametrize(
+        "openapi, message",
+        [
+            ("not-object", "openapi must be an object"),
+            ({}, "openapi.path"),
+            ({"path": "v1/openapi.json"}, "must start with"),
+            ({"path": "https://upstream.test/openapi.json"}, "not a URL"),
+            ({"path": "/bad path/openapi.json"}, "whitespace"),
+            ({"path": "/../openapi.json"}, "must not contain"),
+        ],
+    )
+    def test_bad_openapi_contracts_rejected(self, openapi, message):
+        with pytest.raises(ConfigError, match=message):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "openapi": openapi,
             }))
 
     def test_overlapping_mounts_rejected_exact(self):
