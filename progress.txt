@@ -135,3 +135,26 @@ Commands/checks run:
   - No linter errors found.
 Gotcha: docs/default-mcps.md also carried the stale default-compression wrapper-pair wording, even though it was not called out in the docs-update file list; it was updated to avoid leaving contradictory user-facing docs.
 Follow-ups: Parent verifier should run focused validation for docs-update and then update ledger.yaml if satisfied. No ledger status was changed by this task.
+
+Task: verifier-docs-update
+Outcome: Verification did not pass. Commit c023fdc exists and documents the non-max wrapper trio, search_tools(query, limit?) targeted catalog search, and level=max single list_tools wrapper in the main edited sections, but stale "pair" terminology remains in docs/compression.md, docs/oauth-passthrough.md, and docs/dashboard.md. ledger.yaml was left unchanged, so docs-update remains pending.
+Commands/checks run:
+- git status --short
+  - Showed only untracked local files configs/user-zelosmcp.json and tool-search-plan.md before verifier edits; they were not staged.
+- git diff -- docs/compression.md docs/configuration.md docs/cursor-integration.md docs/default-mcps.md docs/oauth-passthrough.md ledger.yaml progress.txt tool-search-plan.md
+  - No tracked diff before verifier edits.
+- git log --oneline -8
+  - Confirmed c023fdc Document compression search wrapper is in local history.
+- git show --stat --oneline c023fdc
+  - Confirmed c023fdc changed docs/compression.md, docs/configuration.md, docs/cursor-integration.md, docs/default-mcps.md, docs/oauth-passthrough.md, and progress.txt.
+- rg "search_tools|get_tool_schema|invoke_tool|list_tools|wrapper trio|wrapper pair|level=max|max" docs
+  - Confirmed the main docs mention search_tools and max behavior, but also revealed stale pair terminology.
+- rg "wrapper pair|wrapper-pair|compressed pair|compressed-pair" docs
+  - Found remaining stale references in docs/compression.md, docs/oauth-passthrough.md, and docs/dashboard.md.
+- rg "def (wrapper_tool_names|compressed_tool_list|handle_compressed_call|make_search_tools_wrapper|search_catalog)|search_tools|level == \"max\"|level=\"max\"" src/zelosmcp/compression.py
+  - Confirmed implementation exposes search_tools in the non-max wrapper path and preserves the max branch.
+- git diff --check
+  - Passed with no whitespace errors.
+- ReadLints on the changed docs
+  - No linter errors found.
+Risks/follow-ups: Fix stale pair terminology before marking docs-update complete. Re-run the stale-term rg plus git diff --check after the doc fix. Git startup was slow for the first batch of commands, but all completed successfully.
