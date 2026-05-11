@@ -1325,7 +1325,11 @@ class TestCompressedAggregatorIntegration:
                 )
             names = sorted(t["name"] for t in r.json()["result"]["tools"]
                            if t["name"].startswith("alpha__"))
-            assert names == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+            assert names == [
+                "alpha__get_tool_schema",
+                "alpha__invoke_tool",
+                "alpha__search_tools",
+            ]
 
     @pytest.mark.asyncio
     async def test_aggregator_keeps_full_list_when_scope_catalog(self):

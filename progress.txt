@@ -240,3 +240,17 @@ Commands/checks run:
 - PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration::test_aggregator_serves_wrappers_when_scope_aggregator
   - Failed: assertion still expects only alpha__get_tool_schema and alpha__invoke_tool; actual names include alpha__search_tools.
 Risks/follow-ups: Update tests/test_app_integration.py so aggregator scope compression expects the non-max wrapper trio and, if appropriate, exercises alpha__search_tools through /mcp. Re-run the stale-term search, the requested focused suites, git diff --check, and the app integration compression coverage before marking docs-update complete.
+
+Task: docs-update app-integration blocker follow-up
+Outcome: Fixed the remaining verifier blocker in tests/test_app_integration.py by updating TestCompressedAggregatorIntegration::test_aggregator_serves_wrappers_when_scope_aggregator to expect the non-max aggregator wrapper trio, including alpha__search_tools. No production files or ledger statuses were changed.
+Commands/checks run:
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration::test_aggregator_serves_wrappers_when_scope_aggregator
+  - Passed: 1 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration tests/test_app_integration.py::TestPerBackendGlobalScope
+  - Passed: 8 passed.
+- git diff --check
+  - Passed with no whitespace errors.
+- ReadLints on tests/test_app_integration.py
+  - No linter errors found.
+Gotcha: The aggregator-scope app integration test had already documented the wrapper trio in its class docstring, but its list assertion still preserved the old two-wrapper expectation.
+Follow-ups: Parent should re-run verifier for docs-update and leave ledger.yaml unchanged until that verification passes.
