@@ -79,6 +79,16 @@ class ConfigError(ValueError):
 
 
 @dataclass
+class OpenApiContractSpec:
+    """OpenAPI contract exposed by a reverse-proxied backend."""
+
+    path: str
+
+    def to_status(self) -> dict[str, Any]:
+        return {"path": self.path}
+
+
+@dataclass
 class ReverseProxySpec:
     """HTTP reverse-proxy configuration for one backend.
 
@@ -94,6 +104,7 @@ class ReverseProxySpec:
     strip_prefix: bool = False
     headers: dict[str, str] = field(default_factory=dict)
     auth_bearer: str | None = None
+    openapi: OpenApiContractSpec | None = None
 
     def to_status(self) -> dict[str, Any]:
         """JSON-serializable view round-tripping the input config shape.
@@ -108,6 +119,8 @@ class ReverseProxySpec:
             info["headers"] = dict(self.headers)
         if self.auth_bearer:
             info["auth"] = {"bearer": "***"}
+        if self.openapi is not None:
+            info["openapi"] = self.openapi.to_status()
         return info
 
 
@@ -187,6 +200,7 @@ class AuthProviderSpec:
     name: str
     type: str
     client_id: str | None = None
+    client_secret: str | None = None
     issuer: str | None = None
     redirect_uri: str | None = None
     scopes: list[str] = field(default_factory=list)
@@ -204,6 +218,8 @@ class AuthProviderSpec:
         info: dict[str, Any] = {"name": self.name, "type": self.type}
         if self.client_id:
             info["client_id"] = self.client_id
+        if self.client_secret:
+            info["client_secret"] = "***" if redacted else self.client_secret
         if self.issuer:
             info["issuer"] = self.issuer
         if self.redirect_uri:
@@ -361,6 +377,44 @@ def _validate_mount(server_name: str, mount: Any) -> str:
     return mount
 
 
+def _parse_reverse_proxy_openapi(
+    server_name: str, raw: Any
+) -> OpenApiContractSpec:
+    """Validate and normalize a ``reverseProxy.openapi`` block."""
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi must be an object"
+        )
+    path = raw.get("path")
+    if not isinstance(path, str) or not path:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi.path must be a "
+            "non-empty string"
+        )
+    parsed = urlparse(path)
+    if parsed.scheme or parsed.netloc:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi.path must be a "
+            f"path relative to reverseProxy.upstream, not a URL (got {path!r})"
+        )
+    if not path.startswith("/"):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi.path must start "
+            f"with '/' (got {path!r})"
+        )
+    if any(ch.isspace() for ch in path):
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi.path must not "
+            "contain whitespace"
+        )
+    if ".." in path:
+        raise ConfigError(
+            f"Server '{server_name}': reverseProxy.openapi.path must not "
+            "contain '..'"
+        )
+    return OpenApiContractSpec(path=path)
+
+
 def _interpolate_env(value: str, server_name: str, field_name: str) -> str:
     """Replace ``${VAR}`` substrings with values from ``os.environ``.
 
@@ -429,12 +483,17 @@ def _parse_reverse_proxy(server_name: str, raw: Any) -> ReverseProxySpec:
                 bearer_raw, server_name, "reverseProxy.auth.bearer"
             )
 
+    openapi: OpenApiContractSpec | None = None
+    if "openapi" in raw and raw["openapi"] is not None:
+        openapi = _parse_reverse_proxy_openapi(server_name, raw["openapi"])
+
     return ReverseProxySpec(
         mount=mount.rstrip("/") if mount != "/" else mount,
         upstream=upstream.rstrip("/"),
         strip_prefix=strip_prefix_raw,
         headers=headers,
         auth_bearer=auth_bearer,
+        openapi=openapi,
     )
 
 
@@ -596,7 +655,13 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
         allowed |= {"client_id", "issuer", "scopes"}
         required = {"client_id", "issuer"}
     elif type_raw == "okta_authorization_code":
-        allowed |= {"client_id", "issuer", "redirect_uri", "scopes"}
+        allowed |= {
+            "client_id",
+            "client_secret",
+            "issuer",
+            "redirect_uri",
+            "scopes",
+        }
         required = {"client_id", "issuer"}
     elif type_raw == "static":
         allowed |= {"bearer"}
@@ -623,6 +688,16 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
                 f"Auth provider '{name}': client_id must be a non-empty string"
             )
         client_id = _interpolate_env(raw["client_id"], name, "client_id")
+
+    client_secret: str | None = None
+    if "client_secret" in raw:
+        if not isinstance(raw["client_secret"], str) or not raw["client_secret"]:
+            raise ConfigError(
+                f"Auth provider '{name}': client_secret must be a non-empty string"
+            )
+        client_secret = _interpolate_env(
+            raw["client_secret"], name, "client_secret"
+        )
 
     issuer: str | None = None
     if "issuer" in raw:
@@ -696,6 +771,7 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
         name=name,
         type=type_raw,
         client_id=client_id,
+        client_secret=client_secret,
         issuer=issuer,
         redirect_uri=redirect_uri,
         scopes=scopes,

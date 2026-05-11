@@ -11,7 +11,10 @@
       ],
       "reverseProxy": {
         "mount": "/pincher",
-        "upstream": "http://127.0.0.1:8080"
+        "upstream": "http://127.0.0.1:8080",
+        "openapi": {
+          "path": "/v1/openapi.json"
+        }
       },
       "compress": {
         "level": "medium"

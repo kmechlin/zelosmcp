@@ -184,7 +184,10 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
   "args": ["--data-dir", "/tmp/pincher", "--http", "127.0.0.1:8080", "--trust-proxy"],
   "reverseProxy": {
     "mount": "/pincher",
-    "upstream": "http://127.0.0.1:8080"
+    "upstream": "http://127.0.0.1:8080",
+    "openapi": {
+      "path": "/v1/openapi.json"
+    }
   }
 }
 ```
@@ -196,6 +199,7 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
 | `stripPrefix` | no | bool | Strip `mount` from the path before forwarding. Default `false`. |
 | `headers` | no | object of strings | Extra request headers. Override auto-injected `X-Forwarded-*`. |
 | `auth.bearer` | no | string | Bearer token to inject when caller has no `Authorization`. Supports `${ENV_VAR}` interpolation. |
+| `openapi.path` | no | string | Upstream OpenAPI contract path, relative to `upstream` and starting with `/`. When present and the backend is running, zelosMCP merges those endpoints into `/openapi.json` under the reverse-proxy `mount`, so they appear in `/docs`. |
 
 See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the canonical `X-Forwarded-*` set, network-isolation pattern, and pincher worked example.
 

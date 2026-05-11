@@ -692,6 +692,51 @@ class ProxyManager:
                     best = (spec, self.servers.get(name))
         return best
 
+    def reverse_proxy_openapi_specs(self) -> list[tuple[ServerSpec, Any]]:
+        """Return configured reverse proxies that advertise OpenAPI contracts."""
+        out: list[tuple[ServerSpec, Any]] = []
+        for name, spec in self._specs.items():
+            rp = spec.reverse_proxy
+            if rp is None or rp.openapi is None:
+                continue
+            out.append((spec, self.servers.get(name)))
+        return out
+
+    async def fetch_reverse_proxy_openapi(
+        self,
+        spec: ServerSpec,
+        *,
+        scheme: str = "http",
+        host: str = "",
+    ) -> dict[str, Any]:
+        """Fetch one backend's OpenAPI document through its configured upstream."""
+        rp = spec.reverse_proxy
+        assert rp is not None, "fetch_reverse_proxy_openapi called without a reverseProxy"
+        assert rp.openapi is not None, "fetch_reverse_proxy_openapi called without openapi"
+
+        client = self._http_client
+        if client is None:
+            raise RuntimeError("reverse-proxy client not initialised")
+
+        upstream_url = httpx.URL(rp.upstream + rp.openapi.path)
+        headers: dict[str, str] = {
+            "Accept": "application/json",
+            "X-Forwarded-Proto": scheme,
+            "X-Forwarded-Prefix": rp.mount,
+        }
+        if host:
+            headers["X-Forwarded-Host"] = host
+        headers.update(rp.headers)
+        if rp.auth_bearer and "authorization" not in {k.lower() for k in headers}:
+            headers["Authorization"] = f"Bearer {rp.auth_bearer}"
+
+        response = await client.get(upstream_url, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("upstream OpenAPI response must be a JSON object")
+        return payload
+
     async def proxy_request(
         self,
         spec: ServerSpec,

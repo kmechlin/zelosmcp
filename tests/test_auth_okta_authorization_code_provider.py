@@ -141,6 +141,64 @@ class TestCallback:
         assert poll.identity.username == "kmechl@nike.com"
 
     @pytest.mark.asyncio
+    async def test_callback_uses_basic_auth_when_client_secret_configured(self, store):
+        provider = _provider(store, client_secret="okta-secret")
+        session = await provider.start_device_flow("anonymous")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == provider.token_url:
+                form = parse_qs(request.content.decode())
+                assert "client_id" not in form
+                assert request.headers["authorization"].startswith("Basic ")
+                return httpx.Response(
+                    200,
+                    json={
+                        "access_token": "okta_access",
+                        "refresh_token": "okta_refresh",
+                        "expires_in": 3600,
+                        "scope": "openid profile email",
+                    },
+                )
+            if str(request.url) == provider.userinfo_url:
+                return httpx.Response(
+                    200,
+                    json={"preferred_username": "kmechl@nike.com"},
+                )
+            return httpx.Response(404)
+
+        with _mock_httpx(handler):
+            state = await provider.handle_callback(
+                code="auth_code", state=session.session_id
+            )
+
+        assert state.state is DeviceFlowStateKind.COMPLETE
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_error_includes_okta_body(self, store):
+        provider = _provider(store)
+        session = await provider.start_device_flow("anonymous")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == provider.token_url:
+                return httpx.Response(
+                    401,
+                    json={
+                        "error": "invalid_client",
+                        "error_description": "Client authentication failed",
+                    },
+                )
+            return httpx.Response(404)
+
+        with _mock_httpx(handler):
+            state = await provider.handle_callback(
+                code="auth_code", state=session.session_id
+            )
+
+        assert state.state is DeviceFlowStateKind.ERROR
+        assert "invalid_client" in state.error_message
+        assert "Client authentication failed" in state.error_message
+
+    @pytest.mark.asyncio
     async def test_callback_error_marks_session_error(self, store):
         provider = _provider(store)
         session = await provider.start_device_flow("anonymous")

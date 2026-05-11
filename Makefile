@@ -74,10 +74,10 @@ ZELOSMCP_AUTH_PROVIDERS_FILE ?= $(shell pwd)/configs/auth-providers.json
 # be present in the container's environment. Source these from .env (which
 # `make init-env` writes) or a Kubernetes Secret in production.
 ZELOSMCP_GITHUB_CLIENT_ID ?=
-ZELOSMCP_OKTA_ISSUER ?=
-ZELOSMCP_OKTA_CLIENT_ID ?=
-ZELOSMCP_OKTA_REDIRECT_URI ?= http://localhost:8000/api/auth/nike_okta/callback
-ZELOSMCP_OKTA_MEMBERSHIP_HINT ?=
+ZELOSMCP_OKTA_ISSUER ?= https://nike.okta.com/oauth2/aus27z7p76as9Dz0H1t7
+ZELOSMCP_OKTA_CLIENT_ID ?= nike.niketech.zelosmcp
+ZELOSMCP_OKTA_REDIRECT_URI ?= http://localhost:8000/auth/okta/callback
+ZELOSMCP_OKTA_MEMBERSHIP_HINT ?= Nike.uee.maria
 ZELOSMCP_CI_GITHUB_PAT ?=
 
 # Host paths bind-mounted in.
