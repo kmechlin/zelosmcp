@@ -170,3 +170,28 @@ Commands/checks run:
   - Passed with no whitespace errors.
 Gotcha: docs/dashboard.md was outside the original docs-update ledger file list but contained user-facing stale wrapper-pair wording, so docs-update needs to include it for terminology consistency.
 Follow-ups: Parent should invoke verifier again before marking docs-update complete in ledger.yaml. Do not change ledger.yaml from this follow-up.
+
+Task: verifier-docs-update-follow-up
+Outcome: Verification did not pass after commit 4370d4d. Commits c023fdc and 4370d4d exist, and the affected docs now describe the non-max wrapper trio, search_tools(query, limit?) targeted compressed catalog search, and level=max as a single list_tools wrapper. Docs-only stale-term search is clean, git diff --check passes, and doc lints are clean. However, related passthrough gating tests still assert the old get_tool_schema/invoke_tool-only wrapper surface and fail now that search_tools is implemented, so docs-update should remain pending until that tested behavior is updated or explicitly scoped out.
+Commands/checks run:
+- git --no-pager status --short && git --no-pager log --oneline --decorate -12 && git --no-pager show --stat --oneline --name-status --no-ext-diff c023fdc 4370d4d
+  - Confirmed 4370d4d is HEAD and c023fdc is present in local history; c023fdc changed compression/configuration/cursor/default-mcps/oauth docs plus progress.txt, and 4370d4d changed compression/dashboard/oauth docs plus progress.txt.
+- git --no-pager diff -- docs ledger.yaml progress.txt tool-search-plan.md
+  - No tracked diff before verifier edits.
+- rg "wrapper pair|wrapper-pair|compressed pair|compressed-pair" docs
+  - Passed: no matches found in docs.
+- rg "search_tools\\(query, limit\\?\\)|wrapper trio|level=max|single `list_tools`|get_tool_schema.*search_tools.*invoke_tool" docs
+  - Confirmed affected docs describe search_tools, wrapper trio behavior, and max single-list_tools behavior.
+- rg "wrapper_tool_names|compressed_tool_list|make_search_tools_wrapper|def search_catalog|op == \"search_tools\"|level == \"max\"|search_tools" src/zelosmcp/compression.py
+  - Confirmed implementation exposes get_tool_schema/search_tools/invoke_tool for non-max levels and preserves max as list_tools.
+- rg "wrapper pair|wrapper-pair|compressed pair|compressed-pair" .
+  - Found remaining stale wording outside docs in source comments/UI text and tests, including tests/test_aggregator_gating.py.
+- git diff --check
+  - Passed with no whitespace errors.
+- ReadLints on docs/compression.md, docs/configuration.md, docs/cursor-integration.md, docs/default-mcps.md, docs/oauth-passthrough.md, and docs/dashboard.md
+  - No linter errors found.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py tests/test_aggregator_unit.py
+  - Passed: 79 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
+  - Failed: tests/test_aggregator_gating.py has 4 stale expectations that omit github__search_tools/legacy__search_tools from visible wrapper names; the rest of the selected tests passed.
+Risks/follow-ups: Update passthrough gating tests and remaining non-doc stale wrapper-pair comments/UI strings, or explicitly decide they are outside docs-update scope before marking the ledger task complete. ledger.yaml was intentionally left unchanged.
