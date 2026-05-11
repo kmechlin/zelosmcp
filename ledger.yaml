@@ -107,7 +107,7 @@ ledger:
     - id: green-compression-helper
       title: Implement compression search wrapper
       delegate_to: implementation-worker
-      status: pending
+      status: complete
       phase: green
       max_tokens: 100000
       files:
