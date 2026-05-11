@@ -40,3 +40,11 @@ Commands run:
 - PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py
   - Red result: 3 failed, 42 passed; failures are missing alpha__search_tools list entries and dispatch falling through to backend, matching the planned missing production behavior.
 Remaining risks/follow-ups: Shell commands in this environment had a roughly 90 second startup delay before output, but completed successfully. Proceed with green-compression-helper; keep level=max unchanged and route aggregator/global search_tools through existing wrapper_tool_names and handle_compressed_call rather than bespoke aggregator dispatch.
+
+Task: green-compression-helper
+Outcome: Implemented the pure compression search path in src/zelosmcp/compression.py: non-max wrapper lists now include search_tools between get_tool_schema and invoke_tool, search matches catalog entries by tool name, description, and top-level parameter names, handle_compressed_call validates query/limit and returns no-match text without dispatching to the backend, and level=max still exposes only list_tools.
+Commands run:
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py
+  - Green result: 34 passed.
+Gotcha: No new gotchas beyond the existing uv/PYTHONPATH test invocation note.
+Follow-ups: Parent verifier should run the focused validation, including aggregator dispatch coverage, before marking green-compression-helper complete in ledger.yaml.

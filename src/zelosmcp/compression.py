@@ -2,13 +2,15 @@
 ``scope=global`` wrapper.
 
 The compression scheme replaces a backend's full tool surface (N tools, each
-with a description and JSON-schema arguments) with **at most two wrapper
+with a description and JSON-schema arguments) with **at most three wrapper
 tools**:
 
 - ``get_tool_schema(tool_name)`` — returns the full schema for one underlying
   tool. The wrapper's *description* embeds a compressed catalog (one short
   line per tool) so the LLM can browse without paying schema-fetch latency
   for every name.
+- ``search_tools(query, limit?)`` — searches the compressed catalog by tool
+  name, description, and top-level parameter names.
 - ``invoke_tool(tool_name, tool_input)`` — runs the underlying tool by name.
 
 At ``level="max"`` the catalog drops the ``get_tool_schema`` lookup entirely
@@ -41,6 +43,7 @@ __all__ = [
     "make_get_schema_wrapper",
     "make_invoke_wrapper",
     "make_list_tools_wrapper",
+    "make_search_tools_wrapper",
     "handle_compressed_call",
     "wrapper_tool_names",
 ]
@@ -55,7 +58,7 @@ def wrapper_tool_names(level: str) -> tuple[str, ...]:
     """
     if level == "max":
         return ("list_tools",)
-    return ("get_tool_schema", "invoke_tool")
+    return ("get_tool_schema", "search_tools", "invoke_tool")
 
 
 def _first_sentence(text: str) -> str:
@@ -107,6 +110,19 @@ def compress_for_catalog(tool: Tool, level: str) -> str:
 def _render_catalog(tools: list[Tool], level: str) -> str:
     """One blank-line-separated rendering of the per-tool lines."""
     return "\n".join(compress_for_catalog(t, level) for t in tools)
+
+
+def _search_catalog(catalog: dict[str, Tool], query: str, limit: int | None = None) -> list[Tool]:
+    """Return tools whose name, description, or parameter names match ``query``."""
+    needle = query.casefold()
+    matches: list[Tool] = []
+    for tool in catalog.values():
+        fields = [tool.name, tool.description or "", *_param_names(tool)]
+        if any(needle in field.casefold() for field in fields):
+            matches.append(tool)
+            if limit is not None and len(matches) >= limit:
+                break
+    return matches
 
 
 def _wrapper_name(prefix: str, base: str) -> str:
@@ -174,6 +190,53 @@ def make_get_schema_wrapper(
                 }
             },
             "required": ["tool_name"],
+        },
+    )
+
+
+def make_search_tools_wrapper(
+    prefix: str,
+    n_tools: int,
+    *,
+    auth_pending: bool = False,
+) -> Tool:
+    """Build the ``search_tools`` wrapper Tool. Required arg: ``query``.
+
+    When ``auth_pending=True`` the description tells the agent to expect
+    a 401 OAuth challenge on first invocation rather than a search failure.
+    """
+    label = f"'{prefix}'" if prefix else "this backend"
+    schema_ref = (
+        f"{prefix}__get_tool_schema" if prefix else "get_tool_schema"
+    )
+    if auth_pending:
+        description = (
+            f"Search tools exposed by {label} by name, description, or "
+            f"top-level parameter name.\n\n{_AUTH_PENDING_NOTE}"
+        )
+    else:
+        description = (
+            f"Search the {n_tools} tools exposed by {label} by name, "
+            f"description, or top-level parameter name. Use `{schema_ref}` "
+            f"first if you need the full schema."
+        )
+    return Tool(
+        name=_wrapper_name(prefix, "search_tools"),
+        description=description,
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search text to match against tool catalog entries.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Maximum number of matching tools to return.",
+                },
+            },
+            "required": ["query"],
         },
     )
 
@@ -270,7 +333,7 @@ def compressed_tool_list(
     """Convenience: return the wrapper tools for one backend at ``level``.
 
     - ``max`` => ``[list_tools]``.
-    - anything else => ``[get_tool_schema, invoke_tool]``.
+    - anything else => ``[get_tool_schema, search_tools, invoke_tool]``.
 
     Caller is responsible for applying the prefix to wrapper names. ``low``
     is treated as "no compression" by callers and shouldn't reach this
@@ -288,6 +351,9 @@ def compressed_tool_list(
     return [
         make_get_schema_wrapper(
             prefix, tools, level, auth_pending=auth_pending
+        ),
+        make_search_tools_wrapper(
+            prefix, len(tools), auth_pending=auth_pending
         ),
         make_invoke_wrapper(
             prefix, len(tools), auth_pending=auth_pending
@@ -340,6 +406,9 @@ async def handle_compressed_call(
       downstream still passes. The dispatch function is expected to return
       something with ``.content``, ``.structuredContent``, and ``.isError``
       attributes (i.e. an MCP CallToolResult-shaped object).
+    - ``op="search_tools"``: searches ``catalog`` by tool name, description,
+      and top-level parameter names, then returns matching compressed catalog
+      lines rendered at ``level``.
     - ``op="list_tools"``: returns the compressed catalog rendered at
       ``level`` as a text response.
     - Unknown ``op``: isError result.
@@ -363,6 +432,24 @@ async def handle_compressed_call(
             return _unknown_tool_result(name, catalog)
         body = tool.model_dump(by_alias=True, exclude_none=True)
         return _text_result(json.dumps(body, indent=2))
+
+    if op == "search_tools":
+        query = args.get("query")
+        limit = args.get("limit")
+        if not isinstance(query, str) or not query.strip():
+            return _text_result(
+                "search_tools requires `query` (non-empty string).", is_error=True
+            )
+        if limit is not None:
+            if not isinstance(limit, int) or limit < 1:
+                return _text_result(
+                    "search_tools `limit` must be a positive integer.",
+                    is_error=True,
+                )
+        matches = _search_catalog(catalog, query.strip(), limit)
+        if not matches:
+            return _text_result("(no matching tools)")
+        return _text_result(_render_catalog(matches, level))
 
     if op == "invoke_tool":
         name = args.get("tool_name")
@@ -393,6 +480,6 @@ async def handle_compressed_call(
         )
 
     return _text_result(
-        f"Unknown compression op {op!r}; expected get_tool_schema, invoke_tool, or list_tools.",
+        f"Unknown compression op {op!r}; expected get_tool_schema, search_tools, invoke_tool, or list_tools.",
         is_error=True,
     )
