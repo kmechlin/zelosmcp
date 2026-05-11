@@ -20,7 +20,7 @@
 #   - IMAGE_TAG_HERE      registry path of your built image
 #   - YOUR_FERNET_KEY     base64 Fernet key (see deploy/README.md)
 #   - YOUR_GH_CLIENT_ID   github_oauth_app client_id
-#   - YOUR_OKTA_*         okta_device_flow values (or remove if not used)
+#   - YOUR_OKTA_*         okta_authorization_code values (or remove if not used)
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -58,6 +58,7 @@ stringData:
   ZELOSMCP_GITHUB_CLIENT_ID: "YOUR_GH_CLIENT_ID"
   ZELOSMCP_OKTA_ISSUER: "https://nike.okta.com/oauth2/default"
   ZELOSMCP_OKTA_CLIENT_ID: "YOUR_OKTA_CLIENT_ID"
+  ZELOSMCP_OKTA_REDIRECT_URI: "http://localhost:8000/api/auth/nike_okta/callback"
   ZELOSMCP_OKTA_MEMBERSHIP_HINT: "Nike.uee.maria"
 
   # Auth-providers config. References the env vars above via
@@ -71,9 +72,10 @@ stringData:
           "scopes": ["repo", "read:org", "user:email", "gist", "workflow"]
         },
         "nike_okta": {
-          "type": "okta_device_flow",
+          "type": "okta_authorization_code",
           "issuer": "${ZELOSMCP_OKTA_ISSUER}",
           "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+          "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
           "scopes": ["openid", "profile", "email"],
           "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
         }
@@ -143,6 +145,12 @@ spec:
                 secretKeyRef:
                   name: zelosmcp-auth
                   key: ZELOSMCP_OKTA_CLIENT_ID
+                  optional: true
+            - name: ZELOSMCP_OKTA_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_OKTA_REDIRECT_URI
                   optional: true
             - name: ZELOSMCP_OKTA_MEMBERSHIP_HINT
               valueFrom:

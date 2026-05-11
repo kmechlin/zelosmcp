@@ -109,6 +109,7 @@ class TestConnectionsViewEndToEnd:
             for key in (
                 "name", "type", "ready", "identity",
                 "membership_hint", "supports_device_flow",
+                "supports_authorization_code",
             ):
                 assert key in entry, f"missing key {key!r}"
             assert entry["supports_device_flow"] is True

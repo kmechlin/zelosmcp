@@ -99,4 +99,5 @@ class StaticBearerProvider(AuthProvider):
             identity=identity,
             membership_hint=None,
             supports_device_flow=False,
+            supports_authorization_code=False,
         )

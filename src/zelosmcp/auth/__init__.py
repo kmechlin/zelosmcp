@@ -39,6 +39,9 @@ from zelosmcp.auth.factory import (
 # provider type without needing to enumerate them at the call site.
 from zelosmcp.auth.github import GithubOAuthAppProvider  # noqa: F401
 from zelosmcp.auth.okta import OktaDeviceFlowProvider  # noqa: F401
+from zelosmcp.auth.okta_authorization_code import (  # noqa: F401
+    OktaAuthorizationCodeProvider,
+)
 from zelosmcp.auth.passthrough import PassthroughProvider
 from zelosmcp.auth.protocol import (
     AuthProvider,
@@ -71,6 +74,7 @@ __all__ = [
     "DeviceFlowState",
     "DeviceFlowStateKind",
     "GithubOAuthAppProvider",
+    "OktaAuthorizationCodeProvider",
     "OktaDeviceFlowProvider",
     "PassthroughProvider",
     "ProviderFactory",

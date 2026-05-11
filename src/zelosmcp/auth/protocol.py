@@ -72,6 +72,11 @@ class DeviceFlowSession:
     verification_uri_complete: str | None
     expires_in: float
     poll_interval: float
+    # Browser-flow providers (Authorization Code + PKCE) don't have a
+    # user_code. They return an authorization URL instead. Kept on this
+    # existing value object so the HTTP route + UI can support both flows
+    # without a broader protocol rename from "device" to "auth" yet.
+    authorization_url: str | None = None
 
 
 class DeviceFlowStateKind(str, Enum):
@@ -140,6 +145,11 @@ class ProviderStatus:
     identity: ProviderIdentity | None = None
     membership_hint: str | None = None
     supports_device_flow: bool = False
+    # Auth-code providers still use the same Connections UI and start/stream
+    # endpoints, but return an authorization_url instead of user_code.
+    # Keeping this separate lets the GUI label the Connect affordance while
+    # preserving backwards compatibility with existing provider cards.
+    supports_authorization_code: bool = False
 
 
 # ── Protocol ────────────────────────────────────────────────────────────
