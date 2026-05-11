@@ -664,6 +664,7 @@ def create_app(manager: ProxyManager | None = None):
                     "identity": None,
                     "membership_hint": None,
                     "supports_device_flow": False,
+                "supports_authorization_code": False,
                     "error": str(exc),
                 })
                 continue
@@ -673,6 +674,7 @@ def create_app(manager: ProxyManager | None = None):
                 "ready": status.ready,
                 "membership_hint": status.membership_hint,
                 "supports_device_flow": status.supports_device_flow,
+                "supports_authorization_code": status.supports_authorization_code,
             }
             if status.identity is not None:
                 entry["identity"] = {
@@ -733,9 +735,65 @@ def create_app(manager: ProxyManager | None = None):
             "user_code": session.user_code,
             "verification_uri": session.verification_uri,
             "verification_uri_complete": session.verification_uri_complete,
+            "authorization_url": session.authorization_url,
             "expires_in": session.expires_in,
             "poll_interval": session.poll_interval,
         })
+
+    async def api_auth_provider_callback(request: Request) -> HTMLResponse:
+        """
+        summary: Browser callback for Authorization Code + PKCE providers.
+        description: |
+          Okta Native apps redirect here after the user completes the
+          Authorization Code flow. The provider validates state, exchanges the
+          code using the stored PKCE verifier, stores tokens, and marks the
+          pending auth session complete so the Connections UI SSE stream can
+          update.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Small HTML completion / error page.
+          404:
+            description: Unknown provider.
+          400:
+            description: Provider does not support auth-code callbacks.
+        """
+        provider_name = request.path_params["provider"]
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return HTMLResponse(
+                f"<h1>Unknown provider</h1><p>{provider_name}</p>",
+                status_code=404,
+            )
+        handler = getattr(provider, "handle_callback", None)
+        if handler is None:
+            return HTMLResponse(
+                "<h1>Unsupported provider</h1>"
+                "<p>This provider does not support browser callbacks.</p>",
+                status_code=400,
+            )
+        state = await handler(
+            code=request.query_params.get("code"),
+            state=request.query_params.get("state"),
+            error=request.query_params.get("error"),
+            error_description=request.query_params.get("error_description"),
+        )
+        if state.state.value == "complete":
+            who = state.identity.username if state.identity else "your account"
+            return HTMLResponse(
+                "<!doctype html><html><body>"
+                "<h1>Authorization complete</h1>"
+                f"<p>Connected {who}. You can close this tab.</p>"
+                "<script>setTimeout(() => window.close(), 1200)</script>"
+                "</body></html>"
+            )
+        return HTMLResponse(
+            "<!doctype html><html><body>"
+            "<h1>Authorization failed</h1>"
+            f"<p>{state.error_message or 'Unknown error'}</p>"
+            "</body></html>",
+            status_code=400,
+        )
 
     async def api_auth_provider_stream(request: Request) -> StreamingResponse:
         """
@@ -1298,6 +1356,10 @@ def create_app(manager: ProxyManager | None = None):
                 "/api/auth/{provider}/start",
                 api_auth_provider_start,
                 methods=["POST"],
+            ),
+            Route(
+                "/api/auth/{provider}/callback",
+                api_auth_provider_callback,
             ),
             Route(
                 "/api/auth/{provider}/stream",

@@ -57,6 +57,7 @@ COMPRESS_SCOPES: frozenset[str] = frozenset({"catalog", "aggregator", "global"})
 # factory in :mod:`zelosmcp.auth.factory`.
 AUTH_PROVIDER_TYPES: frozenset[str] = frozenset({
     "github_device_flow",
+    "okta_authorization_code",
     "okta_device_flow",
     "passthrough",
     "static",
@@ -167,6 +168,10 @@ class AuthProviderSpec:
       ``scopes``. No ``bearer``, no ``issuer``.
     - ``okta_device_flow`` — requires ``issuer`` + ``client_id``,
       optional ``scopes``, optional ``membership_hint``.
+    - ``okta_authorization_code`` — Okta Authorization Code + PKCE for
+      Native apps. Requires ``issuer`` + ``client_id``; optional
+      ``redirect_uri`` (defaults locally), ``scopes`` and
+      ``membership_hint``.
     - ``passthrough`` — only ``name`` + ``type``; all other fields
       rejected. Wraps the legacy "forward Authorization verbatim"
       behaviour as an :class:`AuthProvider`.
@@ -183,6 +188,7 @@ class AuthProviderSpec:
     type: str
     client_id: str | None = None
     issuer: str | None = None
+    redirect_uri: str | None = None
     scopes: list[str] = field(default_factory=list)
     membership_hint: str | None = None
     bearer: str | None = None  # static only
@@ -200,6 +206,8 @@ class AuthProviderSpec:
             info["client_id"] = self.client_id
         if self.issuer:
             info["issuer"] = self.issuer
+        if self.redirect_uri:
+            info["redirect_uri"] = self.redirect_uri
         if self.scopes:
             info["scopes"] = list(self.scopes)
         if self.membership_hint:
@@ -587,6 +595,9 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
     elif type_raw == "okta_device_flow":
         allowed |= {"client_id", "issuer", "scopes"}
         required = {"client_id", "issuer"}
+    elif type_raw == "okta_authorization_code":
+        allowed |= {"client_id", "issuer", "redirect_uri", "scopes"}
+        required = {"client_id", "issuer"}
     elif type_raw == "static":
         allowed |= {"bearer"}
         required = {"bearer"}
@@ -627,6 +638,23 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
                 f"https:// URL with a host (got {issuer_str!r})"
             )
         issuer = issuer_str
+
+    redirect_uri: str | None = None
+    if "redirect_uri" in raw:
+        if not isinstance(raw["redirect_uri"], str) or not raw["redirect_uri"]:
+            raise ConfigError(
+                f"Auth provider '{name}': redirect_uri must be a non-empty string"
+            )
+        redirect_uri_str = _interpolate_env(
+            raw["redirect_uri"], name, "redirect_uri"
+        )
+        parsed = urlparse(redirect_uri_str)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ConfigError(
+                f"Auth provider '{name}': redirect_uri must be an http:// or "
+                f"https:// URL with a host (got {redirect_uri_str!r})"
+            )
+        redirect_uri = redirect_uri_str
 
     scopes: list[str] = []
     if "scopes" in raw:
@@ -669,6 +697,7 @@ def _parse_auth_provider(name: str, raw: Any) -> AuthProviderSpec:
         type=type_raw,
         client_id=client_id,
         issuer=issuer,
+        redirect_uri=redirect_uri,
         scopes=scopes,
         membership_hint=membership_hint,
         bearer=bearer,

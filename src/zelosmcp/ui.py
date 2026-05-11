@@ -3322,14 +3322,14 @@ HTML_TEMPLATE = """\
     const dot = document.createElement("span");
     dot.className = "connection-status-dot";
     if (entry.ready) dot.classList.add("connected");
-    else if (entry.supports_device_flow) dot.classList.add("gated");
+    else if (entry.supports_device_flow || entry.supports_authorization_code) dot.classList.add("gated");
     status.appendChild(dot);
     const statusText = document.createElement("span");
     if (entry.ready && entry.identity && entry.identity.username) {
       statusText.textContent = "Connected";
     } else if (entry.ready) {
       statusText.textContent = "Ready (legacy)";
-    } else if (entry.supports_device_flow) {
+    } else if (entry.supports_device_flow || entry.supports_authorization_code) {
       statusText.textContent = "Not connected";
     } else {
       statusText.textContent = "Always available";
@@ -3362,7 +3362,7 @@ HTML_TEMPLATE = """\
 
     const actions = document.createElement("div");
     actions.className = "connection-card-actions";
-    if (entry.supports_device_flow) {
+    if (entry.supports_device_flow || entry.supports_authorization_code) {
       const connect = document.createElement("button");
       connect.type = "button";
       connect.className = "btn btn-mini " + (entry.ready ? "btn-outline" : "btn-primary");
@@ -3386,7 +3386,7 @@ HTML_TEMPLATE = """\
 
   async function startConnect(entry) {
     showConnectModal(entry);
-    setConnectModalStatus("Requesting device code...", null);
+    setConnectModalStatus("Requesting authorization URL...", null);
     let session;
     try {
       const r = await fetch(`/api/auth/${encodeURIComponent(entry.name)}/start`, {
@@ -3405,11 +3405,14 @@ HTML_TEMPLATE = """\
     connectModalProvider = entry.name;
     const codeRow = document.getElementById("connect-modal-code-row");
     const codeEl = document.getElementById("connect-modal-code");
-    if (codeRow) codeRow.classList.remove("hidden");
-    if (codeEl) codeEl.textContent = session.user_code;
+    if (codeRow) {
+      if (session.user_code) codeRow.classList.remove("hidden");
+      else codeRow.classList.add("hidden");
+    }
+    if (codeEl) codeEl.textContent = session.user_code || "";
     const link = document.getElementById("connect-modal-authorize-link");
     if (link) {
-      link.href = session.verification_uri_complete || session.verification_uri;
+      link.href = session.authorization_url || session.verification_uri_complete || session.verification_uri;
       link.style.display = "inline-flex";
     }
     setConnectModalStatus("Waiting for authorization in browser...", null);

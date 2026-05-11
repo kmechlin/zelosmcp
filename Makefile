@@ -35,7 +35,7 @@ CORP_ROOT_AUTHORITY_CERT_NAME ?= Nike Root Authority NG
 # kmechlin's fork adds --basepath / --trust-proxy used by the default config's
 # reverseProxy entry. Override both to switch to upstream once that PR merges.
 PINCHER_REPO ?= https://github.com/kwad77/pincherMCP.git
-PINCHER_REF  ?= master
+PINCHER_REF  ?= v0.18.0
 
 # ============================================================================
 # Runtime variables (.env overrides these — `make init-env` writes a .env)
@@ -76,6 +76,7 @@ ZELOSMCP_AUTH_PROVIDERS_FILE ?= $(shell pwd)/configs/auth-providers.json
 ZELOSMCP_GITHUB_CLIENT_ID ?=
 ZELOSMCP_OKTA_ISSUER ?=
 ZELOSMCP_OKTA_CLIENT_ID ?=
+ZELOSMCP_OKTA_REDIRECT_URI ?= http://localhost:8000/api/auth/nike_okta/callback
 ZELOSMCP_OKTA_MEMBERSHIP_HINT ?=
 ZELOSMCP_CI_GITHUB_PAT ?=
 
@@ -319,6 +320,7 @@ up: kubeconfig ## Build (if missing) + start container + load default backends
 		-e ZELOSMCP_GITHUB_CLIENT_ID="$(ZELOSMCP_GITHUB_CLIENT_ID)" \
 		-e ZELOSMCP_OKTA_ISSUER="$(ZELOSMCP_OKTA_ISSUER)" \
 		-e ZELOSMCP_OKTA_CLIENT_ID="$(ZELOSMCP_OKTA_CLIENT_ID)" \
+		-e ZELOSMCP_OKTA_REDIRECT_URI="$(ZELOSMCP_OKTA_REDIRECT_URI)" \
 		-e ZELOSMCP_OKTA_MEMBERSHIP_HINT="$(ZELOSMCP_OKTA_MEMBERSHIP_HINT)" \
 		-e ZELOSMCP_CI_GITHUB_PAT="$(ZELOSMCP_CI_GITHUB_PAT)" \
 		$$AUTH_MOUNT_ARGS \
