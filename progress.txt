@@ -16,3 +16,12 @@ Commands run:
 Expected red failures: wrapper_tool_names and compressed_tool_list still expose only get_tool_schema/invoke_tool for non-max levels, and handle_compressed_call still treats search_tools as an unknown op. Existing max-list behavior continued to pass.
 Gotcha: In this checkout, focused tests need the src path plus pytest installed in the uv execution environment: PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py.
 Follow-ups: Implement the pure search helper, search_tools wrapper builder, and handle_compressed_call branch without changing level=max; then rerun the focused compression unit tests.
+
+Task: red-aggregator-dispatch-tests
+Outcome: Updated tests/test_aggregator_unit.py with red coverage for non-max compressed aggregator/global tools/list exposing alpha__search_tools and for alpha__search_tools returning cached catalog matches without backend dispatch. Existing max-level single alpha__list_tools coverage remains in place.
+Commands run:
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py
+  - Red result: 3 failed, 42 passed.
+Expected red failures: compressed medium aggregator/global tools/list still returns only alpha__get_tool_schema and alpha__invoke_tool, and alpha__search_tools is not recognized as a compression wrapper, so the aggregator dispatches it to the backend as a normal tool call.
+Gotcha: The MCP lowlevel server logs "Tool 'alpha__search_tools' not listed, no validation will be performed" during the dispatch red test because the missing wrapper is absent from tools/list; that warning is expected until wrapper_tool_names/compressed_tool_list include search_tools.
+Follow-ups: Implement search_tools in the compression helper path so aggregator wrapper detection picks it up through existing wrapper_tool_names and handle_compressed_call; parent verifier should validate this red task before ledger status changes.

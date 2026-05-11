@@ -705,7 +705,11 @@ class TestCompressedScopes:
         handler = _find_handler(server, "ListToolsRequest")
         result = await handler(None)
         names = [t.name for t in result.root.tools]
-        assert sorted(names) == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+        assert sorted(names) == [
+            "alpha__get_tool_schema",
+            "alpha__invoke_tool",
+            "alpha__search_tools",
+        ]
         assert "alpha" in agg.compressed_catalog
 
     @pytest.mark.asyncio
@@ -716,7 +720,11 @@ class TestCompressedScopes:
         handler = _find_handler(server, "ListToolsRequest")
         result = await handler(None)
         names = [t.name for t in result.root.tools]
-        assert sorted(names) == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+        assert sorted(names) == [
+            "alpha__get_tool_schema",
+            "alpha__invoke_tool",
+            "alpha__search_tools",
+        ]
 
     @pytest.mark.asyncio
     async def test_level_low_skips_wrappers(self):
@@ -765,6 +773,28 @@ class TestCompressedCallToolDispatch:
         sess.call_tool.assert_not_called()
         text = result.root.content[0].text
         assert "tool_1" in text
+
+    @pytest.mark.asyncio
+    async def test_search_tools_returns_matching_catalog_without_dispatch(self):
+        m, agg, server, _, sess, _ = _setup(
+            compress=CompressSpec(level="medium", scope="aggregator"), tool_count=4
+        )
+        await _find_handler(server, "ListToolsRequest")(None)
+        call_handler = _find_handler(server, "CallToolRequest")
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        req = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="alpha__search_tools",
+                arguments={"query": "number 2"},
+            ),
+        )
+        result = await call_handler(req)
+        sess.call_tool.assert_not_called()
+        assert result.root.isError is False
+        text = result.root.content[0].text
+        assert "tool_2: Tool number 2" in text
+        assert "tool_1" not in text
 
     @pytest.mark.asyncio
     async def test_invoke_tool_dispatches_to_backend(self):
