@@ -155,7 +155,7 @@ ledger:
     - id: refactor-style-pass
       title: Refactor against repo styleguide
       delegate_to: implementation-worker
-      status: pending
+      status: complete
       phase: refactor
       max_tokens: 100000
       files:
