@@ -283,3 +283,22 @@ Commands/checks run:
 - git --no-pager diff --check
   - Passed with no whitespace errors.
 Risks/follow-ups: No blockers found. configs/user-zelosmcp.json and tool-search-plan.md remain untracked and were intentionally left unstaged; tool-search-plan.md retains the original planning wording as historical context.
+
+Task: final-validation
+Outcome: Final verifier validation passed. All prior ledger tasks were already status: complete before this verifier pass, and final-validation was updated to status: complete after the focused and broadened validation suites passed. No production, docs, source-comment, UI-string, config, OAuth, or gating blockers remain from the stale wrapper-pair terminology search.
+Commands/checks run:
+- git --no-pager status --short
+  - Showed only untracked local files configs/user-zelosmcp.json and tool-search-plan.md before verifier edits; they were not staged.
+- git --no-pager diff -- .
+  - No tracked diff before verifier edits.
+- git --no-pager log --oneline --decorate -30
+  - Confirmed the expected local task and verifier commits through 5dcf11d Verify docs update completion.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py tests/test_aggregator_unit.py
+  - Passed: 79 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration tests/test_app_integration.py::TestPerBackendGlobalScope tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
+  - Passed: 116 passed.
+- git --no-pager diff --check
+  - Passed with no whitespace errors.
+- rg "wrapper pair|wrapper-pair|wrapper_pair|compressed pair|compressed-pair|two-tool|two tool|only.*get_tool_schema.*invoke_tool|get_tool_schema.*invoke_tool-only|invoke_tool-only" .
+  - Remaining matches are historical/contextual only in progress.txt plus the original tool-search-plan.md planning note; no actionable source, UI, docs, config, OAuth, or test stale wording remains.
+Risks/follow-ups: No blockers found. configs/user-zelosmcp.json and tool-search-plan.md remain untracked and were intentionally left unstaged; tool-search-plan.md preserves original planning wording as historical context. No remote push was performed.

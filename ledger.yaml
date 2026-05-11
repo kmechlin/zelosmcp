@@ -206,7 +206,7 @@ ledger:
     - id: final-validation
       title: Run focused validation
       delegate_to: verifier
-      status: pending
+      status: complete
       phase: validation
       max_tokens: 100000
       preflight:
