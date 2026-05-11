@@ -29,7 +29,7 @@ Pure passthrough is still the right choice when the upstream's OAuth flow works 
 
 ## End-to-end sequence
 
-The aggregator at `/mcp` always emits the wrapper pair (`<backend>__get_tool_schema`, `<backend>__invoke_tool`) for every passthrough backend, **regardless of inbound auth state**. The first wrapper invocation drives the OAuth dance.
+The aggregator at `/mcp` always emits the non-`max` wrapper trio (`<backend>__get_tool_schema`, `<backend>__search_tools`, `<backend>__invoke_tool`) for every passthrough backend, **regardless of inbound auth state**. The first wrapper invocation drives the OAuth dance.
 
 ```mermaid
 sequenceDiagram
@@ -42,7 +42,7 @@ sequenceDiagram
     C->>Z: tools/list
     Z->>G: try open session (no token)
     G-->>Z: 401 (silent — never blocks tools/list)
-    Z-->>C: github__get_tool_schema, github__invoke_tool (auth_pending descriptions)
+    Z-->>C: github__get_tool_schema, github__search_tools, github__invoke_tool (auth_pending descriptions)
 
     Note over C,Z: First wrapper invocation (cold)
     C->>Z: tools/call name=github__invoke_tool tool_name=list_repos
@@ -73,7 +73,7 @@ sequenceDiagram
 
 A few details worth calling out:
 
-- **The wrapper pair is the OAuth entry point.** The agent never has to know the upstream's specific tool names ahead of time. It calls `<backend>__invoke_tool(tool_name=..., tool_input=...)`; if no session exists yet, the call returns 401 + WWW-Authenticate; Cursor opens the browser; the next call succeeds.
+- **The wrapper trio is the OAuth entry point.** The agent never has to know the upstream's specific tool names ahead of time. It can search the catalog with `<backend>__search_tools(query=...)`, fetch one schema with `<backend>__get_tool_schema(tool_name=...)`, or call `<backend>__invoke_tool(tool_name=..., tool_input=...)`; if no session exists yet, the call returns 401 + WWW-Authenticate; Cursor opens the browser; the next call succeeds.
 - **Cursor fetches `/.well-known/oauth-protected-resource` directly from the upstream**, not via zelosMCP. RFC 9728 §5.1 says clients MUST honor the `resource_metadata` URL in the `WWW-Authenticate` challenge — that URL points at the upstream, so zelosMCP doesn't need to serve any well-known endpoints itself.
 - **The token is for the upstream resource.** Cursor requests a token for `https://api.githubcopilot.com/mcp/` (the `resource` field in the metadata). zelosMCP forwards it; the upstream validates its own `aud` claim. zelosMCP does not need OAuth client credentials of its own.
 - **Catalog cache is shared across users.** The set of tools a backend exposes doesn't depend on the caller's identity (only the data they return does). Once any inbound user authenticates and warms the cache, every subsequent `tools/list` renders full wrapper descriptions — regardless of whether the *current* caller has a token.
@@ -201,17 +201,17 @@ The static bearer is **redacted** in `/api/status` (`auth: {bearer: "***"}`) and
 
 ## What constraints apply
 
-- **Compression is the default.** Passthrough backends auto-apply `compress.scope=aggregator, level=medium` so the aggregator emits the wrapper pair on `tools/list` even when no caller has authenticated yet. To opt out (and revert to "invisible until auth" behaviour), set `"compress": null`. `"compress": {"scope": "global"}` is rejected at parse time — `/<name>/mcp` is a streaming reverse proxy, not a session manager, so wrappers can't be served at the per-backend mount.
+- **Compression is the default.** Passthrough backends auto-apply `compress.scope=aggregator, level=medium` so the aggregator emits the wrapper trio on `tools/list` even when no caller has authenticated yet. To opt out (and revert to "invisible until auth" behaviour), set `"compress": null`. `"compress": {"scope": "global"}` is rejected at parse time — `/<name>/mcp` is a streaming reverse proxy, not a session manager, so wrappers can't be served at the per-backend mount.
 - **`type: "sse"` and `command` are rejected.** Passthrough requires `type: "streamable-http"` and a `url`.
 - **`tools/list` always succeeds and emits wrappers** for every passthrough backend with compression configured. With a valid token: real catalog inlined. With a previously-warmed cache: same. With nothing: an `auth_pending` description block telling the agent that the first invocation will trigger OAuth.
-- **First wrapper invocation drives OAuth.** `<backend>__invoke_tool` (or `<backend>__get_tool_schema`) on a backend with no usable session opens a session lazily. The pool surfaces a `PassthroughChallengeError`; the aggregator middleware rewrites the response to `HTTP 401 + WWW-Authenticate` (body: `{"error":"authentication_required","backend":"<name>"}`), and Cursor's OAuth client takes it from there. Subsequent calls go straight through.
+- **First wrapper invocation drives OAuth.** `<backend>__search_tools`, `<backend>__get_tool_schema`, or `<backend>__invoke_tool` on a backend with no usable session opens a session lazily. The pool surfaces a `PassthroughChallengeError`; the aggregator middleware rewrites the response to `HTTP 401 + WWW-Authenticate` (body: `{"error":"authentication_required","backend":"<name>"}`), and Cursor's OAuth client takes it from there. Subsequent calls go straight through.
 - **Upstream auth state is captured by an in-pool httpx probe.** Before bringing the MCP SDK in, `_spawn_session_worker` does one POST against the upstream URL with the inbound `Authorization` (if any) and inspects the raw response. A 401 short-circuits straight to `PassthroughChallengeError` with the **real** `WWW-Authenticate` header from the upstream — bypassing the SDK's anyio task group, which otherwise swallows the underlying `httpx.HTTPStatusError` in its `post_writer` handler before our worker sees it. Non-401 responses (or probe failures: DNS, TLS, timeout) fall through to the regular SDK path, so the change is fully backward-compatible. Probe timeout is 5s.
 
 ## Cursor `mcp.json`
 
 ### Option 1 (recommended) — aggregate-only
 
-The aggregator at `/mcp` is sufficient on its own. It emits the wrapper pair for every passthrough backend whether or not the user has authenticated yet:
+The aggregator at `/mcp` is sufficient on its own. It emits the wrapper trio for every passthrough backend whether or not the user has authenticated yet:
 
 ```json
 {
@@ -224,7 +224,7 @@ The aggregator at `/mcp` is sufficient on its own. It emits the wrapper pair for
 }
 ```
 
-Cursor sees `github__get_tool_schema`, `github__invoke_tool`, `atlassian__get_tool_schema`, `atlassian__invoke_tool`, etc. The agent invokes the wrapper, hits 401 on first call, OAuth fires, and the catalog populates.
+Cursor sees `github__get_tool_schema`, `github__search_tools`, `github__invoke_tool`, `atlassian__get_tool_schema`, `atlassian__search_tools`, `atlassian__invoke_tool`, etc. The agent invokes a wrapper, hits 401 on first call, OAuth fires, and the catalog populates.
 
 ### Option 2 — direct per-backend entry
 
@@ -313,7 +313,7 @@ For implementers: the passthrough flow lives across these files.
 - [`src/zelosmcp/manager.py`](../src/zelosmcp/manager.py) — `ProxyManager.proxy_mcp_request` is the streaming HTTP forwarder used by `/<name>/mcp`. Reads inbound `Authorization`, injects `auth.bearer` fallback, streams the upstream response chunk-by-chunk so SSE survives.
 - [`src/zelosmcp/passthrough_pool.py`](../src/zelosmcp/passthrough_pool.py) — `PassthroughSessionPool` keyed by SHA-256 of the inbound `Authorization`, LRU + idle-TTL eviction, per-key locks for concurrent first-touch coalescing. Surfaces upstream 401s as `PassthroughChallengeError` carrying the `WWW-Authenticate` header verbatim.
 - [`src/zelosmcp/compression.py`](../src/zelosmcp/compression.py) — `compressed_tool_list(..., auth_pending=True)` decorates the wrapper descriptions when no upstream catalog has been cached yet, so the agent expects a 401 challenge on first invocation.
-- [`src/zelosmcp/aggregator.py`](../src/zelosmcp/aggregator.py) — `Aggregator._register_handlers` always emits the wrapper pair for passthrough backends in `tools/list` (cached catalog wins; otherwise auth-pending wrappers). For `tools/call`, recognises wrapper names against passthrough specs and dispatches via `handle_compressed_call` after lazily opening the upstream session. On `PassthroughChallengeError` it sets the `pending_challenge` ContextVar; the ASGI middleware in [`src/zelosmcp/app.py`](../src/zelosmcp/app.py) reads the ContextVar after `handle_request` returns and rewrites the buffered response to `401 + WWW-Authenticate`.
+- [`src/zelosmcp/aggregator.py`](../src/zelosmcp/aggregator.py) — `Aggregator._register_handlers` always emits the wrapper trio for passthrough backends in `tools/list` (cached catalog wins; otherwise auth-pending wrappers). For `tools/call`, recognises wrapper names against passthrough specs and dispatches via `handle_compressed_call` after lazily opening the upstream session. On `PassthroughChallengeError` it sets the `pending_challenge` ContextVar; the ASGI middleware in [`src/zelosmcp/app.py`](../src/zelosmcp/app.py) reads the ContextVar after `handle_request` returns and rewrites the buffered response to `401 + WWW-Authenticate`.
 
 ## See also
 

@@ -125,3 +125,13 @@ Commands run:
 - rg "manager|aggregator|logging|fuzzy|score|rank|proxy|call_tool|dispatch\\(" src/zelosmcp/compression.py
   - Found only doc/comment references and the existing invoke_tool dispatch call; no manager/proxy/logging dependencies, fuzzy ranking, or search_tools backend dispatch were introduced.
 Risks/follow-ups: No blockers found. Git command startup was again slow for the first batch, but the commands completed successfully. Local-only configs/user-zelosmcp.json and untracked tool-search-plan.md remain uncommitted as unrelated/local work.
+
+Task: docs-update
+Outcome: Updated compression-related documentation to describe the tested search_tools behavior. docs/compression.md now documents the non-max wrapper trio, search_tools(query, limit?) targeted discovery, and level=max remaining a single list_tools wrapper. docs/configuration.md, docs/cursor-integration.md, docs/oauth-passthrough.md, and docs/default-mcps.md no longer describe the compressed surface as only a wrapper pair.
+Commands/checks run:
+- rg "wrapper pair|wrapper pairs|get_tool_schema.*invoke_tool|invoke_tool.*get_tool_schema|search_tools|wrapper trio|level=max" docs
+  - Confirmed docs now reference search_tools/wrapper trio where compressed wrappers are described; remaining get_schema/invoke examples are contextual and not stale pair claims.
+- ReadLints on docs/compression.md, docs/configuration.md, docs/cursor-integration.md, docs/oauth-passthrough.md, and docs/default-mcps.md
+  - No linter errors found.
+Gotcha: docs/default-mcps.md also carried the stale default-compression wrapper-pair wording, even though it was not called out in the docs-update file list; it was updated to avoid leaving contradictory user-facing docs.
+Follow-ups: Parent verifier should run focused validation for docs-update and then update ledger.yaml if satisfied. No ledger status was changed by this task.

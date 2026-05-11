@@ -12,7 +12,7 @@ zelosMCP ships with two layers of pre-wired MCP backends:
 | [`docker`](#docker) | default | [`mcp-server-docker`](https://github.com/ckreiling/mcp-server-docker) | stdio (uvx) | Inspect / manage Docker containers, images, networks, volumes. |
 | [`kubernetes`](#kubernetes) | default | [`kubernetes-mcp-server`](https://github.com/manusa/kubernetes-mcp-server) | stdio (npx) | Inspect / manage Kubernetes resources. |
 
-The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `pincher__search`, `filesystem__read_text_file`). Every backend is compressed by default (`level: "medium"`, `scope: "aggregator"`), so the aggregator surfaces wrapper tools (`<backend>__get_tool_schema`, `<backend>__invoke_tool`) instead of the full schema. Set `"compress": null` on a backend's entry to opt out. See [compression.md](compression.md) for the full reference.
+The aggregator at `/mcp` exposes their tools namespaced as `<backend>__<tool>` (e.g. `pincher__search`, `filesystem__read_text_file`). Every backend is compressed by default (`level: "medium"`, `scope: "aggregator"`), so the aggregator surfaces wrapper tools (`<backend>__get_tool_schema`, `<backend>__search_tools`, `<backend>__invoke_tool`) instead of the full schema. Set `"compress": null` on a backend's entry to opt out. See [compression.md](compression.md) for the full reference.
 
 The web UI's right-column **Repositories** panel uses `filesystem__write_file` and `pincher__index` to install rules and onboard repos in two clicks per repo. See [repositories.md](repositories.md).
 
