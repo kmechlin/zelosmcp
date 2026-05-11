@@ -69,3 +69,15 @@ Commands run:
 - rg "manager|aggregator|logging|dispatch\\(|call_tool|fuzzy|score|rank|proxy" src/zelosmcp/compression.py
   - Found only existing doc/comment references plus the existing dispatch call for invoke_tool; no manager/proxy/logging dependencies, fuzzy ranking, or search_tools backend dispatch were introduced.
 Risks/follow-ups: No blockers found. Some git commands still showed the previously observed slow startup when first invoked from this environment, but completed successfully. Continue with green-aggregator-proxy-integration to explicitly verify no production integration changes are needed beyond the compression helper.
+
+Task: green-aggregator-proxy-integration
+Outcome: Confirmed src/zelosmcp/aggregator.py and src/zelosmcp/proxy.py already pick up search_tools through existing compressed_tool_list, wrapper_tool_names, and handle_compressed_call paths. No production changes were needed. Updated tests/test_app_integration.py so per-backend scope=global coverage expects the non-max wrapper trio and directly exercises search_tools through /<name>/mcp without backend dispatch.
+Commands run:
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py
+  - Green result: 45 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestPerBackendGlobalScope::test_scope_global_compresses_named_route
+  - Expected stale-test failure before the integration test update: the named route already returned search_tools, while the test still expected only get_tool_schema and invoke_tool.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py && PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestPerBackendGlobalScope
+  - Green result: 45 aggregator tests passed, then 4 per-backend global-scope tests passed.
+Gotcha: Existing app integration coverage for /<name>/mcp scope=global still described the old wrapper pair; after search_tools landed in compression.py, that route already exposed the wrapper trio through proxy.py's shared helper path.
+Follow-ups: Parent verifier should validate this task and mark green-aggregator-proxy-integration complete in ledger.yaml if satisfied.
