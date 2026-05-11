@@ -132,7 +132,7 @@ ledger:
     - id: green-aggregator-proxy-integration
       title: Verify existing routing integration
       delegate_to: implementation-worker
-      status: pending
+      status: complete
       phase: green
       max_tokens: 100000
       files:

@@ -81,3 +81,20 @@ Commands run:
   - Green result: 45 aggregator tests passed, then 4 per-backend global-scope tests passed.
 Gotcha: Existing app integration coverage for /<name>/mcp scope=global still described the old wrapper pair; after search_tools landed in compression.py, that route already exposed the wrapper trio through proxy.py's shared helper path.
 Follow-ups: Parent verifier should validate this task and mark green-aggregator-proxy-integration complete in ledger.yaml if satisfied.
+
+Task: verifier-green-aggregator-proxy-integration
+Outcome: Verified commit 7a30f99 exists and changed only progress.txt plus tests/test_app_integration.py; no production files were modified for aggregator/proxy integration. Confirmed aggregator.py and proxy.py use existing compressed_tool_list, wrapper_tool_names, and handle_compressed_call paths, and the app integration coverage exercises the /<name>/mcp global-scope search_tools path without backend dispatch. Updated ledger.yaml to mark only green-aggregator-proxy-integration complete.
+Commands run:
+- git status --short
+  - Showed only untracked local files configs/user-zelosmcp.json and tool-search-plan.md before verifier edits; they were not staged.
+- git diff -- .
+  - No tracked changes before verifier edits.
+- git log --oneline --decorate -12
+  - Confirmed 7a30f99 Verify aggregator proxy search integration is HEAD on feature/tool-search.
+- git show --stat --oneline --name-status --no-ext-diff 7a30f99
+  - Confirmed 7a30f99 modified progress.txt and tests/test_app_integration.py only.
+- git show --no-ext-diff --unified=80 7a30f99 -- tests/test_app_integration.py progress.txt
+  - Confirmed the integration commit updates per-backend global-scope expectations and adds search_tools coverage that asserts session.call_tool is not called.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py tests/test_app_integration.py::TestPerBackendGlobalScope
+  - Green result: 49 passed.
+Risks/follow-ups: No blockers found. Local-only configs/user-zelosmcp.json and untracked tool-search-plan.md remain uncommitted as unrelated/local work. Continue with refactor-style-pass.
