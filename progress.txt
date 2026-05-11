@@ -254,3 +254,32 @@ Commands/checks run:
   - No linter errors found.
 Gotcha: The aggregator-scope app integration test had already documented the wrapper trio in its class docstring, but its list assertion still preserved the old two-wrapper expectation.
 Follow-ups: Parent should re-run verifier for docs-update and leave ledger.yaml unchanged until that verification passes.
+
+Task: verifier-docs-update-after-3dc2343
+Outcome: Verification passed after app integration fix commit 3dc2343. Required commits c023fdc, 4370d4d, f0b134b, and 3dc2343 all exist in local history; docs and related references now match the implemented behavior: non-max compressed backends expose get_tool_schema/search_tools/invoke_tool, search_tools(query, limit?) is documented as targeted compressed catalog discovery, and level=max remains a single list_tools wrapper. Updated ledger.yaml to mark only docs-update complete.
+Commands/checks run:
+- git --no-pager status --short
+  - Showed only untracked local files configs/user-zelosmcp.json and tool-search-plan.md before verifier edits; they were not staged.
+- git --no-pager diff -- .
+  - No tracked diff before verifier edits.
+- git --no-pager log --oneline --decorate -25
+  - Confirmed 3dc2343 is HEAD, with f0b134b, 4370d4d, and c023fdc present in local history.
+- git --no-pager show --stat --oneline --name-status --no-ext-diff c023fdc 4370d4d f0b134b 3dc2343
+  - Confirmed the docs commits, blocker-fix commit, and app integration fix commit changed the expected docs/source/test/progress files.
+- rg "search_tools\\(query, limit\\?\\)|wrapper trio|level=max|single `list_tools`|get_tool_schema.*search_tools.*invoke_tool|search_tools" docs
+  - Confirmed affected docs describe search_tools, wrapper trio behavior, and max single-list_tools behavior.
+- rg "wrapper pair|wrapper-pair|wrapper_pair|compressed pair|compressed-pair|two-tool|two tool|only.*get_tool_schema.*invoke_tool|get_tool_schema.*invoke_tool-only|invoke_tool-only" .
+  - Remaining broad matches are historical/contextual only in progress.txt and the original planning artifact; no actionable docs/source/test stale wording remained.
+- rg "assert names == \\[\"alpha__get_tool_schema\", \"alpha__invoke_tool\"\\]|wrapper pair|only.*wrapper|get_tool_schema \\+ invoke_tool|alpha__search_tools|search_tools" tests/test_app_integration.py
+  - Confirmed the aggregator integration expectation includes alpha__search_tools and no old two-wrapper assertion remains.
+- rg "def (wrapper_tool_names|compressed_tool_list|handle_compressed_call|make_search_tools_wrapper|search_catalog)|op == \"search_tools\"|level == \"max\"|search_tools" src/zelosmcp/compression.py
+  - Confirmed implementation exposes search_tools in the non-max wrapper path and preserves max as list_tools.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_app_integration.py::TestCompressedAggregatorIntegration tests/test_app_integration.py::TestPerBackendGlobalScope
+  - Passed: 8 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
+  - Passed: 108 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py tests/test_aggregator_unit.py
+  - Passed: 79 passed.
+- git --no-pager diff --check
+  - Passed with no whitespace errors.
+Risks/follow-ups: No blockers found. configs/user-zelosmcp.json and tool-search-plan.md remain untracked and were intentionally left unstaged; tool-search-plan.md retains the original planning wording as historical context.

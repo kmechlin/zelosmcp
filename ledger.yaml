@@ -180,7 +180,7 @@ ledger:
     - id: docs-update
       title: Update compression documentation
       delegate_to: docs-reviewer
-      status: pending
+      status: complete
       phase: refactor
       max_tokens: 100000
       files:
