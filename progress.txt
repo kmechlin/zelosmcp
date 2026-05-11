@@ -25,3 +25,18 @@ Commands run:
 Expected red failures: compressed medium aggregator/global tools/list still returns only alpha__get_tool_schema and alpha__invoke_tool, and alpha__search_tools is not recognized as a compression wrapper, so the aggregator dispatches it to the backend as a normal tool call.
 Gotcha: The MCP lowlevel server logs "Tool 'alpha__search_tools' not listed, no validation will be performed" during the dispatch red test because the missing wrapper is absent from tools/list; that warning is expected until wrapper_tool_names/compressed_tool_list include search_tools.
 Follow-ups: Implement search_tools in the compression helper path so aggregator wrapper detection picks it up through existing wrapper_tool_names and handle_compressed_call; parent verifier should validate this red task before ledger status changes.
+
+Task: verifier-red-tests
+Outcome: Verified red-compression-unit-tests and red-aggregator-dispatch-tests. Commits e2d6bd5 and 96c7175 exist in local history, and the test contents match the ledger acceptance criteria for wrapper exposure, search matching/validation, max preservation, and aggregator dispatch interception. Updated ledger.yaml to mark only those two red tasks complete.
+Commands run:
+- GIT_PAGER=cat git -c core.pager=cat status --short
+  - Showed only untracked local files before verifier edits: configs/user-zelosmcp.json, ledger.yaml, and tool-search-plan.md.
+- GIT_PAGER=cat git -c core.pager=cat log --oneline --decorate -8
+  - Confirmed 96c7175 is HEAD and e2d6bd5 is its parent on feature/tool-search.
+- GIT_PAGER=cat git -c core.pager=cat show --stat --oneline --decorate --name-status --no-ext-diff e2d6bd5 96c7175
+  - Confirmed e2d6bd5 changed progress.txt and tests/test_compression_unit.py; 96c7175 changed progress.txt and tests/test_aggregator_unit.py.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py
+  - Red result: 13 failed, 21 passed; failures are missing search_tools wrapper names/list entries and unknown search_tools handling, matching the planned missing production behavior.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_unit.py
+  - Red result: 3 failed, 42 passed; failures are missing alpha__search_tools list entries and dispatch falling through to backend, matching the planned missing production behavior.
+Remaining risks/follow-ups: Shell commands in this environment had a roughly 90 second startup delay before output, but completed successfully. Proceed with green-compression-helper; keep level=max unchanged and route aggregator/global search_tools through existing wrapper_tool_names and handle_compressed_call rather than bespoke aggregator dispatch.
