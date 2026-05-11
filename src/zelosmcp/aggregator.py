@@ -259,7 +259,7 @@ class Aggregator:
                         )
                     )
 
-            # Passthrough fan-out: emit the wrapper pair for every
+            # Passthrough fan-out: emit compressed wrappers for every
             # passthrough backend with compression configured, regardless
             # of inbound auth state. The first wrapper invocation drives
             # the OAuth dance via the existing PassthroughChallengeError
@@ -284,7 +284,7 @@ class Aggregator:
 
                 # Provider-gated visibility: when a backend is wired to an
                 # auth provider AND the current user hasn't authenticated
-                # to that provider yet, hide the wrapper-pair from
+                # to that provider yet, hide the wrappers from
                 # tools/list entirely. Cursor sees no entry for the
                 # backend until the user completes the device flow in
                 # the Connections page. Backends with no provider
@@ -323,7 +323,7 @@ class Aggregator:
                                 f"{state.name} list_tools failed: {exc}"
                             )
                         # Live fetch failed — fall back to whatever was
-                        # cached so we still emit a useful wrapper pair.
+                        # cached so we still emit useful wrappers.
                         backend_tools = list(state.passthrough_catalog.values())
                 except PassthroughChallengeError:
                     # Inbound caller has no usable token. If a previous

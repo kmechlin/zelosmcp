@@ -195,3 +195,19 @@ Commands/checks run:
 - PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
   - Failed: tests/test_aggregator_gating.py has 4 stale expectations that omit github__search_tools/legacy__search_tools from visible wrapper names; the rest of the selected tests passed.
 Risks/follow-ups: Update passthrough gating tests and remaining non-doc stale wrapper-pair comments/UI strings, or explicitly decide they are outside docs-update scope before marking the ledger task complete. ledger.yaml was intentionally left unchanged.
+
+Task: docs-update verifier blocker follow-up
+Outcome: Fixed the non-doc blocker from verifier-docs-update-follow-up. tests/test_aggregator_gating.py now expects the non-max passthrough wrapper trio, including github__search_tools/legacy__search_tools for visible backends and absence of search_tools when provider gating hides a backend. Updated stale non-doc comments/UI strings in source and tests so they no longer describe the compressed non-max surface as a wrapper pair or two-tool surface.
+Commands/checks run:
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_aggregator_gating.py
+  - Passed: 6 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_compression_unit.py tests/test_aggregator_unit.py
+  - Passed: 79 passed.
+- PYTHONPATH=src uv run --with pytest --with pytest-asyncio python -m pytest tests/test_config_unit.py tests/test_aggregator_gating.py tests/test_oauth_passthrough_integration.py
+  - Passed: 108 passed.
+- rg "wrapper pair|wrapper-pair|wrapper_pair|compressed pair|compressed-pair|two-tool|two tool|only.*get_tool_schema.*invoke_tool|get_tool_schema.*invoke_tool-only|invoke_tool-only" .
+  - Remaining matches are historical/contextual only: prior progress.txt notes that record earlier red failures/verifier findings, and tool-search-plan.md preserving the original plan wording. No actionable source, UI, docs, or test stale wording remains.
+- git diff --check
+  - Passed with no whitespace errors.
+Gotcha: The stale-term search pattern itself and historical progress entries intentionally preserve old wording as task history, so future verifier passes should distinguish contextual progress/plan matches from actionable source/docs/test wording.
+Follow-ups: Parent should re-run verifier for docs-update and leave ledger.yaml unchanged until that verification passes. No production behavior changes were needed.

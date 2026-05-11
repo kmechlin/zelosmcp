@@ -137,7 +137,11 @@ class TestNoProviderConfigured:
         handler = _find_handler(server, "ListToolsRequest")
         result = await handler(None)
         names = sorted(t.name for t in result.root.tools)
-        assert names == ["github__get_tool_schema", "github__invoke_tool"]
+        assert names == [
+            "github__get_tool_schema",
+            "github__invoke_tool",
+            "github__search_tools",
+        ]
 
 
 # ── Scenario 2: provider configured + ready → wrappers visible ─────────
@@ -156,7 +160,11 @@ class TestProviderReady:
         handler = _find_handler(server, "ListToolsRequest")
         result = await handler(None)
         names = sorted(t.name for t in result.root.tools)
-        assert names == ["github__get_tool_schema", "github__invoke_tool"]
+        assert names == [
+            "github__get_tool_schema",
+            "github__invoke_tool",
+            "github__search_tools",
+        ]
 
 
 # ── Scenario 3: provider configured + not-ready → wrappers hidden ──────
@@ -181,6 +189,7 @@ class TestProviderNotReady:
         # Cursor sees no github__* tools until the user authenticates.
         assert "github__invoke_tool" not in names
         assert "github__get_tool_schema" not in names
+        assert "github__search_tools" not in names
 
     @pytest.mark.asyncio
     async def test_other_backends_unaffected_by_one_gated_backend(self):
@@ -208,7 +217,11 @@ class TestProviderNotReady:
         result = await handler(None)
         names = sorted(t.name for t in result.root.tools)
         # Only the legacy backend's wrappers survive; github is gated.
-        assert names == ["legacy__get_tool_schema", "legacy__invoke_tool"]
+        assert names == [
+            "legacy__get_tool_schema",
+            "legacy__invoke_tool",
+            "legacy__search_tools",
+        ]
 
 
 # ── Defensive: provider raises → treat as not-ready ────────────────────
@@ -232,6 +245,7 @@ class TestProviderRaises:
         names = [t.name for t in result.root.tools]
         assert "github__invoke_tool" not in names
         assert "github__get_tool_schema" not in names
+        assert "github__search_tools" not in names
 
 
 # ── Provider in spec but not in registry → treat as not-configured ─────
@@ -254,4 +268,8 @@ class TestProviderRegistryMiss:
         handler = _find_handler(server, "ListToolsRequest")
         result = await handler(None)
         names = sorted(t.name for t in result.root.tools)
-        assert names == ["github__get_tool_schema", "github__invoke_tool"]
+        assert names == [
+            "github__get_tool_schema",
+            "github__invoke_tool",
+            "github__search_tools",
+        ]

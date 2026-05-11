@@ -114,9 +114,10 @@ class ReverseProxySpec:
 class CompressSpec:
     """Tool-list compression policy for one backend.
 
-    Replaces the backend's full tool surface with a two-tool wrapper pair
-    (``get_tool_schema`` + ``invoke_tool``, or a single ``list_tools`` at
-    level=max) so the LLM sees a much smaller schema in ``tools/list``.
+    Replaces the backend's full tool surface with compressed wrappers
+    (``get_tool_schema`` + ``search_tools`` + ``invoke_tool``, or a single
+    ``list_tools`` at level=max) so the LLM sees a much smaller schema in
+    ``tools/list``.
 
     - ``level`` controls how aggressively the inlined catalog is summarised.
     - ``scope`` controls which endpoints the wrapper replacement applies to:
@@ -783,7 +784,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     #   "compress": {"level": "low", "scope": "global"}
     #
     # Passthrough backends are compressed by default (same as session-bound
-    # ones) — the aggregator emits the wrapper pair regardless of inbound
+    # ones) — the aggregator emits compressed wrappers regardless of inbound
     # auth so the agent always sees a stable surface; the FIRST wrapper
     # invocation drives the upstream OAuth dance via the existing
     # PassthroughChallengeError path. See docs/oauth-passthrough.md.
