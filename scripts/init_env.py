@@ -249,7 +249,7 @@ def main() -> int:
     if enable_github_provider:
         gh_client_id = ask(
             "GitHub OAuth App client_id (ZELOSMCP_GITHUB_CLIENT_ID)",
-            "",
+            "Ov23li4PI3EZsBRDcm11",
         )
         if gh_client_id:
             auth_env["ZELOSMCP_GITHUB_CLIENT_ID"] = gh_client_id
