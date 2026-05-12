@@ -1417,7 +1417,7 @@ async def _compress_test_env():
 
 class TestCompressedAggregatorIntegration:
     """End-to-end check that POSTing a compressed config swaps the
-    aggregator's tool surface for the wrapper pair, and that
+    aggregator's tool surface for the wrapper trio, and that
     get_tool_schema + invoke_tool both round-trip through ``/mcp``."""
 
     @pytest.mark.asyncio
@@ -1432,7 +1432,11 @@ class TestCompressedAggregatorIntegration:
                 )
             names = sorted(t["name"] for t in r.json()["result"]["tools"]
                            if t["name"].startswith("alpha__"))
-            assert names == ["alpha__get_tool_schema", "alpha__invoke_tool"]
+            assert names == [
+                "alpha__get_tool_schema",
+                "alpha__invoke_tool",
+                "alpha__search_tools",
+            ]
 
     @pytest.mark.asyncio
     async def test_aggregator_keeps_full_list_when_scope_catalog(self):
@@ -1527,7 +1531,30 @@ class TestPerBackendGlobalScope:
                 names = await self._list_at_named_route(c, "alpha")
             # No backend prefix at /<name>/mcp — clients already know
             # the backend by URL.
-            assert names == ["get_tool_schema", "invoke_tool"]
+            assert names == ["get_tool_schema", "invoke_tool", "search_tools"]
+
+    @pytest.mark.asyncio
+    async def test_scope_global_search_tools_uses_named_route_catalog(self):
+        async with _compress_test_env() as (app, _, session):
+            async with _client(app) as c:
+                await c.post("/api/start", json=_compress_config("global"))
+                # Prime the per-backend catalog through /<name>/mcp.
+                await self._list_at_named_route(c, "alpha")
+                r = await c.post(
+                    "/alpha/mcp",
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {
+                            "name": "search_tools",
+                            "arguments": {"query": "echo"},
+                        },
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            payload = r.json()["result"]
+            assert payload["isError"] is False
+            assert "echo" in payload["content"][0]["text"]
+            session.call_tool.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_scope_catalog_keeps_named_route_uncompressed(self):

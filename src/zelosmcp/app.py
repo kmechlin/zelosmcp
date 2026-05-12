@@ -1195,7 +1195,7 @@ def create_app(manager: ProxyManager | None = None):
         summary: Token-savings dashboard snapshot.
         description: |
           Aggregated token-savings metrics across three sources:
-          (1) tool-list compression per backend (raw vs. wrapper-pair
+          (1) tool-list compression per backend (raw vs. compressed-wrapper
           token/byte counts), (2) per-call accounting for every tool
           invocation routed through this proxy, and (3) pincher's
           self-reported BPE savings from the `_meta` envelope and the

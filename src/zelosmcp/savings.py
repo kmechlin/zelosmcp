@@ -4,7 +4,7 @@ Three measurement sources land here:
 
 1. **Compression snapshots** — produced by the aggregator each time
    ``list_tools`` runs. Compares the JSON-serialized full backend tool
-   catalog against the wrapper-pair view that zelosMCP actually returns.
+   catalog against the compressed-wrapper view that zelosMCP actually returns.
 2. **Per-call token accounting** — every ``call_tool`` (raw or compressed)
    contributes input/output token counts plus latency.
 3. **Pincher self-reported savings** — pincher already returns BPE-correct

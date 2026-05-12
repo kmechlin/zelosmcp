@@ -288,11 +288,10 @@ class TestAggregatorPassthrough:
                 await manager.stop_all()
 
     @pytest.mark.asyncio
-    async def test_tools_list_emits_wrapper_pair_with_token(self):
+    async def test_tools_list_emits_compressed_wrappers_with_token(self):
         # When the inbound caller has a valid token, list_tools opens
         # the upstream session, fetches the catalog, caches it, and
-        # emits the compressed wrapper pair (`github__get_tool_schema`
-        # + `github__invoke_tool`) — NOT the unwrapped per-tool surface.
+        # emits compressed wrappers — NOT the unwrapped per-tool surface.
         rec = _UpstreamRecord()
         with patch(
             "zelosmcp.passthrough_pool.streamablehttp_client",
@@ -356,7 +355,7 @@ class TestAggregatorPassthrough:
     @pytest.mark.asyncio
     async def test_tools_list_emits_auth_pending_wrappers_when_unauth(self):
         # No inbound token AND no cached catalog: the aggregator MUST
-        # still emit the wrapper pair so the agent has a known entry
+        # still emit wrappers so the agent has a known entry
         # point. The wrapper descriptions are decorated with the
         # auth-pending notice so the agent expects a 401 on first call.
         rec = _UpstreamRecord()

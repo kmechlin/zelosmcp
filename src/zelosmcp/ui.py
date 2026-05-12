@@ -1443,7 +1443,7 @@ HTML_TEMPLATE = """\
         <div class="card">
           <p class="intro" style="margin: 0 0 12px 0;">
             Aggregated savings across three sources: <strong>tool-list compression</strong>
-            (raw vs. wrapper-pair tokens served on every <code>tools/list</code>),
+            (raw vs. compressed-wrapper tokens served on every <code>tools/list</code>),
             <strong>per-call accounting</strong> (input + output tokens of every
             <code>tools/call</code>), and <strong>pincher self-reported BPE savings</strong>
             (parsed from each pincher response's <code>_meta</code> envelope plus

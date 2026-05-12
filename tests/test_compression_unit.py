@@ -28,8 +28,12 @@ class TestWrapperToolNames:
         assert wrapper_tool_names("max") == ("list_tools",)
 
     @pytest.mark.parametrize("level", ["low", "medium", "high"])
-    def test_non_max_returns_pair(self, level):
-        assert wrapper_tool_names(level) == ("get_tool_schema", "invoke_tool")
+    def test_non_max_returns_searchable_trio(self, level):
+        assert wrapper_tool_names(level) == (
+            "get_tool_schema",
+            "search_tools",
+            "invoke_tool",
+        )
 
 
 class TestCompressionFormat:
@@ -61,15 +65,23 @@ class TestCompressionFormat:
 
 
 class TestCompressedToolList:
-    def test_medium_returns_pair(self):
+    def test_medium_returns_searchable_trio(self):
         tools = [_tool("a"), _tool("b")]
         wrappers = compressed_tool_list(prefix="ws", tools=tools, level="medium")
-        assert [w.name for w in wrappers] == ["ws__get_tool_schema", "ws__invoke_tool"]
+        assert [w.name for w in wrappers] == [
+            "ws__get_tool_schema",
+            "ws__search_tools",
+            "ws__invoke_tool",
+        ]
 
-    def test_high_returns_pair(self):
+    def test_high_returns_searchable_trio(self):
         tools = [_tool("a")]
         wrappers = compressed_tool_list(prefix="ws", tools=tools, level="high")
-        assert [w.name for w in wrappers] == ["ws__get_tool_schema", "ws__invoke_tool"]
+        assert [w.name for w in wrappers] == [
+            "ws__get_tool_schema",
+            "ws__search_tools",
+            "ws__invoke_tool",
+        ]
 
     def test_max_returns_single_list_tools(self):
         wrappers = compressed_tool_list(
@@ -81,7 +93,11 @@ class TestCompressedToolList:
     def test_empty_prefix_drops_double_underscore(self):
         # Used by the per-backend wrapper at /<name>/mcp.
         wrappers = compressed_tool_list(prefix="", tools=[_tool("a")], level="medium")
-        assert [w.name for w in wrappers] == ["get_tool_schema", "invoke_tool"]
+        assert [w.name for w in wrappers] == [
+            "get_tool_schema",
+            "search_tools",
+            "invoke_tool",
+        ]
 
 
 class TestMakeWrappers:
@@ -212,6 +228,80 @@ class TestHandleCompressedCall:
         text = result.content[0].text
         assert "alpha: First" in text
         assert "beta: Second" in text
+
+    @pytest.mark.asyncio
+    async def test_search_tools_matches_name_description_and_params(self):
+        cat = _catalog(
+            _tool("backup_file", description="Copy a file to durable storage."),
+            _tool("queue_job", description="Schedule background work."),
+            _tool("update_ticket", description="Modify an issue.", params=["status", "priority"]),
+        )
+
+        async def dispatch(name, args):
+            raise AssertionError("dispatch should not be called for search_tools")
+
+        name_match = await handle_compressed_call(
+            cat, "search_tools", {"query": "backup"}, dispatch
+        )
+        assert name_match.isError is False
+        assert "backup_file: Copy a file to durable storage" in name_match.content[0].text
+        assert "queue_job" not in name_match.content[0].text
+
+        description_match = await handle_compressed_call(
+            cat, "search_tools", {"query": "background"}, dispatch
+        )
+        assert description_match.isError is False
+        assert "queue_job: Schedule background work" in description_match.content[0].text
+        assert "backup_file" not in description_match.content[0].text
+
+        param_match = await handle_compressed_call(
+            cat, "search_tools", {"query": "priority"}, dispatch, level="high"
+        )
+        assert param_match.isError is False
+        assert "update_ticket(status, priority)" in param_match.content[0].text
+        assert "queue_job" not in param_match.content[0].text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("args", [{}, {"query": ""}, {"query": "  "}, {"query": 123}])
+    async def test_search_tools_requires_non_empty_query_string(self, args):
+        cat = _catalog(_tool("foo"))
+        result = await handle_compressed_call(
+            cat, "search_tools", args, dispatch=lambda *a: None  # type: ignore[arg-type]
+        )
+        assert result.isError is True
+        assert "query" in result.content[0].text
+        assert "string" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_search_tools_respects_limit_in_catalog_order(self):
+        cat = _catalog(
+            _tool("alpha", description="Shared match."),
+            _tool("beta", description="Shared match."),
+            _tool("gamma", description="Shared match."),
+        )
+        result = await handle_compressed_call(
+            cat,
+            "search_tools",
+            {"query": "shared", "limit": 2},
+            dispatch=lambda *a: None,  # type: ignore[arg-type]
+        )
+        assert result.isError is False
+        text = result.content[0].text
+        assert "alpha: Shared match" in text
+        assert "beta: Shared match" in text
+        assert "gamma" not in text
+
+    @pytest.mark.asyncio
+    async def test_search_tools_no_match_response_is_clear(self):
+        cat = _catalog(_tool("alpha", description="First."))
+        result = await handle_compressed_call(
+            cat,
+            "search_tools",
+            {"query": "missing"},
+            dispatch=lambda *a: None,  # type: ignore[arg-type]
+        )
+        assert result.isError is False
+        assert "no matching tools" in result.content[0].text.lower()
 
     @pytest.mark.asyncio
     async def test_unknown_op_is_error(self):

@@ -563,7 +563,7 @@ class TestPassthrough:
         assert s.passthrough_pool is None
         # Passthrough backends now auto-apply compression at the
         # aggregator (scope=aggregator, level=medium). The aggregator's
-        # tools/list emits the wrapper pair regardless of inbound auth;
+        # tools/list emits compressed wrappers regardless of inbound auth;
         # the first wrapper invocation drives the OAuth dance via the
         # existing PassthroughChallengeError path.
         assert s.compress is not None

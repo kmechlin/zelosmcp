@@ -127,7 +127,7 @@ Some remote MCP servers — GitHub MCP at `api.githubcopilot.com/mcp`, Atlassian
 How it works:
 
 - **`/<name>/mcp`** — streaming reverse-proxy of MCP traffic. zelosMCP does not own a session here; each Cursor connection drives its own OAuth flow with the upstream. 401 + `WWW-Authenticate` from the upstream propagates verbatim. Useful when you want raw upstream tool names (no `<backend>__` prefix).
-- **`/mcp` (aggregator)** — passthrough backends are auto-compressed to the standard wrapper pair (`<name>__get_tool_schema`, `<name>__invoke_tool`). The aggregator emits the wrappers in `tools/list` regardless of inbound auth state — pre-OAuth they carry an "auth required" description block; post-OAuth they include the real upstream catalog. The first wrapper invocation opens a per-Cursor upstream session; if the upstream returns 401, zelosMCP rewrites the response to `HTTP 401 + WWW-Authenticate` (the upstream's own challenge, so Cursor's OAuth client follows the canonical issuer). Subsequent calls dispatch through the standard `handle_compressed_call` path.
+- **`/mcp` (aggregator)** — passthrough backends are auto-compressed to the standard non-`max` wrapper trio (`<name>__get_tool_schema`, `<name>__search_tools`, `<name>__invoke_tool`). The aggregator emits the wrappers in `tools/list` regardless of inbound auth state — pre-OAuth they carry an "auth required" description block; post-OAuth they include the real upstream catalog. The first wrapper invocation opens a per-Cursor upstream session; if the upstream returns 401, zelosMCP rewrites the response to `HTTP 401 + WWW-Authenticate` (the upstream's own challenge, so Cursor's OAuth client follows the canonical issuer). Subsequent calls dispatch through the standard `handle_compressed_call` path.
 
 Constraints:
 
@@ -205,7 +205,7 @@ See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the c
 
 ### Compression (`compress`)
 
-Every backend is compressed by default — zelosMCP automatically swaps each backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper pair on the aggregator at `/mcp` (`<backend>__get_tool_schema` and `<backend>__invoke_tool`), slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent fetches a tool's full schema on demand via `get_tool_schema(tool_name)` and runs it via `invoke_tool(tool_name, tool_input)`. Add a `compress` block only when you want to override the default level/scope, or set `"compress": null` to opt the backend out entirely.
+Every backend is compressed by default — zelosMCP automatically swaps each backend's full tool surface (N tools, each with descriptions and JSON schemas) for a small wrapper trio on the aggregator at `/mcp` (`<backend>__get_tool_schema`, `<backend>__search_tools`, and `<backend>__invoke_tool`), slashing tokens spent on `tools/list`. Wrappers stay invocable; the agent can search compressed catalog lines via `search_tools(query, limit?)`, fetch a tool's full schema on demand via `get_tool_schema(tool_name)`, and run it via `invoke_tool(tool_name, tool_input)`. At `level=max`, the wrapper surface is instead a single `list_tools` wrapper. Add a `compress` block only when you want to override the default level/scope, or set `"compress": null` to opt the backend out entirely.
 
 ```json
 "kubernetes": {
