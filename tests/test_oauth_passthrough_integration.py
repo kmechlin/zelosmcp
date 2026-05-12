@@ -257,7 +257,6 @@ def _fresh():
 
 class TestAggregatorPassthrough:
     @pytest.mark.asyncio
-    async def test_tools_list_emits_compressed_wrappers_with_token(self):
     async def test_api_catalog_includes_passthrough_backend_after_auth(self):
         rec = _UpstreamRecord()
         with patch(
@@ -289,7 +288,7 @@ class TestAggregatorPassthrough:
                 await manager.stop_all()
 
     @pytest.mark.asyncio
-    async def test_tools_list_emits_wrapper_pair_with_token(self):
+    async def test_tools_list_emits_compressed_wrappers_with_token(self):
         # When the inbound caller has a valid token, list_tools opens
         # the upstream session, fetches the catalog, caches it, and
         # emits compressed wrappers — NOT the unwrapped per-tool surface.
