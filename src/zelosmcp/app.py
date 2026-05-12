@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from copy import deepcopy
 import logging
 import os
 from typing import Any
@@ -211,6 +212,155 @@ def _extract_pincher_indexed_paths(result) -> set[str]:
     return out
 
 
+def _prefix_openapi_path(mount: str, path: str) -> str:
+    """Mount an upstream OpenAPI path under the public reverse-proxy prefix."""
+    normalized = path if path.startswith("/") else f"/{path}"
+    if normalized == "/":
+        return mount
+    return f"{mount}{normalized}"
+
+
+def _rewrite_component_refs(value: Any, ref_map: dict[str, str]) -> Any:
+    """Recursively rewrite local OpenAPI component refs after namespacing."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "$ref" and isinstance(item, str):
+                out[key] = ref_map.get(item, item)
+            else:
+                out[key] = _rewrite_component_refs(item, ref_map)
+        return out
+    if isinstance(value, list):
+        return [_rewrite_component_refs(item, ref_map) for item in value]
+    return value
+
+
+def _merge_upstream_openapi(
+    base: dict[str, Any],
+    upstream: dict[str, Any],
+    *,
+    backend: str,
+    mount: str,
+) -> None:
+    """Merge one upstream OpenAPI document into the zelosMCP schema in-place."""
+    ref_map: dict[str, str] = {}
+    security_scheme_names: set[str] = set()
+    upstream_components = upstream.get("components")
+    if isinstance(upstream_components, dict):
+        for section, values in upstream_components.items():
+            if not isinstance(values, dict):
+                continue
+            if section == "securitySchemes":
+                security_scheme_names.update(str(name) for name in values)
+            dest_section = base.setdefault("components", {}).setdefault(section, {})
+            if not isinstance(dest_section, dict):
+                continue
+            for name in values:
+                ref_map[f"#/components/{section}/{name}"] = (
+                    f"#/components/{section}/{backend}_{name}"
+                )
+
+    rewritten = _rewrite_component_refs(upstream, ref_map)
+
+    components = rewritten.get("components")
+    if isinstance(components, dict):
+        for section, values in components.items():
+            if not isinstance(values, dict):
+                continue
+            dest_section = base.setdefault("components", {}).setdefault(section, {})
+            if not isinstance(dest_section, dict):
+                continue
+            for name, component in values.items():
+                dest_section[f"{backend}_{name}"] = component
+
+    paths = rewritten.get("paths")
+    if not isinstance(paths, dict):
+        return
+    tags = base.setdefault("tags", [])
+    if isinstance(tags, list) and not any(
+        isinstance(tag, dict) and tag.get("name") == backend for tag in tags
+    ):
+        tags.append({"name": backend, "description": f"{backend} upstream API"})
+    base_paths = base.setdefault("paths", {})
+    for upstream_path, path_item in paths.items():
+        if not isinstance(upstream_path, str) or not isinstance(path_item, dict):
+            continue
+        public_path = _prefix_openapi_path(mount, upstream_path)
+        merged_item = deepcopy(path_item)
+        for method, operation in list(merged_item.items()):
+            if not isinstance(operation, dict):
+                continue
+            if method.lower() not in {
+                "get",
+                "put",
+                "post",
+                "delete",
+                "options",
+                "head",
+                "patch",
+                "trace",
+            }:
+                continue
+            existing_tags = operation.get("tags")
+            tags = existing_tags if isinstance(existing_tags, list) else []
+            operation["tags"] = [backend] + [t for t in tags if t != backend]
+            security = operation.get("security")
+            if isinstance(security, list):
+                operation["security"] = [
+                    {
+                        (
+                            f"{backend}_{name}"
+                            if name in security_scheme_names
+                            else name
+                        ): scopes
+                        for name, scopes in requirement.items()
+                    }
+                    if isinstance(requirement, dict)
+                    else requirement
+                    for requirement in security
+                ]
+        base_paths[public_path] = merged_item
+
+
+async def _with_upstream_openapi(
+    schema: dict[str, Any],
+    manager: ProxyManager,
+    request: Request,
+) -> dict[str, Any]:
+    """Return the local schema plus any configured reverse-proxy contracts."""
+    merged = deepcopy(schema)
+    warnings: list[dict[str, str]] = []
+    host = request.headers.get("host", "")
+    for spec, state in manager.reverse_proxy_openapi_specs():
+        running = state is not None and getattr(state, "running", False)
+        if not running:
+            continue
+        rp = spec.reverse_proxy
+        if rp is None:
+            continue
+        try:
+            upstream = await manager.fetch_reverse_proxy_openapi(
+                spec,
+                scheme=request.url.scheme,
+                host=host,
+            )
+            _merge_upstream_openapi(
+                merged,
+                upstream,
+                backend=spec.name,
+                mount=rp.mount,
+            )
+        except Exception as exc:  # noqa: BLE001 - docs must survive bad upstreams
+            warnings.append({
+                "backend": spec.name,
+                "path": rp.openapi.path if rp.openapi is not None else "",
+                "detail": str(exc),
+            })
+    if warnings:
+        merged["x-zelosmcp-openapi-warnings"] = warnings
+    return merged
+
+
 def create_app(manager: ProxyManager | None = None):
     """Build the ASGI application. Accepts an optional ProxyManager for testing."""
     if manager is None:
@@ -242,6 +392,7 @@ def create_app(manager: ProxyManager | None = None):
             description: OpenAPI 3 schema describing every /api/* and /mcp endpoint.
         """
         schema = SCHEMA.get_schema(routes=request.app.routes)
+        schema = await _with_upstream_openapi(schema, manager, request)
         return JSONResponse(schema)
 
     async def api_status(request: Request) -> JSONResponse:
@@ -664,6 +815,7 @@ def create_app(manager: ProxyManager | None = None):
                     "identity": None,
                     "membership_hint": None,
                     "supports_device_flow": False,
+                "supports_authorization_code": False,
                     "error": str(exc),
                 })
                 continue
@@ -673,6 +825,7 @@ def create_app(manager: ProxyManager | None = None):
                 "ready": status.ready,
                 "membership_hint": status.membership_hint,
                 "supports_device_flow": status.supports_device_flow,
+                "supports_authorization_code": status.supports_authorization_code,
             }
             if status.identity is not None:
                 entry["identity"] = {
@@ -733,9 +886,101 @@ def create_app(manager: ProxyManager | None = None):
             "user_code": session.user_code,
             "verification_uri": session.verification_uri,
             "verification_uri_complete": session.verification_uri_complete,
+            "authorization_url": session.authorization_url,
             "expires_in": session.expires_in,
             "poll_interval": session.poll_interval,
         })
+
+    async def _handle_auth_provider_callback(
+        request: Request,
+        provider_name: str,
+    ) -> HTMLResponse:
+        provider = manager.auth_registry.get(provider_name)
+        if provider is None:
+            return HTMLResponse(
+                f"<h1>Unknown provider</h1><p>{provider_name}</p>",
+                status_code=404,
+            )
+        handler = getattr(provider, "handle_callback", None)
+        if handler is None:
+            return HTMLResponse(
+                "<h1>Unsupported provider</h1>"
+                "<p>This provider does not support browser callbacks.</p>",
+                status_code=400,
+            )
+        state = await handler(
+            code=request.query_params.get("code"),
+            state=request.query_params.get("state"),
+            error=request.query_params.get("error"),
+            error_description=request.query_params.get("error_description"),
+        )
+        if state.state.value == "complete":
+            who = state.identity.username if state.identity else "your account"
+            return HTMLResponse(
+                "<!doctype html><html><body>"
+                "<h1>Authorization complete</h1>"
+                f"<p>Connected {who}. You can close this tab.</p>"
+                "<script>setTimeout(() => window.close(), 1200)</script>"
+                "</body></html>"
+            )
+        return HTMLResponse(
+            "<!doctype html><html><body>"
+            "<h1>Authorization failed</h1>"
+            f"<p>{state.error_message or 'Unknown error'}</p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    async def api_auth_provider_callback(request: Request) -> HTMLResponse:
+        """
+        summary: Browser callback for Authorization Code + PKCE providers.
+        description: |
+          Okta Native apps redirect here after the user completes the
+          Authorization Code flow. The provider validates state, exchanges the
+          code using the stored PKCE verifier, stores tokens, and marks the
+          pending auth session complete so the Connections UI SSE stream can
+          update.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Small HTML completion / error page.
+          404:
+            description: Unknown provider.
+          400:
+            description: Provider does not support auth-code callbacks.
+        """
+        provider_name = request.path_params["provider"]
+        return await _handle_auth_provider_callback(request, provider_name)
+
+    async def api_auth_legacy_okta_callback(request: Request) -> HTMLResponse:
+        """
+        summary: Legacy Okta callback path.
+        description: |
+          Compatibility route for Okta apps configured with
+          `/auth/okta/callback`. The opaque `state` value identifies the
+          pending auth session, which includes the real provider name.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Small HTML completion / error page.
+          404:
+            description: Unknown or expired auth session.
+        """
+        state = request.query_params.get("state")
+        if not state or manager.auth_store is None:
+            return HTMLResponse(
+                "<h1>Authorization failed</h1>"
+                "<p>Missing or expired authorization session.</p>",
+                status_code=404,
+            )
+        session = await manager.auth_store.get_device_session(state)
+        if session is None:
+            return HTMLResponse(
+                "<h1>Authorization failed</h1>"
+                "<p>Unknown or expired authorization session.</p>",
+                status_code=404,
+            )
+        return await _handle_auth_provider_callback(request, session["provider"])
 
     async def api_auth_provider_stream(request: Request) -> StreamingResponse:
         """
@@ -1298,6 +1543,14 @@ def create_app(manager: ProxyManager | None = None):
                 "/api/auth/{provider}/start",
                 api_auth_provider_start,
                 methods=["POST"],
+            ),
+            Route(
+                "/api/auth/{provider}/callback",
+                api_auth_provider_callback,
+            ),
+            Route(
+                "/auth/okta/callback",
+                api_auth_legacy_okta_callback,
             ),
             Route(
                 "/api/auth/{provider}/stream",

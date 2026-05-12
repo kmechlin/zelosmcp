@@ -258,6 +258,38 @@ def _fresh():
 class TestAggregatorPassthrough:
     @pytest.mark.asyncio
     async def test_tools_list_emits_compressed_wrappers_with_token(self):
+    async def test_api_catalog_includes_passthrough_backend_after_auth(self):
+        rec = _UpstreamRecord()
+        with patch(
+            "zelosmcp.passthrough_pool.streamablehttp_client",
+            side_effect=rec.make_streamablehttp(),
+        ), patch(
+            "zelosmcp.passthrough_pool.ClientSession",
+            side_effect=rec.make_client_session(),
+        ):
+            app, manager = _fresh()
+            await manager.start_all({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "auth": {"bearer": "static-token"},
+                    },
+                },
+            })
+            try:
+                async with _client(app) as c:
+                    r = await c.get("/api/catalog")
+                assert r.status_code == 200
+                row = r.json()["github"]
+                assert row["passthrough"] is True
+                assert [t["name"] for t in row["tools"]] == ["create_issue"]
+            finally:
+                await manager.stop_all()
+
+    @pytest.mark.asyncio
+    async def test_tools_list_emits_wrapper_pair_with_token(self):
         # When the inbound caller has a valid token, list_tools opens
         # the upstream session, fetches the catalog, caches it, and
         # emits compressed wrappers — NOT the unwrapped per-tool surface.

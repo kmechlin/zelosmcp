@@ -118,7 +118,7 @@ Some remote MCP servers — GitHub MCP at `api.githubcopilot.com/mcp`, Atlassian
 | Field | Required | Type | Default | Notes |
 |---|---|---|---|---|
 | `passthrough` | no | bool | `false` | Enables OAuth-passthrough mode. Only valid for `type: "streamable-http"`. |
-| `auth.provider` | no | string | _(none)_ | **Modern broker mode**: name of an entry in [configs/auth-providers.json](#auth-providers-config). zelosMCP mints tokens via the provider (typically through the GUI device flow) and gates the backend's wrappers until the user authenticates. Mutually exclusive with `auth.bearer`. |
+| `auth.provider` | no | string | _(none)_ | **Modern broker mode**: name of an entry in [configs/auth-providers.json](#auth-providers-config). zelosMCP mints tokens via the provider (typically through the GUI Connections flow) and gates the backend's wrappers until the user authenticates. Mutually exclusive with `auth.bearer`. |
 | `auth.audience` | no | string | _(none)_ | Provider-specific audience claim. Only valid alongside `auth.provider`. Reserved for future token-exchange providers; current device-flow providers ignore it. |
 | `auth.bearer` | no | string | _(none)_ | **Legacy** static fallback token. Injected on outbound requests only when the inbound request has no `Authorization` header. Useful for headless / CI runs. Supports `${ENV_VAR}` interpolation. Prefer `auth.provider` -> a `static`-type provider for new configs. |
 | `passthroughPool.maxSessions` | no | int | `64` | LRU cap on cached upstream sessions per backend. Each unique inbound `Authorization` value gets its own session (keyed by SHA-256 hash). |
@@ -157,7 +157,8 @@ Why two files: different sensitivity classes. The mcpServers catalog (URLs, comm
 Provider types:
 
 - `github_device_flow` — public OAuth client against `github.com/login/device`. Required: `client_id`. Optional: `scopes` (list of strings), `membership_hint` (UX-only display string).
-- `okta_device_flow` — public OAuth client against an Okta tenant. Required: `client_id`, `issuer` (`https://<okta-domain>/oauth2/<auth-server-id>`). Optional: `scopes`, `membership_hint`.
+- `okta_authorization_code` — public OAuth Native app against an Okta tenant using Authorization Code + PKCE. Required: `client_id`, `issuer` (`https://<okta-domain>/oauth2/<auth-server-id>`). Optional: `redirect_uri` (defaults to `http://localhost:8000/api/auth/<provider>/callback`), `scopes`, `membership_hint`.
+- `okta_device_flow` — public OAuth client against an Okta tenant using Device Authorization Grant. Required: `client_id`, `issuer`. Optional: `scopes`, `membership_hint`. Use only if your Okta admin enables the Device Authorization grant.
 - `passthrough` — wraps the legacy "forward Authorization verbatim" behaviour as an `AuthProvider`. No additional fields.
 - `static` — wraps a configured bearer token (env-interpolated). Required: `bearer`.
 
@@ -183,7 +184,10 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
   "args": ["--data-dir", "/tmp/pincher", "--http", "127.0.0.1:8080", "--trust-proxy"],
   "reverseProxy": {
     "mount": "/pincher",
-    "upstream": "http://127.0.0.1:8080"
+    "upstream": "http://127.0.0.1:8080",
+    "openapi": {
+      "path": "/v1/openapi.json"
+    }
   }
 }
 ```
@@ -195,6 +199,7 @@ Any backend (stdio or remote) can declare an optional `reverseProxy` block along
 | `stripPrefix` | no | bool | Strip `mount` from the path before forwarding. Default `false`. |
 | `headers` | no | object of strings | Extra request headers. Override auto-injected `X-Forwarded-*`. |
 | `auth.bearer` | no | string | Bearer token to inject when caller has no `Authorization`. Supports `${ENV_VAR}` interpolation. |
+| `openapi.path` | no | string | Upstream OpenAPI contract path, relative to `upstream` and starting with `/`. When present and the backend is running, zelosMCP merges those endpoints into `/openapi.json` under the reverse-proxy `mount`, so they appear in `/docs`. |
 
 See [reverse-proxy.md](reverse-proxy.md) for the full reference, including the canonical `X-Forwarded-*` set, network-isolation pattern, and pincher worked example.
 

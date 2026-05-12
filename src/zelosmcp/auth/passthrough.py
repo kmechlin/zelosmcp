@@ -70,4 +70,5 @@ class PassthroughProvider(AuthProvider):
             identity=None,
             membership_hint=None,
             supports_device_flow=False,
+            supports_authorization_code=False,
         )

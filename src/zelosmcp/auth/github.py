@@ -425,6 +425,7 @@ class GithubOAuthAppProvider(AuthProvider):
             identity=identity,
             membership_hint=self._membership_hint,
             supports_device_flow=True,
+            supports_authorization_code=False,
         )
 
     # ── Internals ───────────────────────────────────────────────────────

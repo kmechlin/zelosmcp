@@ -15,7 +15,7 @@
     "    backend's wrappers stay HIDDEN in tools/list until the user",
     "    completes the device flow in the Connections page.",
     "  * atlassian / artifactory — broker mode via 'auth.provider' ->",
-    "    'nike_okta'. Same device-flow UX; tokens come from Nike's Okta",
+    "    'nike_okta'. Same browser-Connect UX; tokens come from Nike's Okta",
     "    tenant. The 'membership_hint' field on the okta provider in",
     "    the providers config surfaces the authorized-group requirement",
     "    (e.g. Nike.uee.maria) on the GUI card.",

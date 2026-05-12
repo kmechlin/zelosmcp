@@ -2,12 +2,12 @@
   "_doc": [
     "Example auth-providers config showing the full provider matrix:",
     "  - github_oauth_app: device flow against github.com",
-    "  - nike_okta: device flow against the Nike Okta tenant, with the",
+    "  - nike_okta: Authorization Code + PKCE against the Nike Okta tenant, with the",
     "    membership_hint surfacing the authorized-group requirement",
     "    (Nike.uee.maria) in the Connections GUI before the user hits",
     "    Okta's consent screen.",
     "  - ci_pat: legacy static-bearer mode for headless / CI deploys",
-    "    where no browser is available (the GUI device-flow flow can't",
+    "    where no browser is available (the GUI auth flow can't",
     "    run). Wraps a PAT injected via env var.",
     "",
     "Pair this file with configs/example-passthrough-zelosmcp.json",
@@ -41,9 +41,10 @@
       ]
     },
     "nike_okta": {
-      "type": "okta_device_flow",
+      "type": "okta_authorization_code",
       "issuer": "${ZELOSMCP_OKTA_ISSUER}",
       "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
       "scopes": [
         "openid",
         "profile",

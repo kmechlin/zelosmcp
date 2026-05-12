@@ -59,6 +59,7 @@ class TestParseAuthProvidersStructure:
         # Sanity: the constant matches what the parser accepts.
         assert AUTH_PROVIDER_TYPES == frozenset({
             "github_device_flow",
+            "okta_authorization_code",
             "okta_device_flow",
             "passthrough",
             "static",
@@ -211,6 +212,70 @@ class TestParseAuthProvidersOkta:
             }
         })
         assert out["okta"].membership_hint is None
+
+
+class TestParseAuthProvidersOktaAuthorizationCode:
+    def test_minimal_okta_authorization_code_provider(self):
+        out = parse_auth_providers({
+            "providers": {
+                "okta": {
+                    "type": "okta_authorization_code",
+                    "issuer": "https://nike.okta.com/oauth2/default",
+                    "client_id": "0oa.x",
+                }
+            }
+        })
+        spec = out["okta"]
+        assert spec.type == "okta_authorization_code"
+        assert spec.issuer == "https://nike.okta.com/oauth2/default"
+        assert spec.client_id == "0oa.x"
+        assert spec.redirect_uri is None
+
+    def test_okta_authorization_code_redirect_uri(self):
+        out = parse_auth_providers({
+            "providers": {
+                "okta": {
+                    "type": "okta_authorization_code",
+                    "issuer": "https://nike.okta.com/oauth2/default",
+                    "client_id": "0oa.x",
+                    "redirect_uri": "http://localhost:8000/api/auth/okta/callback",
+                }
+            }
+        })
+        assert (
+            out["okta"].redirect_uri
+            == "http://localhost:8000/api/auth/okta/callback"
+        )
+
+    def test_okta_authorization_code_client_secret_redacted(self, monkeypatch):
+        monkeypatch.setenv("OKTA_SECRET", "super-secret")
+        out = parse_auth_providers({
+            "providers": {
+                "okta": {
+                    "type": "okta_authorization_code",
+                    "issuer": "https://nike.okta.com/oauth2/default",
+                    "client_id": "0oa.x",
+                    "client_secret": "${OKTA_SECRET}",
+                }
+            }
+        })
+        spec = out["okta"]
+        assert spec.client_secret == "super-secret"
+        assert spec.to_status()["client_secret"] == "***"
+        assert spec.to_status(redacted=False)["client_secret"] == "super-secret"
+
+    def test_okta_authorization_code_rejects_bad_redirect_uri(self):
+        with pytest.raises(ConfigError, match="redirect_uri"):
+            parse_auth_providers({
+                "providers": {
+                    "okta": {
+                        "type": "okta_authorization_code",
+                        "issuer": "https://nike.okta.com/oauth2/default",
+                        "client_id": "0oa.x",
+                        "redirect_uri": "not-a-url",
+                    }
+                }
+            })
 
 
 class TestParseAuthProvidersPassthrough:

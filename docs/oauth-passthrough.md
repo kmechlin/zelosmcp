@@ -3,11 +3,11 @@
 zelosMCP supports two complementary models for handing tokens to OAuth-protected upstream MCP servers (GitHub MCP, Atlassian MCP, etc.):
 
 1. **Pure passthrough** (the original mode): zelosMCP forwards the inbound `Authorization` header verbatim and propagates 401 + `WWW-Authenticate` challenges back to the MCP client. The client (typically Cursor) does the OAuth dance directly with the upstream issuer.
-2. **Broker mode** (the modern mode introduced alongside the GUI Connections page): zelosMCP itself runs the OAuth flow via the GUI, stores per-user tokens in an encrypted local SQLite store, and injects them on outbound requests. The aggregator HIDES the backend's wrapper tools from `tools/list` until the user authenticates — Cursor sees no entry for the backend at all until then.
+2. **Broker mode** (the modern mode introduced alongside the GUI Connections page): zelosMCP itself runs the OAuth flow via the GUI, stores per-user tokens in an encrypted local SQLite store, and injects them on outbound requests. The broker can use GitHub Device Flow, Okta Authorization Code + PKCE, or Okta Device Authorization depending on provider type. The aggregator HIDES the backend's wrapper tools from `tools/list` until the user authenticates — Cursor sees no entry for the backend at all until then.
 
 The two modes coexist: you choose per-backend via the `auth` block in the server's mcpServers entry. Use broker mode when you want gated access plus per-user accounting; use pure passthrough when the upstream's OAuth flow already works through your MCP client (e.g. VS Code Copilot's GitHub MCP integration).
 
-This page covers when to use each mode, how the broker's GUI device flow works end-to-end, the new two-file configuration split, and how to debug both.
+This page covers when to use each mode, how the broker's GUI auth flow works end-to-end, the new two-file configuration split, and how to debug both.
 
 ## When to use which mode
 
@@ -118,9 +118,10 @@ The providers file's path is configurable via `ZELOSMCP_AUTH_PROVIDERS_FILE` (de
       "scopes": ["repo", "read:org", "user:email", "gist", "workflow"]
     },
     "nike_okta": {
-      "type": "okta_device_flow",
+      "type": "okta_authorization_code",
       "issuer": "${ZELOSMCP_OKTA_ISSUER}",
       "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
       "scopes": ["openid", "profile", "email"],
       "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
     }
@@ -131,7 +132,8 @@ The providers file's path is configurable via `ZELOSMCP_AUTH_PROVIDERS_FILE` (de
 The `_doc` arrays in [`configs/auth-providers.json`](../configs/auth-providers.json) and [`configs/example-auth-providers.json`](../configs/example-auth-providers.json) document each field inline. Provider types currently supported:
 
 - `github_device_flow` — public OAuth client against `github.com/login/device`. Requires `client_id`. Scopes optional.
-- `okta_device_flow` — public OAuth client against an Okta tenant. Requires `issuer` + `client_id`. Optional `membership_hint` (UX-only string surfaced in the GUI as "Membership required: X" so users know which Okta authorized-group they need before hitting the consent screen).
+- `okta_authorization_code` — public OAuth Native app against an Okta tenant using Authorization Code + PKCE. Requires `issuer` + `client_id`; optional `redirect_uri` (defaults to `http://localhost:8000/api/auth/<provider>/callback`). Optional `membership_hint` (UX-only string surfaced in the GUI as "Membership required: X" so users know which Okta authorized-group they need before hitting the consent screen).
+- `okta_device_flow` — public OAuth client against an Okta tenant using Device Authorization Grant. Use only if your Okta admin enables the Device Authorization grant.
 - `passthrough` — wraps the legacy "forward Authorization verbatim" behaviour as an `AuthProvider`. No additional fields.
 - `static` — wraps a configured bearer token (env-interpolated). Used for headless / CI deploys.
 

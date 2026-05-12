@@ -11,10 +11,11 @@
         "workflow"
       ]
     },
-    "nike_okta": {
-      "type": "okta_device_flow",
+    "okta": {
+      "type": "okta_authorization_code",
       "issuer": "${ZELOSMCP_OKTA_ISSUER}",
       "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
       "scopes": [
         "openid",
         "profile",

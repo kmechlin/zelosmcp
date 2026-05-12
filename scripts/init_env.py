@@ -235,9 +235,10 @@ def main() -> int:
         "\nAuth providers — broker mode for OAuth-protected backends.\n"
         "  - GitHub: device flow against github.com (Cursor is PAT-only\n"
         "    for the GitHub MCP; this gives you a GUI-driven alternative).\n"
-        "  - Okta: device flow against your Okta tenant. Requires admin\n"
-        "    to register a Native app + enable the Device Authorization\n"
-        "    grant. See docs/oauth-passthrough.md.\n"
+        "  - Okta: Authorization Code + PKCE against your Okta tenant.\n"
+        "    Register a Native app with Authorization Code + Refresh Token\n"
+        "    grants and a redirect URI back to zelosMCP. See\n"
+        "    docs/oauth-passthrough.md.\n"
     )
     providers_block: dict = {}
     auth_env: dict[str, str] = {}
@@ -248,7 +249,7 @@ def main() -> int:
     if enable_github_provider:
         gh_client_id = ask(
             "GitHub OAuth App client_id (ZELOSMCP_GITHUB_CLIENT_ID)",
-            "",
+            "Ov23li4PI3EZsBRDcm11",
         )
         if gh_client_id:
             auth_env["ZELOSMCP_GITHUB_CLIENT_ID"] = gh_client_id
@@ -270,18 +271,22 @@ def main() -> int:
         }
 
     enable_okta_provider = ask_yes_no(
-        "Configure the nike_okta provider?", False,
+        "Configure the okta provider?", False,
     )
     if enable_okta_provider:
         okta_issuer = ask(
             "Okta authorization server issuer URL "
             "(e.g. https://nike.okta.com/oauth2/default) "
             "(ZELOSMCP_OKTA_ISSUER)",
-            "",
+            "https://nike.okta.com/oauth2/aus27z7p76as9Dz0H1t7",
         )
         okta_client_id = ask(
             "Okta App client_id (ZELOSMCP_OKTA_CLIENT_ID)",
-            "",
+            "nike.niketech.zelosmcp",
+        )
+        okta_redirect_uri = ask(
+            "Okta redirect URI (ZELOSMCP_OKTA_REDIRECT_URI)",
+            "http://localhost:8000/auth/okta/callback",
         )
         okta_membership_hint = ask(
             "Okta authorized-group display string for the Connections "
@@ -292,12 +297,15 @@ def main() -> int:
             auth_env["ZELOSMCP_OKTA_ISSUER"] = okta_issuer
         if okta_client_id:
             auth_env["ZELOSMCP_OKTA_CLIENT_ID"] = okta_client_id
+        if okta_redirect_uri:
+            auth_env["ZELOSMCP_OKTA_REDIRECT_URI"] = okta_redirect_uri
         if okta_membership_hint:
             auth_env["ZELOSMCP_OKTA_MEMBERSHIP_HINT"] = okta_membership_hint
-        providers_block["nike_okta"] = {
-            "type": "okta_device_flow",
+        providers_block["okta"] = {
+            "type": "okta_authorization_code",
             "issuer": "${ZELOSMCP_OKTA_ISSUER}",
             "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+            "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
             "scopes": ["openid", "profile", "email"],
             "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}",
         }
