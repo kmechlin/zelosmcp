@@ -81,6 +81,42 @@ class TestGenerateDefaultRuleRows:
         assert "playbook_read_write" in names
         assert not any(n.startswith("tool:") for n in names)
 
+    def test_compressed_playbook_rows_emitted(self):
+        tools = [_tool("list_pods", readOnlyHint=True)]
+        rows = generate_default_rule_rows("kubernetes", tools)
+        names = {r.name for r in rows}
+        assert "playbook_compressed_read_only" in names
+        assert "playbook_compressed_read_write" in names
+
+    def test_compressed_ro_uses_invoke_tool_framing(self):
+        tools = [_tool("list_pods", readOnlyHint=True)]
+        rows = generate_default_rule_rows("kubernetes", tools)
+        compressed_ro = next(r for r in rows if r.name == "playbook_compressed_read_only")
+        assert "invoke_tool" in compressed_ro.body.lower() or "kubernetes__invoke_tool" in compressed_ro.body
+        # Must NOT use `kubernetes__list_pods` as a direct call instruction
+        assert "kubernetes__list_pods" not in compressed_ro.body
+
+    def test_compressed_rw_mentions_destructive_confirm(self):
+        tools = [_tool("delete_pod", destructiveHint=True)]
+        rows = generate_default_rule_rows("kubernetes", tools)
+        compressed_rw = next(r for r in rows if r.name == "playbook_compressed_read_write")
+        assert "destructive" in compressed_rw.body.lower() or "confirm" in compressed_rw.body.lower()
+
+    def test_compressed_ro_no_mutating_invoke(self):
+        tools = [_tool("delete_pod", destructiveHint=True)]
+        rows = generate_default_rule_rows("kubernetes", tools)
+        compressed_ro = next(r for r in rows if r.name == "playbook_compressed_read_only")
+        assert "do **not** invoke" in compressed_ro.body.lower() or "not invoke" in compressed_ro.body.lower()
+
+    def test_all_four_playbook_rows_present(self):
+        tools = [_tool("list_pods", readOnlyHint=True), _tool("delete_pod", destructiveHint=True)]
+        rows = generate_default_rule_rows("kubernetes", tools)
+        names = {r.name for r in rows}
+        assert "playbook_read_only" in names
+        assert "playbook_read_write" in names
+        assert "playbook_compressed_read_only" in names
+        assert "playbook_compressed_read_write" in names
+
 
 @pytest.mark.asyncio
 class TestEnsureDefaultAssetsIdempotent:

@@ -29,6 +29,99 @@ def _mutating_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [t for t in tools if classify_tool(t) in ("mutates", "destructive", "?")]
 
 
+def _playbook_compressed_ro(backend: str, tools: list[dict[str, Any]]) -> str:
+    """Playbook for a compressed backend in read-only mode.
+
+    Emits the same mutability table as ``_playbook_ro`` but frames every
+    tool call as ``<backend>__invoke_tool(tool_name="<name>", ...)``.
+    """
+    n = len(tools)
+    invoke_q = f"{backend}__invoke_tool"
+    lines: list[str] = [
+        f"### `{backend}` (auto-generated) — compressed",
+        "",
+        f"This backend is wire-compressed. Its {n} tool{'s' if n != 1 else ''} "
+        f"are reachable only through the compressed wrapper trio. "
+        f"Do NOT call underlying tool names directly via `{backend}__<tool>` "
+        f"— use `{invoke_q}(tool_name=\"<tool>\", tool_input={{...}})` instead.",
+        "",
+        "| Tool | Args | Mutability |",
+        "|---|---|---|",
+    ]
+    for t in tools:
+        name = t.get("name") or "(unnamed)"
+        args = format_args(t.get("inputSchema"))
+        marker = classify_tool(t)
+        lines.append(f"| `{name}` | `{args}` | [{marker}] |")
+
+    no_invoke = [
+        f"`{t.get('name')}`"
+        for t in _mutating_tools(tools)
+    ]
+    lines.append("")
+    lines.append(
+        "In **read-only** mode, do **not** invoke any underlying tool tagged "
+        "`[mutates]`, `[destructive]`, or `[?]` via the wrapper."
+    )
+    if no_invoke:
+        lines.append(
+            "Specifically, avoid invoking: " + ", ".join(no_invoke[:10])
+            + ("…" if len(no_invoke) > 10 else "") + "."
+        )
+    lines.append("")
+    lines.append(
+        f"Edit this rule in the Assets pane (`Assets` button on the "
+        f"`{backend}` server row) to add per-tool guidance, intent → "
+        f"tool mappings, or forbidden fallbacks."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _playbook_compressed_rw(backend: str, tools: list[dict[str, Any]]) -> str:
+    """Playbook for a compressed backend in read-write mode."""
+    n = len(tools)
+    invoke_q = f"{backend}__invoke_tool"
+    lines: list[str] = [
+        f"### `{backend}` (auto-generated) — compressed",
+        "",
+        f"This backend is wire-compressed. Its {n} tool{'s' if n != 1 else ''} "
+        f"are reachable only through the compressed wrapper trio. "
+        f"Do NOT call underlying tool names directly via `{backend}__<tool>` "
+        f"— use `{invoke_q}(tool_name=\"<tool>\", tool_input={{...}})` instead.",
+        "",
+        "| Tool | Args | Mutability |",
+        "|---|---|---|",
+    ]
+    for t in tools:
+        name = t.get("name") or "(unnamed)"
+        args = format_args(t.get("inputSchema"))
+        marker = classify_tool(t)
+        lines.append(f"| `{name}` | `{args}` | [{marker}] |")
+
+    destructive = [
+        f"`{t.get('name')}`"
+        for t in tools
+        if classify_tool(t) == "destructive"
+    ]
+    lines.append("")
+    lines.append(
+        "In **read-write** mode, confirm with the user before invoking "
+        "any underlying `[destructive]` tool via the wrapper (irreversible)."
+    )
+    if destructive:
+        lines.append(
+            "Destructive tools: " + ", ".join(destructive[:10])
+            + ("…" if len(destructive) > 10 else "") + "."
+        )
+    lines.append("")
+    lines.append(
+        f"Edit this rule in the Assets pane (`Assets` button on the "
+        f"`{backend}` server row) to add per-tool guidance, intent → "
+        f"tool mappings, or forbidden fallbacks."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _playbook_ro(backend: str, tools: list[dict[str, Any]]) -> str:
     n = len(tools)
     lines: list[str] = [
@@ -150,6 +243,22 @@ def generate_default_rule_rows(
             backend=backend,
             name="playbook_read_write",
             body=_playbook_rw(backend, tools),
+            source="seed",
+            seed_version=seed_version,
+        ),
+        AssetRow(
+            kind=KIND_RULE,
+            backend=backend,
+            name="playbook_compressed_read_only",
+            body=_playbook_compressed_ro(backend, tools),
+            source="seed",
+            seed_version=seed_version,
+        ),
+        AssetRow(
+            kind=KIND_RULE,
+            backend=backend,
+            name="playbook_compressed_read_write",
+            body=_playbook_compressed_rw(backend, tools),
             source="seed",
             seed_version=seed_version,
         ),

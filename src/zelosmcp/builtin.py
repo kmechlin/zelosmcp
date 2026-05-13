@@ -640,6 +640,333 @@ _FILESYSTEM_PLAYBOOK_RW = (
     "size / mtime / permissions without reading content.\n"
 )
 
+# ── Compressed-backend helpers ─────────────────────────────────────────
+#
+# When a backend is wire-compressed (scope ∈ {aggregator, global},
+# level ≠ low) the aggregator at /mcp exposes only the wrapper trio
+# instead of the full tool surface. The rule generator must reflect
+# this reality so agents don't try to call tools that don't exist.
+
+_COMPRESSED_RULES_READ_ONLY = (
+    "## Compressed backends\n\n"
+    "One or more backends below expose their tools via a **compressed "
+    "wrapper trio** at `/mcp` instead of their full tool surface. The "
+    "actual callable tools for these backends are "
+    "`<backend>__get_tool_schema`, `<backend>__search_tools`, and "
+    "`<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).\n\n"
+    "**Do NOT call underlying tool names directly** (e.g. "
+    "`pincher__architecture`) — the aggregator rejects them with "
+    "\"unknown tool\". Use the wrapper pattern:\n\n"
+    "1. **Discover:** browse the compact catalog embedded in "
+    "`<backend>__get_tool_schema`'s description, or call "
+    "`<backend>__search_tools(query=\"...\", limit=5)` for targeted "
+    "search by name / description.\n"
+    "2. **Schema (optional):** "
+    "`<backend>__get_tool_schema(tool_name=\"...\")` returns the full "
+    "JSON schema for one underlying tool.\n"
+    "3. **Invoke:** "
+    "`<backend>__invoke_tool(tool_name=\"...\", tool_input={...})`. "
+    "Results are forwarded verbatim — identical to calling the tool "
+    "directly. In read-only mode, do NOT invoke tools tagged "
+    "`[mutates]`, `[destructive]`, or `[?]` via the wrapper.\n\n"
+    "Underlying tool names and per-tool descriptions are listed in each "
+    "compressed backend's section below under **Underlying tools**.\n"
+)
+
+_COMPRESSED_RULES_READ_WRITE = (
+    "## Compressed backends\n\n"
+    "One or more backends below expose their tools via a **compressed "
+    "wrapper trio** at `/mcp` instead of their full tool surface. The "
+    "actual callable tools for these backends are "
+    "`<backend>__get_tool_schema`, `<backend>__search_tools`, and "
+    "`<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).\n\n"
+    "**Do NOT call underlying tool names directly** (e.g. "
+    "`pincher__architecture`) — the aggregator rejects them with "
+    "\"unknown tool\". Use the wrapper pattern:\n\n"
+    "1. **Discover:** browse the compact catalog embedded in "
+    "`<backend>__get_tool_schema`'s description, or call "
+    "`<backend>__search_tools(query=\"...\", limit=5)` for targeted "
+    "search by name / description.\n"
+    "2. **Schema (optional):** "
+    "`<backend>__get_tool_schema(tool_name=\"...\")` returns the full "
+    "JSON schema for one underlying tool.\n"
+    "3. **Invoke:** "
+    "`<backend>__invoke_tool(tool_name=\"...\", tool_input={...})`. "
+    "Confirm with the user before invoking any underlying tool tagged "
+    "`[destructive]`.\n\n"
+    "Underlying tool names and per-tool descriptions are listed in each "
+    "compressed backend's section below under **Underlying tools**.\n"
+)
+
+_PINCHER_PLAYBOOK_COMPRESSED_RO = (
+    "### `pincher` (codebase intelligence) — compressed\n\n"
+    "**MANDATORY: pincher is wire-compressed. Your FIRST pincher call "
+    "MUST use `pincher__invoke_tool` — do NOT call "
+    "`pincher__architecture` etc. directly.**\n\n"
+    "| User intent (any phrasing) | How to call |\n"
+    "|---|---|\n"
+    "| summarize / explain / understand this repo | "
+    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |\n'
+    "| find a function / class / method / symbol | "
+    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |\n'
+    "| show me function X / how does X work | "
+    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |\n'
+    "| what calls X / impact of changing X | "
+    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |\n'
+    "| what does my git diff break / blast radius | "
+    '`pincher__invoke_tool(tool_name="changes", tool_input={})` |\n'
+    "| recall stored architectural decisions / conventions | "
+    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` |\n\n'
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, "
+    "`git ls-files` to count or enumerate symbols.\n"
+    "- `Grep` to find a symbol by name "
+    "(use `pincher__invoke_tool` → `search`).\n"
+    "- `Read` on 3+ files in sequence to understand one function "
+    "(use `pincher__invoke_tool` → `context`).\n"
+    "- **Calling `pincher__architecture` / `pincher__search` / etc. "
+    "directly** — they are not exposed at `/mcp` when pincher is "
+    "compressed. The aggregator will return \"unknown tool\".\n"
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
+    "because <specific reason>.\"\n\n"
+    "Canonical compressed read-only workflow:\n\n"
+    "- **Orient first.** "
+    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` '
+    "— language breakdown, entry points, hotspot functions.\n"
+    "- **Scope to the active project.** Pass `project=<basename of git "
+    "toplevel>` in every `tool_input`. Fall back to "
+    "`project=user_data_ro` if the per-repo project isn't indexed. "
+    'Use `pincher__invoke_tool(tool_name="list", tool_input={})` to '
+    "confirm available project names.\n"
+    "- **Find symbols.** "
+    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` '
+    "(FTS5 BM25; wildcards `auth*`, phrases `\"process order\"`, "
+    "`kind=Function`/`language=Go` filters).\n"
+    "- **Read source.** "
+    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` '
+    "— symbol body + direct imports + callees in one shot.\n"
+    "- **Impact analysis.** "
+    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` '
+    "— CRITICAL=depth 1, HIGH=2, MEDIUM=3.\n"
+    "- **Blast radius.** "
+    '`pincher__invoke_tool(tool_name="changes", tool_input={})` '
+    "before committing.\n"
+    "- **Do NOT invoke** `tool_name=\"index\"`, `tool_name=\"fetch\"`, "
+    "or `tool_name=\"adr\"` with `action=set`/`delete` — they mutate "
+    "state and the rule is configured for read-only access.\n"
+)
+
+_PINCHER_PLAYBOOK_COMPRESSED_RW = (
+    "### `pincher` (codebase intelligence) — compressed\n\n"
+    "**MANDATORY: pincher is wire-compressed. Your FIRST pincher call "
+    "MUST use `pincher__invoke_tool` — do NOT call "
+    "`pincher__architecture` etc. directly.**\n\n"
+    "| User intent (any phrasing) | How to call |\n"
+    "|---|---|\n"
+    "| summarize / explain / understand this repo | "
+    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |\n'
+    "| find a function / class / method / symbol | "
+    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |\n'
+    "| show me function X / how does X work | "
+    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |\n'
+    "| what calls X / impact of changing X | "
+    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |\n'
+    "| what does my git diff break / blast radius | "
+    '`pincher__invoke_tool(tool_name="changes", tool_input={})` |\n'
+    "| store / recall architectural decisions, conventions, gotchas | "
+    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` |\n'
+    "| ingest external docs (URL → searchable Document) | "
+    '`pincher__invoke_tool(tool_name="fetch", tool_input={"url":"...", "project":"<name>"})` |\n\n'
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, "
+    "`git ls-files` to count or enumerate symbols.\n"
+    "- `Grep` to find a symbol by name "
+    "(use `pincher__invoke_tool` → `search`).\n"
+    "- `Read` on 3+ files in sequence to understand one function "
+    "(use `pincher__invoke_tool` → `context`).\n"
+    "- **Calling `pincher__architecture` / `pincher__search` / etc. "
+    "directly** — they are not exposed at `/mcp` when pincher is "
+    "compressed. The aggregator will return \"unknown tool\".\n"
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
+    "because <specific reason>.\"\n\n"
+    "Canonical compressed read-write workflow:\n\n"
+    "- **Orient first.** "
+    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` '
+    "— language breakdown, entry points, hotspot functions.\n"
+    "- **Scope to the active project.** Pass `project=<basename of git "
+    "toplevel>` in every `tool_input`. Fall back to "
+    "`project=user_data_ro` if not indexed.\n"
+    "- **Index before querying.** "
+    '`pincher__invoke_tool(tool_name="index", tool_input={"path":"/user_data_ro/<repo>"})` '
+    "once per project (incremental by default).\n"
+    "- **Find symbols.** "
+    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` '
+    "(FTS5 BM25; wildcards, phrases, `kind=Function`/`language=Go` filters).\n"
+    "- **Read source.** "
+    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` '
+    "— symbol body + direct imports + callees in one shot.\n"
+    "- **Impact analysis.** "
+    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` '
+    "— CRITICAL=depth 1, HIGH=2, MEDIUM=3.\n"
+    "- **Blast radius.** "
+    '`pincher__invoke_tool(tool_name="changes", tool_input={})` '
+    "before committing.\n"
+    "- **Persist knowledge.** "
+    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", '
+    '"key":"...", "value":"..."})` — survives across sessions.\n'
+)
+
+_FILESYSTEM_PLAYBOOK_COMPRESSED_RO = (
+    "### `filesystem` (sandboxed file access) — compressed\n\n"
+    "**MANDATORY: filesystem is wire-compressed. Use "
+    "`filesystem__invoke_tool` to call filesystem tools — do NOT call "
+    "`filesystem__read_text_file` etc. directly.**\n\n"
+    "| User intent | How to call |\n"
+    "|---|---|\n"
+    "| read this file / show me file X | "
+    '`filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"...", "head":N})` |\n'
+    "| compare / diff / summarize multiple files | "
+    '`filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |\n'
+    "| list files in / browse directory X | "
+    '`filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` '
+    "or `tool_name=\"directory_tree\"` |\n"
+    "| find files matching pattern X | "
+    '`filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |\n'
+    "| what's the size / mtime / permissions of X | "
+    '`filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |\n\n'
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
+    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
+    "- `Read` on a workspace path when `filesystem__invoke_tool` → "
+    "`read_text_file` would work.\n"
+    "- **Calling `filesystem__read_text_file` / `filesystem__list_"
+    "directory` etc. directly** — they are not exposed at `/mcp` when "
+    "filesystem is compressed. The aggregator will return "
+    "\"unknown tool\".\n"
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
+    "because <specific reason>.\"\n\n"
+    "Read-only workflow — do NOT invoke `write_file`, `edit_file`, "
+    "`move_file`, or `create_directory` via the wrapper:\n\n"
+    "- **Read text.** `tool_name=\"read_text_file\"` — use `head` or "
+    "`tail` for large files; `tool_name=\"read_multiple_files\"` for "
+    "several files in one round trip.\n"
+    "- **Browse.** `tool_name=\"list_directory\"` for a flat listing; "
+    "`tool_name=\"directory_tree\"` for a recursive JSON tree.\n"
+    "- **Find.** `tool_name=\"search_files\"` with "
+    "`\"pattern\":\"**/*.ext\"` — much faster than shell `find`.\n"
+    "- **Metadata.** `tool_name=\"get_file_info\"` — size, mtime, "
+    "permissions without reading content.\n"
+)
+
+_FILESYSTEM_PLAYBOOK_COMPRESSED_RW = (
+    "### `filesystem` (sandboxed file access) — compressed\n\n"
+    "**MANDATORY: filesystem is wire-compressed. Use "
+    "`filesystem__invoke_tool` to call filesystem tools — do NOT call "
+    "`filesystem__read_text_file` etc. directly.**\n\n"
+    "| User intent | How to call |\n"
+    "|---|---|\n"
+    "| read this file / show me file X | "
+    '`filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"..."})` |\n'
+    "| compare / diff / summarize multiple files | "
+    '`filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |\n'
+    "| list files in / browse directory X | "
+    '`filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` '
+    "or `tool_name=\"directory_tree\"` |\n"
+    "| find files matching pattern X | "
+    '`filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |\n'
+    "| edit / patch file X | "
+    '`filesystem__invoke_tool(tool_name="edit_file", tool_input={"path":"...", "edits":[...]})` |\n'
+    "| create / move / rename file or directory | "
+    '`filesystem__invoke_tool(tool_name="create_directory", ...)` / '
+    '`filesystem__invoke_tool(tool_name="move_file", ...)` |\n'
+    "| what's the size / mtime / permissions of X | "
+    '`filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |\n\n'
+    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
+    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
+    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
+    "- `Read` on a workspace path when `filesystem__invoke_tool` → "
+    "`read_text_file` would work.\n"
+    "- `sed`, `awk`, or `echo > file` for edits — use "
+    "`filesystem__invoke_tool` → `edit_file`.\n"
+    "- **Calling `filesystem__read_text_file` / `filesystem__edit_file` "
+    "etc. directly** — they are not exposed at `/mcp` when filesystem "
+    "is compressed. The aggregator will return \"unknown tool\".\n"
+    "If you violate, say so explicitly: \"Violating zelosMCP rule "
+    "because <specific reason>.\"\n\n"
+    "Read-write workflow:\n\n"
+    "- **Read text.** `tool_name=\"read_text_file\"` — use `head` or "
+    "`tail` for large files; `tool_name=\"read_multiple_files\"` for "
+    "several files in one round trip.\n"
+    "- **Browse.** `tool_name=\"list_directory\"` (flat) or "
+    "`tool_name=\"directory_tree\"` (recursive JSON).\n"
+    "- **Find.** `tool_name=\"search_files\"` with "
+    "`\"pattern\":\"**/*.ext\"` — much faster than shell `find`.\n"
+    "- **Edit precisely.** Prefer `tool_name=\"edit_file\"` (returns a "
+    "git-style diff) over `tool_name=\"write_file\"` (full overwrite, "
+    "destructive).\n"
+    "- **Create / move.** `tool_name=\"create_directory\"` is "
+    "idempotent; `tool_name=\"move_file\"` fails if destination exists.\n"
+    "- **Metadata.** `tool_name=\"get_file_info\"` — size, mtime, "
+    "permissions without reading content.\n"
+)
+
+
+def _compressed_wrapper_entries(
+    server_name: str,
+    n_tools: int,
+    level: str,
+    tool_instr: dict[str, str],
+) -> list[str]:
+    """Render the wire-level wrapper-tool bullet entries for a compressed
+    backend section. These are the only tools the aggregator exposes for
+    this backend; underlying tools are listed separately and must be
+    called via ``invoke_tool``."""
+    lines: list[str] = []
+    if level == "max":
+        qualified = f"{server_name}__list_tools"
+        lines.append(f"- `{qualified}` `()` [readonly]")
+        lines.append(
+            f"  List all {n_tools} underlying tools (one short summary "
+            f"line per tool). Follow up with `{server_name}__invoke_tool` "
+            f"to run one."
+        )
+    else:
+        schema_q = f"{server_name}__get_tool_schema"
+        search_q = f"{server_name}__search_tools"
+        invoke_q = f"{server_name}__invoke_tool"
+        lines.append(f"- `{schema_q}` `(tool_name)` [readonly]")
+        lines.append(
+            f"  Return the full JSON schema for one tool exposed by "
+            f"`{server_name}`. The description embeds a compact "
+            f"level={level} catalog of all {n_tools} underlying tools "
+            f"for browsing without round-trips."
+        )
+        instr = tool_instr.get("get_tool_schema", "").strip()
+        if instr:
+            for il in instr.splitlines():
+                lines.append(f"  {il}")
+        lines.append(f"- `{search_q}` `(query, limit?)` [readonly]")
+        lines.append(
+            f"  Search `{server_name}`'s {n_tools} underlying tools by "
+            f"name, description, or top-level parameter name."
+        )
+        instr = tool_instr.get("search_tools", "").strip()
+        if instr:
+            for il in instr.splitlines():
+                lines.append(f"  {il}")
+        lines.append(f"- `{invoke_q}` `(tool_name, tool_input)` [?]")
+        lines.append(
+            f"  Invoke any of `{server_name}`'s {n_tools} underlying "
+            f"tools by name. Use `{schema_q}` first if you need the "
+            f"full schema."
+        )
+        instr = tool_instr.get("invoke_tool", "").strip()
+        if instr:
+            for il in instr.splitlines():
+                lines.append(f"  {il}")
+    return lines
+
+
 _DEFAULT_MANDATORY_NAMES: frozenset[str] = frozenset({"filesystem", "pincher"})
 
 
@@ -649,6 +976,7 @@ def _render_mandatory_playbook(
     *,
     access: str,
     rule_assets: "dict[str, Any] | None" = None,
+    compressed_backends: "dict[str, dict[str, Any]] | None" = None,
 ) -> str:
     """Build the ``## Mandatory backend playbook`` section.
 
@@ -657,16 +985,38 @@ def _render_mandatory_playbook(
     the store row so user edits are respected.  Falls back to the
     hardcoded string constants when the store is unavailable.
 
+    When ``compressed_backends`` lists a backend name, the compressed
+    playbook variant (``playbook_compressed_*``) is preferred over the
+    standard one so agents receive instructions matched to the actual
+    wire surface they see at ``/mcp``.
+
     Only emits blocks for mandatory backends that are actually present
     in ``catalog`` (so a rule generated when pincher is down doesn't
     pretend it's available). Returns an empty string when no mandatory
     backend is loaded — callers should skip the section header entirely
     in that case.
     """
-    def _playbook_body(backend: str, fallback_ro: str, fallback_rw: str) -> str:
+    _compressed = compressed_backends or {}
+
+    def _playbook_body(
+        backend: str,
+        fallback_ro: str,
+        fallback_rw: str,
+        fallback_compressed_ro: str = "",
+        fallback_compressed_rw: str = "",
+    ) -> str:
+        is_compressed = backend in _compressed
         if rule_assets is not None:
             assets = rule_assets.get(backend)
             if assets is not None:
+                if is_compressed:
+                    body = (
+                        assets.playbook_compressed_read_only
+                        if access == "read-only"
+                        else assets.playbook_compressed_read_write
+                    )
+                    if body:
+                        return body
                 body = (
                     assets.playbook_read_only
                     if access == "read-only"
@@ -674,16 +1024,33 @@ def _render_mandatory_playbook(
                 )
                 if body:
                     return body
+        if is_compressed and (fallback_compressed_ro or fallback_compressed_rw):
+            return (
+                fallback_compressed_ro if access == "read-only"
+                else fallback_compressed_rw
+            )
         return fallback_ro if access == "read-only" else fallback_rw
 
     blocks: list[str] = []
     if "filesystem" in mandatory_names and "filesystem" in catalog:
         blocks.append(
-            _playbook_body("filesystem", _FILESYSTEM_PLAYBOOK_RO, _FILESYSTEM_PLAYBOOK_RW)
+            _playbook_body(
+                "filesystem",
+                _FILESYSTEM_PLAYBOOK_RO,
+                _FILESYSTEM_PLAYBOOK_RW,
+                _FILESYSTEM_PLAYBOOK_COMPRESSED_RO,
+                _FILESYSTEM_PLAYBOOK_COMPRESSED_RW,
+            )
         )
     if "pincher" in mandatory_names and "pincher" in catalog:
         blocks.append(
-            _playbook_body("pincher", _PINCHER_PLAYBOOK_RO, _PINCHER_PLAYBOOK_RW)
+            _playbook_body(
+                "pincher",
+                _PINCHER_PLAYBOOK_RO,
+                _PINCHER_PLAYBOOK_RW,
+                _PINCHER_PLAYBOOK_COMPRESSED_RO,
+                _PINCHER_PLAYBOOK_COMPRESSED_RW,
+            )
         )
     if not blocks:
         return ""
@@ -706,6 +1073,7 @@ def render_comprehensive_rule(
     tool_use: str = "priority",
     mandatory_names: set[str] | frozenset[str] | None = None,
     rule_assets: "dict[str, Any] | None" = None,
+    compressed_backends: "dict[str, dict[str, Any]] | None" = None,
 ) -> str:
     """Render a comprehensive agent-instructions document from the output
     of :func:`collect_backend_full_catalog`. Lists every tool from every
@@ -744,6 +1112,16 @@ def render_comprehensive_rule(
     user edits are respected.  Pass ``None`` (the default) to use the
     bundled defaults — required for callers that don't open the store
     (e.g. tests).
+
+    ``compressed_backends`` maps backend names to their compression
+    metadata (``{"level": ..., "scope": ...}``) for backends where the
+    aggregator at ``/mcp`` exposes only the wrapper trio
+    (``get_tool_schema`` / ``search_tools`` / ``invoke_tool``) instead
+    of the full tool surface. When a backend is listed here its section
+    in the generated rule shows the wrapper trio as the callable tools
+    and the underlying tools as a reference sub-list, and the mandatory
+    playbook is switched to the compressed variant.  Pass ``None``
+    (the default) for no compression-aware rendering.
     """
     if access not in ("read-only", "read-write"):
         raise ValueError(f"Unknown access mode: {access!r}")
@@ -838,16 +1216,39 @@ def render_comprehensive_rule(
     # (possibly store-overridden) value.
     lines[-1] = directive
 
+    _compressed = compressed_backends or {}
+
     if tool_use == "priority":
         lines.append(
             _pick("directive_tool_use_priority", _DIRECTIVE_TOOL_USE_PRIORITY)
         )
         lines.append(_pick("self_check_gate", _SELF_CHECK_GATE))
+
+        # Emit a single compressed-backends explanation block when any
+        # user backend is wire-compressed. The block is pulled from the
+        # global zelosmcp asset store row when available; otherwise the
+        # hardcoded fallback constant is used.
+        compressed_user_backends = {
+            n: v for n, v in _compressed.items() if n in user_backends
+        }
+        if compressed_user_backends:
+            lines.append(
+                _pick(
+                    "compressed_rules_read_only"
+                    if access == "read-only"
+                    else "compressed_rules_read_write",
+                    _COMPRESSED_RULES_READ_ONLY
+                    if access == "read-only"
+                    else _COMPRESSED_RULES_READ_WRITE,
+                )
+            )
+
         playbook = _render_mandatory_playbook(
             user_backends,
             effective_mandatory,
             access=access,
             rule_assets=rule_assets,
+            compressed_backends=_compressed,
         )
         if playbook:
             lines.append(playbook)
@@ -877,12 +1278,8 @@ def render_comprehensive_rule(
         tools = data.get("tools") or []
         if not isinstance(tools, list):
             continue
-        lines.append(f"## `{server_name}`")
-        lines.append("")
-        lines.append(_backend_intro(server_name, len(tools), tool_use=tool_use))
-        lines.append("")
 
-        # Per-backend rule assets (tool instructions, compressed rules).
+        # Per-backend rule assets (tool instructions).
         backend_assets = rule_assets.get(server_name) if rule_assets else None
         tool_instr: dict[str, str] = (
             backend_assets.tool_instructions
@@ -890,27 +1287,85 @@ def render_comprehensive_rule(
             else {}
         )
 
-        if not tools:
-            lines.append("- _(no tools advertised)_")
+        compress_info = _compressed.get(server_name)
+        if compress_info is not None:
+            # ── Compressed backend ───────────────────────────────────────
+            # Show the wrapper trio as the actual callable tools, then
+            # list the underlying tools as a reference sub-section.
+            level = compress_info.get("level", "medium")
+            scope = compress_info.get("scope", "aggregator")
+            n_total = len(tools)
+            lines.append(f"## `{server_name}`")
             lines.append("")
-            continue
-        for t in tools:
-            if not isinstance(t, dict):
+            _compressed_ref = (
+                " See the **Compressed backends** section above."
+                if tool_use == "priority"
+                else ""
+            )
+            lines.append(
+                f"`{server_name}` exposes {n_total} "
+                f"tool{'s' if n_total != 1 else ''} via compressed "
+                f"wrappers at `/mcp` (level={level}, scope={scope}). "
+                f"Use the wrapper trio only — do NOT call underlying "
+                f"tools directly.{_compressed_ref}"
+            )
+            lines.append("")
+            if not tools:
+                lines.append("- _(no underlying tools advertised)_")
+                lines.append("")
                 continue
-            tool_name = t.get("name") or "(unnamed)"
-            qualified = f"{server_name}__{tool_name}"
-            args = _format_args(t.get("inputSchema"))
-            marker = _classify_tool(t)
-            desc = (t.get("description") or "").strip().replace("\n", " ")
-            if not desc:
-                desc = "_(no description)_"
-            lines.append(f"- `{qualified}` `{args}` [{marker}]")
-            lines.append(f"  {desc}")
-            instr = tool_instr.get(tool_name, "").strip()
-            if instr:
-                for instr_line in instr.splitlines():
-                    lines.append(f"  {instr_line}")
-        lines.append("")
+            lines.extend(
+                _compressed_wrapper_entries(server_name, n_total, level, tool_instr)
+            )
+            lines.append("")
+            lines.append(
+                f"### Underlying tools (invoke via "
+                f"`{server_name}__invoke_tool`)"
+            )
+            lines.append("")
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                tool_name = t.get("name") or "(unnamed)"
+                args = _format_args(t.get("inputSchema"))
+                marker = _classify_tool(t)
+                desc = (t.get("description") or "").strip().replace("\n", " ")
+                if not desc:
+                    desc = "_(no description)_"
+                lines.append(f"- `{tool_name}` `{args}` [{marker}]")
+                lines.append(f"  {desc}")
+                instr = tool_instr.get(tool_name, "").strip()
+                if instr:
+                    for instr_line in instr.splitlines():
+                        lines.append(f"  {instr_line}")
+            lines.append("")
+        else:
+            # ── Uncompressed backend ─────────────────────────────────────
+            lines.append(f"## `{server_name}`")
+            lines.append("")
+            lines.append(_backend_intro(server_name, len(tools), tool_use=tool_use))
+            lines.append("")
+            if not tools:
+                lines.append("- _(no tools advertised)_")
+                lines.append("")
+                continue
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                tool_name = t.get("name") or "(unnamed)"
+                qualified = f"{server_name}__{tool_name}"
+                args = _format_args(t.get("inputSchema"))
+                marker = _classify_tool(t)
+                desc = (t.get("description") or "").strip().replace("\n", " ")
+                if not desc:
+                    desc = "_(no description)_"
+                lines.append(f"- `{qualified}` `{args}` [{marker}]")
+                lines.append(f"  {desc}")
+                instr = tool_instr.get(tool_name, "").strip()
+                if instr:
+                    for instr_line in instr.splitlines():
+                        lines.append(f"  {instr_line}")
+            lines.append("")
 
     lines.extend(
         [
@@ -1143,6 +1598,20 @@ async def _h_generate_cursor_rule(
             rule_assets = await load_all_rule_assets(self_.manager.assets, backends)
         except Exception:
             rule_assets = None
+
+    # Build the compression metadata map for all user backends that are
+    # wire-compressed (scope ∈ {aggregator, global}, level ≠ low).
+    compressed_backends: dict[str, dict[str, Any]] = {}
+    for name, spec in self_.manager._specs.items():
+        if spec is None or spec.compress is None:
+            continue
+        c = spec.compress
+        if c.level == "low":
+            continue
+        if c.scope not in ("aggregator", "global"):
+            continue
+        compressed_backends[name] = {"level": c.level, "scope": c.scope}
+
     return _text(
         render_comprehensive_rule(
             catalog,
@@ -1153,6 +1622,7 @@ async def _h_generate_cursor_rule(
             tool_use=tool_use,
             mandatory_names=mandatory,
             rule_assets=rule_assets,
+            compressed_backends=compressed_backends or None,
         )
     )
 

@@ -1,5 +1,5 @@
 backend: zelosmcp
-seed_version: 2
+seed_version: 3
 # Global assets for the always-on zelosmcp builtin backend.
 # These are included in every push regardless of which user backends are running.
 
@@ -36,11 +36,31 @@ rules:
 
     compressed_rules_read_only:
       body: |
-        This backend's tools are exposed via a compressed wrapper pair: `<backend>__get_tool_schema` and `<backend>__invoke_tool`. Use `get_tool_schema` first to fetch the JSON schema for the specific tool you want, then call `invoke_tool` with `tool_name` and `tool_input`. You can list all tools with `<backend>__get_tool_schema` (its description embeds the full catalog) or via `zelosmcp__list_compressed_tools`.
+        ## Compressed backends
+
+        One or more backends below expose their tools via a **compressed wrapper trio** at `/mcp` instead of their full tool surface. The actual callable tools for these backends are `<backend>__get_tool_schema`, `<backend>__search_tools`, and `<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).
+
+        **Do NOT call underlying tool names directly** (e.g. `pincher__architecture`) — the aggregator rejects them with "unknown tool". Use the wrapper pattern:
+
+        1. **Discover:** browse the compact catalog embedded in `<backend>__get_tool_schema`'s description, or call `<backend>__search_tools(query="...", limit=5)` for targeted search by name / description.
+        2. **Schema (optional):** `<backend>__get_tool_schema(tool_name="...")` returns the full JSON schema for one underlying tool.
+        3. **Invoke:** `<backend>__invoke_tool(tool_name="...", tool_input={...})`. Results are forwarded verbatim — identical to calling the tool directly. In read-only mode, do NOT invoke tools tagged `[mutates]`, `[destructive]`, or `[?]` via the wrapper.
+
+        Underlying tool names and per-tool descriptions are listed in each compressed backend's section below under **Underlying tools**.
 
     compressed_rules_read_write:
       body: |
-        This backend's tools are exposed via a compressed wrapper pair: `<backend>__get_tool_schema` and `<backend>__invoke_tool`. Use `get_tool_schema` first to fetch the JSON schema for the specific tool you want, then call `invoke_tool` with `tool_name` and `tool_input`. Mutating and destructive tools are available — confirm with the user before calling any `[destructive]` tool.
+        ## Compressed backends
+
+        One or more backends below expose their tools via a **compressed wrapper trio** at `/mcp` instead of their full tool surface. The actual callable tools for these backends are `<backend>__get_tool_schema`, `<backend>__search_tools`, and `<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).
+
+        **Do NOT call underlying tool names directly** (e.g. `pincher__architecture`) — the aggregator rejects them with "unknown tool". Use the wrapper pattern:
+
+        1. **Discover:** browse the compact catalog embedded in `<backend>__get_tool_schema`'s description, or call `<backend>__search_tools(query="...", limit=5)` for targeted search by name / description.
+        2. **Schema (optional):** `<backend>__get_tool_schema(tool_name="...")` returns the full JSON schema for one underlying tool.
+        3. **Invoke:** `<backend>__invoke_tool(tool_name="...", tool_input={...})`. Confirm with the user before invoking any underlying tool tagged `[destructive]`.
+
+        Underlying tool names and per-tool descriptions are listed in each compressed backend's section below under **Underlying tools**.
 
 extensions: {}
 

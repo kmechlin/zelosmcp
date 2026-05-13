@@ -1308,6 +1308,21 @@ def create_app(manager: ProxyManager | None = None):
                 rule_assets_map = await load_all_rule_assets(manager.assets, backends)
             except Exception:
                 rule_assets_map = None
+
+        # Compute compression metadata for backends whose wire surface at /mcp
+        # is the wrapper trio (get_tool_schema / search_tools / invoke_tool)
+        # rather than the full tool list.
+        compressed_backends: dict[str, dict[str, Any]] = {}
+        for name, spec in manager._specs.items():
+            if spec is None or spec.compress is None:
+                continue
+            c = spec.compress
+            if c.level == "low":
+                continue
+            if c.scope not in ("aggregator", "global"):
+                continue
+            compressed_backends[name] = {"level": c.level, "scope": c.scope}
+
         body = render_comprehensive_rule(
             catalog,
             access=access,
@@ -1317,6 +1332,7 @@ def create_app(manager: ProxyManager | None = None):
             tool_use=tool_use,
             mandatory_names=manager.mandatory_names(),
             rule_assets=rule_assets_map,
+            compressed_backends=compressed_backends or None,
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 
@@ -1967,6 +1983,14 @@ def create_app(manager: ProxyManager | None = None):
             )
 
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
+        _push_compressed: dict[str, dict[str, Any]] = {}
+        for _n, _s in manager._specs.items():
+            if _s is None or _s.compress is None:
+                continue
+            _c = _s.compress
+            if _c.level == "low" or _c.scope not in ("aggregator", "global"):
+                continue
+            _push_compressed[_n] = {"level": _c.level, "scope": _c.scope}
         rule_body = render_comprehensive_rule(
             catalog,
             access=access,
@@ -1975,6 +1999,7 @@ def create_app(manager: ProxyManager | None = None):
             fmt=fmt,
             tool_use=tool_use,
             mandatory_names=manager.mandatory_names(),
+            compressed_backends=_push_compressed or None,
         )
 
         target = rule_target(path, fmt)
