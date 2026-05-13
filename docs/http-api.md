@@ -21,6 +21,16 @@ zelosMCP exposes a small REST control plane plus the MCP routes themselves. The 
 | GET | `/api/repos` | List git repos discovered under `/user_data_ro`. Query param `refresh=1` busts the 30 s cache. See [docs/repositories.md](repositories.md). |
 | POST | `/api/repos/write-rule` | Generate a Cursor / Copilot rule and write it into a discovered repo via the `filesystem` MCP. |
 | POST | `/api/repos/index` | Forward a repo path to `pincher__index` so its symbols are queryable. |
+| GET | `/api/assets` | List all asset store rows (filterable by `kind`, `backend`, `target`). See [docs/assets-api.md](assets-api.md). |
+| GET | `/api/assets/kinds` | List registered asset kind descriptors. |
+| GET | `/api/assets/summary` | Asset store stats (row counts per kind / source). |
+| POST | `/api/assets/seed` | Re-run the seeder from the bundled YAML files. |
+| GET/PUT/DELETE | `/api/assets/yaml/{backend}` | Render / replace / delete all rows for a backend as unified YAML. |
+| POST | `/api/assets/yaml/{backend}/validate` | Validate YAML text against the asset file schema (no write). |
+| GET/PUT/DELETE | `/api/assets/{kind}/{backend}/{name}` | Per-row CRUD. `PUT` always writes `source='user'`. |
+| POST | `/api/assets/{kind}/{backend}/{name}/invoke` | Invoke an extension asset (executes its MCP tool). |
+| POST | `/api/assets/{kind}/{backend}/{name}/push` | Push one asset to a repo via the `filesystem` MCP. |
+| POST | `/api/assets/push/{kind}` | Comprehensive push — aggregates `zelosmcp` + all running backends. |
 | ANY | `/<name>/mcp` | Streamable-HTTP MCP endpoint for a named backend (raw passthrough) |
 | ANY | `/zelosmcp/mcp` | Always-on built-in MCP (raw passthrough) — self-introspection + rule-generation tools |
 | ANY | `/mcp` | **Recommended.** Aggregated Streamable-HTTP MCP — union of every running backend (incl. the built-in), namespaced as `<server>__<tool>` |

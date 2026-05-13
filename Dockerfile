@@ -68,6 +68,9 @@ COPY src ./src
 # Mandatory MCP set merged into every /api/start payload by ProxyManager.
 # See src/zelosmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
 COPY configs/mandatory-zelosmcp.json /app/configs/mandatory-zelosmcp.json
+# Asset YAML files (rule playbooks, extension definitions, agent/hook stubs).
+# Seeded into the asset store on first boot; user edits are preserved.
+COPY configs/assets /app/configs/assets
 
 RUN pip install --no-cache-dir -e .
 

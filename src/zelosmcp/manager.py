@@ -153,6 +153,12 @@ class ProxyManager:
         self.auth_registry: AuthRegistry = AuthRegistry()
         self._auth_provider_specs: dict[str, AuthProviderSpec] = {}
         self._auth_store: AuthStore | None = None
+        # Asset store — rules, extensions, agents, hooks.  Opened from
+        # start_http_client() alongside the savings store; seeded from
+        # configs/assets/ on first open.  None when unavailable (e.g.
+        # tests that skip the lifespan hook) — callers degrade gracefully.
+        self._assets_store: Any | None = None
+        self.assets: Any | None = None
 
     @property
     def primary(self) -> str | None:
@@ -232,6 +238,23 @@ class ProxyManager:
                 await self.aggregator.start()
             except Exception as exc:
                 self._broadcast_tagged("aggregator", f"failed to start: {exc}")
+
+        # Auto-generate default rule assets for any running backend that has
+        # no rows in the asset store (backends without a <name>.yaml file).
+        if self.assets is not None:
+            try:
+                from zelosmcp.framework.assetstore.defaults import ensure_default_assets
+                for name, state in list(self.servers.items()):
+                    if not getattr(state, "running", False):
+                        continue
+                    n = await ensure_default_assets(self.assets, self, name)
+                    if n:
+                        self._broadcast_tagged(
+                            "assets",
+                            f"auto-generated {n} default rule row(s) for '{name}'",
+                        )
+            except Exception as exc:
+                _log.warning("ensure_default_assets sweep failed: %s", exc)
 
         return {
             "primary": None,
@@ -452,6 +475,7 @@ class ProxyManager:
             verify=verify,
         )
         await self.start_savings()
+        await self.start_assets()
 
     async def stop_http_client(self) -> None:
         """Close the shared httpx.AsyncClient. Called from the lifespan
@@ -462,6 +486,7 @@ class ProxyManager:
                 await client.aclose()
             except Exception as exc:
                 _log.warning("reverse-proxy: client close failed: %s", exc)
+        await self.stop_assets()
         await self.stop_savings()
 
     async def start_savings(self, db_path: str | None = None) -> None:
@@ -514,6 +539,62 @@ class ProxyManager:
         self.savings = None
         if store is not None:
             await store.close()
+
+    async def start_assets(self, db_path: str | None = None) -> None:
+        """Open the asset store and seed it from the bundled YAML files.
+
+        Idempotent.  Failures are logged at WARNING and the store stays
+        ``None`` — callers degrade gracefully (rule renderer falls back to
+        hardcoded defaults, extension invoke returns 503, push returns 503).
+        """
+        if self._assets_store is not None:
+            return
+        try:
+            from zelosmcp.framework.assetstore import (
+                SQLiteAssetStore,
+                resolve_db_path as _resolve_assets_db,
+                seed_all,
+            )
+        except ImportError as exc:
+            _log.warning("assets: framework not available (%s); skipping", exc)
+            return
+
+        path = _resolve_assets_db(db_path)
+        store = SQLiteAssetStore(path)
+        try:
+            await store.open()
+        except Exception as exc:
+            _log.warning("assets store open failed (%s); disabling", exc)
+            self._broadcast_tagged("assets", f"disabled: {exc}")
+            return
+
+        self._assets_store = store
+        self.assets = store
+
+        try:
+            counts = await seed_all(store)
+            total = sum(counts.values())
+            if total:
+                self._broadcast_tagged(
+                    "assets",
+                    f"seeded {total} rows: "
+                    + ", ".join(f"{k}={n}" for k, n in sorted(counts.items()) if n),
+                )
+            else:
+                self._broadcast_tagged("assets", "store ready (no seed rows)")
+        except Exception as exc:
+            _log.warning("assets seeder failed: %s", exc)
+            self._broadcast_tagged("assets", f"seed failed: {exc}")
+
+    async def stop_assets(self) -> None:
+        """Close the asset store.  Idempotent."""
+        store, self._assets_store = self._assets_store, None
+        self.assets = None
+        if store is not None:
+            try:
+                await store.close()
+            except Exception as exc:
+                _log.warning("assets store close failed: %s", exc)
 
     async def start_auth_store(
         self, db_path: str | None = None, key_path: Any | None = None
@@ -610,6 +691,65 @@ class ProxyManager:
                 f"loaded {len(specs)} provider(s): {', '.join(sorted(specs))}",
             )
         return {"providers": results}
+
+    async def regenerate_assets_for_provider(
+        self, provider_name: str
+    ) -> dict[str, int]:
+        """Re-run default-asset generation for backends wired to ``provider_name``.
+
+        Called from the HTTP auth routes when a provider's per-user state
+        transitions (OAuth callback completes, device flow finishes, revoke).
+        The backend's live tool list typically goes from 0 → N (connect) or
+        N → 0 (revoke) at those moments — the stored auto-default playbook
+        must reflect that transition.
+
+        Updates only auto-generated default rows (``source='seed'``,
+        ``seed_version=0``); user edits and YAML-seeded rows
+        (``seed_version >= 1``) are preserved.
+
+        Returns ``{backend_name: rows_written}`` for every backend whose
+        defaults changed.  Empty when the asset store isn't open, no
+        backend references the provider, or no rows changed.
+        """
+        if self.assets is None:
+            return {}
+
+        try:
+            from zelosmcp.framework.assetstore.defaults import (
+                regenerate_default_assets,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade gracefully
+            _log.warning(
+                "regenerate_assets_for_provider: import failed: %s", exc
+            )
+            return {}
+
+        results: dict[str, int] = {}
+        for backend_name, spec in list(self._specs.items()):
+            if spec.auth_provider != provider_name:
+                continue
+            state = self.servers.get(backend_name)
+            if state is None or not getattr(state, "running", False):
+                continue
+            try:
+                n = await regenerate_default_assets(
+                    self.assets, self, backend_name
+                )
+            except Exception as exc:
+                _log.warning(
+                    "regenerate_assets_for_provider: %s failed: %s",
+                    backend_name, exc,
+                )
+                continue
+            if n:
+                results[backend_name] = n
+                self._broadcast_tagged(
+                    "assets",
+                    f"regenerated {n} default rule row(s) for "
+                    f"'{backend_name}' after auth provider "
+                    f"'{provider_name}' state change",
+                )
+        return results
 
     def current_auth_providers_config(
         self, *, redacted: bool = True

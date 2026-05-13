@@ -64,29 +64,51 @@ The panel sits below the **Servers** list in the right column.
   - `pincher` — filled green when pincher's `list` reports the repo as an indexed project.
 - **Persistence.** The collapse state and filter value are stored in `localStorage` under `zelosmcp:repos:expanded` and `zelosmcp:repos:filter` so the panel remembers itself between reloads.
 
-Clicking a row swaps the **middle pane** to a dedicated repo-details view (mirrors how clicking a server row drives the server-details view) with the rule editor and the index button.
+Clicking a row swaps the **middle pane** to a dedicated repo-details view with rule-format controls, asset-push buttons, and dynamically-rendered extension buttons.
 
-### Rule editor
+### Rule format controls
 
-Same five knobs as the existing `Cursor rule (.mdc)` view — pulled into the same component:
+Five knobs control how the rule is rendered when pushed:
 
 | Knob | Values | Notes |
 |---|---|---|
-| `Format` | `cursor-mdc` (default), `copilot-instructions` | Determines the write target: `<repo>/.cursor/rules/zelosmcp.mdc` vs. `<repo>/.github/copilot-instructions.md`. |
-| `Tool use` | `priority` (default), `available` | `priority` adds the "prefer MCP tools over shell" directive plus the mandatory-backend playbook. `available` emits a neutral catalog. |
-| `Access` | `read-only` (default), `read-write` | `read-only` forbids the agent from calling mutating tools; `read-write` allows them with confirmation for `[destructive]`. |
+| `Format` | `cursor-mdc` (default), `copilot-instructions` | Write target: `<repo>/.cursor/rules/zelosmcp.mdc` vs. `<repo>/.github/copilot-instructions.md`. |
+| `Tool use` | `priority` (default), `available` | `priority` adds the "prefer MCP tools over shell" directive plus backend playbooks. `available` emits a neutral catalog. |
+| `Access` | `read-only` (default), `read-write` | `read-only` forbids mutating tool calls; `read-write` allows them with confirmation for `[destructive]`. |
 | `Style` | `always-apply` (default), `scoped` | Only meaningful for `cursor-mdc`. `scoped` enables the `Globs` input. |
 | `Globs` | any glob (e.g. `**/*.py`) | Required when `Style=scoped`; ignored otherwise. |
 
-`Preview` round-trips the chosen knobs through `GET /api/cursor-rule?...` so the previewed body is **byte-identical** to what `Save rule to repo` will write. `Save` then POSTs to `/api/repos/write-rule`, which re-renders with the same args and forwards a `create_directory` + `write_file` pair to the `filesystem` MCP.
+### Push assets
 
-### Index in pincher
+The **Push assets** section contains:
 
-`Index in pincher` POSTs `{ "path": "/user_data_ro/<repo>" }` to `/api/repos/index`, which forwards to `pincher__index`. After success the row's `pincher` pill flips to green without a full rescan. Re-indexing later is incremental — pincher uses xxh3 content hashes to skip unchanged files, so calling `Index` repeatedly is cheap.
+| Button | What it does | API called |
+|---|---|---|
+| **Push all** | Runs Push rules + Push agents + Push hooks in sequence | (each below in order) |
+| **Push rules** | Renders a comprehensive rule from the asset store + live tool catalog and writes it to the repo. | `POST /api/assets/push/rule` |
+| **Push agents** | Writes each agent's `SKILL.md` for every running backend. | `POST /api/assets/push/agent` |
+| **Push hooks** | Merges each hook entry into `.cursor/hooks.json`. | `POST /api/assets/push/hook` |
+| **Preview rule** | Fetches the rule body via `GET /api/cursor-rule?...` and shows it in a code block — no write. | `GET /api/cursor-rule` |
+
+A hint above the buttons shows which backends are included: always `zelosmcp` (global), plus every currently-running user backend.
+
+The rule pushed by **Push rules** is identical to calling `GET /api/cursor-rule?...` — the same `render_comprehensive_rule` function is used, but with per-backend playbooks sourced from the asset store rather than hardcoded text. You can customise those playbooks via the **Assets** pane. See [docs/assets-editor.md](assets-editor.md).
+
+For the comprehensive push API, see [docs/assets-api.md — Comprehensive push](assets-api.md#comprehensive-push).
+
+### Execute extensions
+
+Below the push buttons, zelosMCP renders a button for each extension asset that has `targets: [repos_row]`. By default the pincher backend ships an **Index in pincher** extension that calls `pincher__index` on the selected repo:
+
+> **Index in pincher** — calls `pincher__index` with the repo's read-only path. After success the row's `pincher` pill flips to green without a full rescan. Re-indexing is incremental — pincher uses xxh3 content hashes to skip unchanged files.
+
+Extension buttons are disabled when the backend they belong to is not running. You can add your own `repos_row` extensions to any backend's YAML file. See [asset-kinds.md — Extension](asset-kinds.md#extension-extensions) for the schema.
 
 See [docs/default-mcps.md](default-mcps.md#pincher) for what indexing actually does (symbol store + knowledge graph + FTS5).
 
 ## Endpoints
+
+The comprehensive asset-push endpoints (`POST /api/assets/push/{kind}`) are documented in [docs/assets-api.md](assets-api.md). The repo-discovery and legacy write-rule/index endpoints are documented below.
 
 ### `GET /api/repos`
 
@@ -171,3 +193,5 @@ The two POST handlers accept a `path` argument from the UI and forward it to MCP
 - [docs/default-mcps.md](default-mcps.md) — what the `pincher` and `filesystem` backends do, why they're mandatory.
 - [docs/built-in-mcp.md](built-in-mcp.md) — `zelosmcp__generate_cursor_rule` exposes the same rule body over MCP.
 - [docs/http-api.md](http-api.md) — full REST surface, including `/api/cursor-rule` query params.
+- [docs/assets.md](assets.md) — assets framework overview (rules, extensions, agents, hooks).
+- [docs/assets-api.md](assets-api.md) — HTTP API for the comprehensive push endpoints used by the push buttons.

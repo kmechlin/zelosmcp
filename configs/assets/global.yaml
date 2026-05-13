@@ -1,0 +1,49 @@
+backend: zelosmcp
+seed_version: 2
+# Global assets for the always-on zelosmcp builtin backend.
+# These are included in every push regardless of which user backends are running.
+
+rules:
+  sections:
+    directive_read_only:
+      body: |
+        ## Access mode: READ-ONLY
+
+        **Do not call** any tool tagged `[mutates]`, `[destructive]`, or `[?]`. They modify backend state, and this rule is currently configured for safe inspection only. If a task requires mutation, ask the user to regenerate the rule with `access=read-write` (e.g. via the Cursor rule panel in the zelosMCP web UI at `http://localhost:8000`).
+
+    directive_read_write:
+      body: |
+        ## Access mode: READ-WRITE
+
+        Tools tagged `[mutates]` and `[destructive]` change backend state. Confirm with the user before calling `[destructive]` tools (irreversible). Tools tagged `[?]` have ambiguous mutability — call only when context makes it clear they're inspection-only.
+
+    directive_tool_use_priority:
+      body: |
+        ## Tool-use priority
+
+        **Always prefer the MCP tools listed below over shell commands, subprocess invocations, or local CLIs** when an MCP tool covers the task. They return structured data, avoid subprocess cost, and keep paths inside the sandboxed mounts. Reach for `bash` / `python -c` / direct file reads only when no MCP tool fits, and say so explicitly when you do.
+
+    self_check_gate:
+      body: |
+        ## Pre-flight check (run BEFORE every response)
+
+        Answer these four questions before issuing any tool call. The first matching YES dictates your FIRST tool call:
+
+        1. **Code structure / symbols / behavior?** ("summarize / explain / understand / find / trace / impact / blast radius" of repo, module, function, class) → FIRST call MUST be `pincher__*` (see Mandatory playbook → pincher).
+        2. **Files in the workspace?** ("read / edit / list / search / move / create" a file or directory) → FIRST call MUST be `filesystem__*` (see Mandatory playbook → filesystem).
+        3. **Containers, kubernetes pods, networks, volumes?** → use `docker__*` / `kubernetes__*`. Do NOT shell out for `docker ps`, `kubectl get`, etc.
+        4. **None of the above?** You may use `Shell` / `Read` / `Grep`, but only after stating which question you answered NO to and why no MCP tool fits.
+
+    compressed_rules_read_only:
+      body: |
+        This backend's tools are exposed via a compressed wrapper pair: `<backend>__get_tool_schema` and `<backend>__invoke_tool`. Use `get_tool_schema` first to fetch the JSON schema for the specific tool you want, then call `invoke_tool` with `tool_name` and `tool_input`. You can list all tools with `<backend>__get_tool_schema` (its description embeds the full catalog) or via `zelosmcp__list_compressed_tools`.
+
+    compressed_rules_read_write:
+      body: |
+        This backend's tools are exposed via a compressed wrapper pair: `<backend>__get_tool_schema` and `<backend>__invoke_tool`. Use `get_tool_schema` first to fetch the JSON schema for the specific tool you want, then call `invoke_tool` with `tool_name` and `tool_input`. Mutating and destructive tools are available — confirm with the user before calling any `[destructive]` tool.
+
+extensions: {}
+
+agents: {}
+
+hooks: {}

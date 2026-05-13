@@ -87,6 +87,8 @@ FROM extra-os AS zelosmcp
   # Mandatory MCP set merged into every /api/start payload by ProxyManager.
   # See src/zelosmcp/manager.py:_merge_mandatory and docs/default-mcps.md.
   COPY configs/mandatory-zelosmcp.json /opt/zelosmcp/configs/mandatory-zelosmcp.json
+  # Asset YAML files (rule playbooks, extension definitions, agent/hook stubs).
+  COPY configs/assets /opt/zelosmcp/configs/assets
 
   RUN pip install --no-cache-dir -e /opt/zelosmcp
 

@@ -140,6 +140,8 @@ Tool, prompt, and resource names at the aggregate `/mcp` are `<server>__<origina
 
 Every tool gets one line: `<qualified-name> (arg-summary) [marker]` followed by the description. Arg summaries are extracted from the tool's `inputSchema`; required args first, then optionals with `?`. Mutability markers come from MCP annotations + a name-prefix fallback (see [built-in-mcp.md](built-in-mcp.md) for the full classification logic).
 
+> **Customisable via the Assets pane.** The per-backend playbook blocks embedded in the rule body are loaded from the asset store rather than being hardcoded. You can edit them in the web UI (click **Assets** on any server row → **Rules** tab) without touching code. See [assets-editor.md](assets-editor.md) for the editor walkthrough and [asset-kinds.md#rule](asset-kinds.md#rule-rules) for the YAML schema.
+
 ### `access`: read-only vs read-write
 
 The `access` query param flips a single block at the top of the rule.
@@ -175,6 +177,8 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?tool_use=available' \
 ```
 
 The mandatory backend playbook in `priority` mode is filtered by `access`: in `read-only` mode it lists only the inspection tools and explicitly forbids the mutating ones (`write_file`, `edit_file`, `pincher__index`, `pincher__fetch`, `pincher__adr` set/delete). In `read-write` mode it adds the full workflow including `edit_file` vs `write_file` guidance and the `adr`/`fetch` knowledge-store loop.
+
+The playbook content for each backend is sourced from that backend's `rule` assets in the asset store (specifically the `playbook_read_only` / `playbook_read_write` sections). You can override the playbook for any backend via the **Assets** pane in the web UI. See [asset-kinds.md#rule](asset-kinds.md#rule-rules).
 
 ### `style`: always-apply vs scoped
 
