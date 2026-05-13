@@ -55,7 +55,8 @@ A single Starlette `lifespan` hook starts the built-in before traffic arrives, a
 | `ProxyState` | [src/zelosmcp/proxy.py](../src/zelosmcp/proxy.py) | One per user backend. Spawns the backend (stdio subprocess or remote URL), wraps it in a `ClientSession`, and re-exposes its MCP surface via a `StreamableHTTPSessionManager` at `/<name>/mcp`. |
 | `Aggregator` | [src/zelosmcp/aggregator.py](../src/zelosmcp/aggregator.py) | Owns `/mcp`. Fans `tools/list` / `prompts/list` / `resources/list` / `resources/templates/list` across every running backend's `client_session` in parallel; prefixes tool/prompt names with `<server>__`; routes `tools/call` / `prompts/get` / `resources/read` back to the originating backend. |
 | `BuiltinServer` | [src/zelosmcp/builtin.py](../src/zelosmcp/builtin.py) | Always-on, in-process MCP at `/zelosmcp/mcp`. Same shape as `ProxyState` but driven by an in-memory client/server pair via [`mcp.shared.memory.create_client_server_memory_streams`](https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp/shared/memory.py). Exposes `zelosmcp__generate_cursor_rule`, `zelosmcp__list_loaded_servers`, `zelosmcp__get_aggregated_tool_catalog`, etc. |
-| Web UI | [src/zelosmcp/ui.py](../src/zelosmcp/ui.py) | Single-page app at `/`. Live status, click-to-expand tool catalog per server row, Cursor `mcp.json` snippets, the Cursor rule (`.mdc`) panel with read-only / read-write toggle. Plus `/catalog` standalone documentation page. |
+| `AssetStore` | [src/zelosmcp/framework/assetstore/](../src/zelosmcp/framework/assetstore/) | SQLite-backed store seeded from `configs/assets/*.yaml` that holds rule playbooks, extension buttons, Cursor agents, and Cursor hooks. The rule renderer and push writer read from this store so users can customise per-backend content without code changes. See [docs/assets.md](assets.md). |
+| Web UI | [src/zelosmcp/ui.py](../src/zelosmcp/ui.py) | Single-page app at `/`. Live status, click-to-expand tool catalog per server row, Cursor `mcp.json` snippets, the Cursor rule (`.mdc`) panel with read-only / read-write toggle, per-backend Assets pane with YAML editor. Plus `/catalog` standalone documentation page. |
 
 ## What the dispatcher does
 
@@ -155,6 +156,12 @@ sequenceDiagram
 After this, `/zelosmcp/mcp` and `/mcp` are both live before any HTTP request arrives, even when no user backend has been configured yet. `POST /api/start` later starts user backends in parallel and bounces the aggregator to pick them up.
 
 `stop_all` (called by `POST /api/stop` or the lifespan shutdown) tears down user backends + aggregator but **deliberately preserves the built-in** so that `/zelosmcp/mcp` stays available across config reloads.
+
+### Asset store lifecycle
+
+The `AssetStore` starts alongside the HTTP client during lifespan (`manager.start_assets()`). At startup it calls `seed_all()` which reads every `configs/assets/*.yaml` file and upserts rows for every registered kind. After each user backend finishes starting, `ensure_default_assets()` checks whether the backend has any rows; if it has none (no YAML file exists), it auto-generates `playbook_read_only`, `playbook_read_write`, and `tool:<name>` rule rows from the backend's live tool catalog.
+
+The asset store is never torn down by `stop_all` — it persists for the lifetime of the process (and across config reloads) so that user-edited rows are not lost. See [docs/assets.md](assets.md) for the full reference.
 
 ## Cursor + VSCode integration
 

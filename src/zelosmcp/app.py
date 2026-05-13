@@ -510,6 +510,543 @@ def create_app(manager: ProxyManager | None = None):
         except Exception as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
+    # ── Asset API ───────────────────────────────────────────────────────
+
+    def _assets_unavailable() -> JSONResponse:
+        return JSONResponse(
+            {"error": "asset store not initialised"},
+            status_code=503,
+        )
+
+    async def api_assets_list(request: Request) -> JSONResponse:
+        """
+        summary: List all asset store rows.
+        description: |
+          Returns every row optionally filtered by `?kind=`, `?backend=`,
+          and/or `?target=`. Each row includes its kind, backend, name,
+          target, body, meta, source, seed_version, and updated_at.
+        tags: [introspection]
+        responses:
+          200:
+            description: Array of asset rows.
+            content:
+              application/json: {}
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.query_params.get("kind")
+        backend = request.query_params.get("backend")
+        target = request.query_params.get("target")
+        rows = await manager.assets.list(kind=kind, backend=backend, target=target)
+        return JSONResponse([r.to_dict() for r in rows])
+
+    async def api_assets_kinds(request: Request) -> JSONResponse:
+        """
+        summary: List registered asset kinds.
+        tags: [introspection]
+        responses:
+          200:
+            description: Array of kind descriptors.
+        """
+        from zelosmcp.framework.assetstore import registry as _kinds
+        return JSONResponse([
+            {"id": k.id, "label": k.label, "description": k.description}
+            for k in _kinds.known()
+        ])
+
+    async def api_assets_get(request: Request) -> JSONResponse:
+        """
+        summary: Get one asset row.
+        tags: [introspection]
+        parameters:
+          - in: path
+            name: kind
+          - in: path
+            name: backend
+          - in: path
+            name: name
+        responses:
+          200:
+            description: Asset row.
+          404:
+            description: Not found.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.path_params["kind"]
+        backend = request.path_params["backend"]
+        name = request.path_params["name"]
+        target = request.query_params.get("target", "")
+        row = await manager.assets.get(kind, backend, name, target)
+        if row is None:
+            return JSONResponse(
+                {"error": f"asset '{kind}/{backend}/{name}' not found"},
+                status_code=404,
+            )
+        return JSONResponse(row.to_dict())
+
+    async def api_assets_put(request: Request) -> JSONResponse:
+        """
+        summary: Create or update an asset row (user override).
+        tags: [lifecycle]
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  body: { type: string }
+                  meta: { type: object }
+                  target: { type: string }
+        responses:
+          200:
+            description: Updated row.
+          400:
+            description: Bad request.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.path_params["kind"]
+        backend = request.path_params["backend"]
+        name = request.path_params["name"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+        from zelosmcp.framework.assetstore.row import AssetRow
+        row = AssetRow(
+            kind=kind,
+            backend=backend,
+            name=name,
+            target=body.get("target", ""),
+            body=body.get("body", ""),
+            meta=body.get("meta") or {},
+            source="user",
+            seed_version=None,
+        )
+        await manager.assets.upsert(row)
+        saved = await manager.assets.get(kind, backend, name, row.target)
+        return JSONResponse((saved or row).to_dict())
+
+    async def api_assets_delete(request: Request) -> JSONResponse:
+        """
+        summary: Delete a user-overridden asset row.
+        description: |
+          Removes the row; the next seed pass (on restart or reload) will
+          re-insert the original seed content.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Deletion result.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.path_params["kind"]
+        backend = request.path_params["backend"]
+        name = request.path_params["name"]
+        target = request.query_params.get("target", "")
+        removed = await manager.assets.delete(kind, backend, name, target)
+        return JSONResponse({"ok": removed, "kind": kind, "backend": backend, "name": name})
+
+    async def api_assets_extension_invoke(request: Request) -> JSONResponse:
+        """
+        summary: Invoke an extension asset (run its MCP tool call).
+        tags: [lifecycle]
+        requestBody:
+          required: false
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ctx:
+                    type: object
+                    description: Context for args_template substitution.
+        responses:
+          200:
+            description: Extension invocation result.
+          404:
+            description: Extension not found.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        backend = request.path_params["backend"]
+        name = request.path_params["name"]
+        try:
+            body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        except Exception:
+            body = {}
+        ctx = body.get("ctx") or {} if isinstance(body, dict) else {}
+
+        from zelosmcp.framework.assetstore.runner import invoke_extension
+        result = await invoke_extension(
+            manager.assets,
+            manager,
+            backend=backend,
+            name=name,
+            ctx=ctx,
+        )
+        return JSONResponse({
+            "ok": result.ok,
+            "message": result.message,
+            "result": result.result,
+            "error": result.error,
+        })
+
+    async def api_assets_push(request: Request) -> JSONResponse:
+        """
+        summary: Push an asset (or all assets for a backend) to a repo.
+        tags: [lifecycle]
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo]
+                properties:
+                  repo: { type: string }
+        responses:
+          200:
+            description: List of written files.
+          400:
+            description: Bad request or non-pushable kind.
+          503:
+            description: Asset store or filesystem backend not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.path_params["kind"]
+        backend = request.path_params["backend"]
+        name = request.path_params["name"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        if not isinstance(body, dict) or not body.get("repo"):
+            return JSONResponse(
+                {"error": "'repo' is required in request body"}, status_code=400
+            )
+        repo_name = body["repo"]
+
+        from zelosmcp.repos import to_rw_path
+        repo_rw_path = to_rw_path(f"/user_data_ro/{repo_name}")
+
+        fs_state = manager.servers.get("filesystem")
+        if fs_state is None or not getattr(fs_state, "running", False):
+            return JSONResponse(
+                {"error": "filesystem backend is not running"},
+                status_code=503,
+            )
+        fs_session = getattr(fs_state, "client_session", None)
+        if fs_session is None:
+            return JSONResponse(
+                {"error": "filesystem backend has no client session"},
+                status_code=503,
+            )
+
+        from zelosmcp.framework.assetstore.push import push_asset, NotPushable
+        try:
+            pushed = await push_asset(
+                manager.assets,
+                fs_session,
+                kind=kind,
+                backend=backend,
+                name=name,
+                repo_rw_path=repo_rw_path,
+            )
+        except NotPushable as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        return JSONResponse({
+            "ok": all(p.ok for p in pushed),
+            "files": [{"path": p.path, "mode": p.mode, "ok": p.ok, "error": p.error}
+                      for p in pushed],
+        })
+
+    async def api_assets_push_kind(request: Request) -> JSONResponse:
+        """
+        summary: Push all assets of one kind to a repo.
+        description: |
+          Aggregates assets from the zelosmcp global backend AND every
+          currently-running user backend, then writes the combined set into
+          the target repo.  For `rule`: writes `.cursor/rules/zelosmcp.mdc`
+          (and/or `.github/copilot-instructions.md`).  For `agent`: writes
+          one SKILL.md per agent.  For `hook`: merges into
+          `.cursor/hooks.json`.
+        tags: [lifecycle]
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo]
+                properties:
+                  repo: { type: string }
+                  fmt: { type: string }
+                  access: { type: string }
+                  tool_use: { type: string }
+        responses:
+          200:
+            description: Files written.
+          400:
+            description: Bad request or non-pushable kind.
+          503:
+            description: Asset store or filesystem backend not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        kind = request.path_params["kind"]
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        if not isinstance(body, dict) or not body.get("repo"):
+            return JSONResponse(
+                {"error": "'repo' is required in request body"}, status_code=400
+            )
+        repo_name = body["repo"]
+        fmt = body.get("fmt", "cursor-mdc")
+        access = body.get("access", "read-only")
+        tool_use = body.get("tool_use", "priority")
+
+        from zelosmcp.repos import to_rw_path
+        repo_rw_path = to_rw_path(f"/user_data_ro/{repo_name}")
+
+        fs_state = manager.servers.get("filesystem")
+        if fs_state is None or not getattr(fs_state, "running", False):
+            return JSONResponse(
+                {"error": "filesystem backend is not running"}, status_code=503
+            )
+        fs_session = getattr(fs_state, "client_session", None)
+        if fs_session is None:
+            return JSONResponse(
+                {"error": "filesystem backend has no client session"}, status_code=503
+            )
+
+        from zelosmcp.framework.assetstore.push import (
+            push_kind_for_all_running,
+            NotPushable,
+        )
+        try:
+            pushed = await push_kind_for_all_running(
+                manager.assets,
+                fs_session,
+                manager,
+                kind=kind,
+                repo_rw_path=repo_rw_path,
+                fmt=fmt,
+                access=access,
+                tool_use=tool_use,
+            )
+        except NotPushable as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        # Build a summary of running backends included in the push.
+        running_user = [
+            n for n, s in manager.servers.items()
+            if n != "zelosmcp" and getattr(s, "running", False)
+        ]
+        return JSONResponse({
+            "ok": all(p.ok for p in pushed),
+            "kind": kind,
+            "repo": repo_name,
+            "backends_included": ["zelosmcp"] + running_user,
+            "files": [
+                {"path": p.path, "mode": p.mode, "ok": p.ok, "error": p.error}
+                for p in pushed
+            ],
+        })
+
+    async def api_assets_summary(request: Request) -> JSONResponse:
+        """
+        summary: Asset store stats.
+        tags: [introspection]
+        responses:
+          200:
+            description: Stats dict with total rows and per-kind / per-source breakdown.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        return JSONResponse(await manager.assets.summary())
+
+    async def api_assets_seed(request: Request) -> JSONResponse:
+        """
+        summary: Re-run the asset seeder on demand.
+        description: |
+          Re-seeds the asset store from the bundled YAML files.  Safe to
+          call at any time — idempotent for seed rows; user-overridden rows
+          are never touched.  Accepts an optional JSON body
+          `{"config_root": "<absolute path>"}` to override the YAML tree
+          location (useful inside the container where the source tree is
+          mounted at a non-default path).
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Counts of rows seeded per kind.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        from zelosmcp.framework.assetstore.seeder import seed_all
+        from pathlib import Path as _Path
+        config_root = None
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("config_root"):
+                config_root = _Path(body["config_root"])
+        except Exception:
+            pass
+        counts = await seed_all(manager.assets, config_root=config_root)
+        summary = await manager.assets.summary()
+        return JSONResponse({"ok": True, "seeded": counts, "summary": summary})
+
+    # ── YAML editor API ─────────────────────────────────────────────────
+
+    async def api_assets_yaml_get(request: Request) -> Response:
+        """
+        summary: Render backend's current asset rows as unified YAML.
+        tags: [introspection]
+        responses:
+          200:
+            description: YAML text matching the unified per-backend file schema.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        backend = request.path_params["backend"]
+        from zelosmcp.framework.assetstore.yaml_io import dump_backend_as_yaml
+        text = await dump_backend_as_yaml(manager.assets, backend)
+        return Response(text, media_type="text/yaml; charset=utf-8")
+
+    async def api_assets_yaml_put(request: Request) -> JSONResponse:
+        """
+        summary: Replace backend's asset rows from a unified YAML document.
+        tags: [lifecycle]
+        requestBody:
+          required: true
+          content:
+            text/yaml:
+              schema: {}
+        responses:
+          200:
+            description: Rows written.
+          400:
+            description: YAML parse error or schema validation failure.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        backend = request.path_params["backend"]
+        try:
+            body_bytes = await request.body()
+            text = body_bytes.decode("utf-8")
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        from zelosmcp.framework.assetstore.yaml_io import (
+            YAMLValidationError,
+            parse_backend_yaml,
+        )
+        import yaml as _yaml
+
+        try:
+            rows = parse_backend_yaml(text, backend, source="user")
+        except YAMLValidationError as exc:
+            return JSONResponse(
+                {"ok": False, "errors": [e.to_dict() for e in exc.errors]},
+                status_code=400,
+            )
+        except _yaml.YAMLError as exc:
+            return JSONResponse(
+                {"ok": False, "errors": [{"path": "", "message": f"YAML parse error: {exc}"}]},
+                status_code=400,
+            )
+
+        # Delete all existing rows for this backend, then re-insert.
+        existing = await manager.assets.list(backend=backend)
+        for row in existing:
+            await manager.assets.delete(row.kind, row.backend, row.name, row.target)
+        for row in rows:
+            await manager.assets.upsert(row)
+        return JSONResponse({"ok": True, "rows_written": len(rows)})
+
+    async def api_assets_yaml_validate(request: Request) -> JSONResponse:
+        """
+        summary: Validate YAML text against the asset file schema.
+        description: |
+          Parses and validates the request body as a unified backend asset
+          YAML document.  Never writes to the store.  Intended for live
+          client-side lint (debounced on every editor keystroke).
+        tags: [introspection]
+        responses:
+          200:
+            description: Validation result with ok flag and errors list.
+        """
+        backend = request.path_params["backend"]
+        try:
+            body_bytes = await request.body()
+            text = body_bytes.decode("utf-8")
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "errors": [{"path": "", "message": str(exc)}]}
+            )
+
+        from zelosmcp.framework.assetstore.yaml_io import validate_yaml_text
+        errors = validate_yaml_text(text, backend)
+        return JSONResponse({
+            "ok": len(errors) == 0,
+            "errors": [e.to_dict() for e in errors],
+        })
+
+    async def api_assets_yaml_delete(request: Request) -> JSONResponse:
+        """
+        summary: Delete all rows for a backend.
+        description: |
+          Drops every asset row for the named backend.  On the next seeder
+          run (boot or POST /api/assets/seed), the YAML file's rows will be
+          restored if a matching file exists.
+        tags: [lifecycle]
+        responses:
+          200:
+            description: Deletion result.
+          503:
+            description: Asset store not initialised.
+        """
+        if manager.assets is None:
+            return _assets_unavailable()
+        backend = request.path_params["backend"]
+        existing = await manager.assets.list(backend=backend)
+        count = 0
+        for row in existing:
+            if await manager.assets.delete(row.kind, row.backend, row.name, row.target):
+                count += 1
+        return JSONResponse({"ok": True, "deleted": count, "backend": backend})
+
     async def api_server_get(request: Request) -> JSONResponse:
         """
         summary: Status for one server.
@@ -763,6 +1300,14 @@ def create_app(manager: ProxyManager | None = None):
             )
         globs = request.query_params.get("globs")
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
+        rule_assets_map = None
+        if manager.assets is not None:
+            try:
+                from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
+                backends = list(catalog.keys()) + ["zelosmcp"]
+                rule_assets_map = await load_all_rule_assets(manager.assets, backends)
+            except Exception:
+                rule_assets_map = None
         body = render_comprehensive_rule(
             catalog,
             access=access,
@@ -771,6 +1316,7 @@ def create_app(manager: ProxyManager | None = None):
             fmt=fmt,
             tool_use=tool_use,
             mandatory_names=manager.mandatory_names(),
+            rule_assets=rule_assets_map,
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
 
@@ -915,6 +1461,19 @@ def create_app(manager: ProxyManager | None = None):
             error_description=request.query_params.get("error_description"),
         )
         if state.state.value == "complete":
+            # Provider just transitioned to ready: refresh the live tool
+            # catalog into the auto-generated playbook rows so the Assets
+            # pane stops showing "0 tools" for backends gated on this
+            # provider. User-edited rows are preserved by the underlying
+            # upsert(only_if_seed_lt=1) logic.
+            try:
+                await manager.regenerate_assets_for_provider(provider_name)
+            except Exception:
+                logging.getLogger("zelosmcp").warning(
+                    "auth callback: regenerate_assets_for_provider(%s) failed",
+                    provider_name,
+                    exc_info=True,
+                )
             who = state.identity.username if state.identity else "your account"
             return HTMLResponse(
                 "<!doctype html><html><body>"
@@ -1038,8 +1597,19 @@ def create_app(manager: ProxyManager | None = None):
                     if state.error_message is not None:
                         payload["error"] = state.error_message
                     yield f"data: {_json.dumps(payload)}\n\n"
+                    if state.state == DeviceFlowStateKind.COMPLETE:
+                        # Provider just became ready for this user: kick
+                        # off auto-default regeneration for backends
+                        # wired to it so their playbooks reflect the
+                        # newly-visible tool list. Background task so the
+                        # SSE stream closes promptly.
+                        asyncio.create_task(
+                            manager.regenerate_assets_for_provider(
+                                provider_name
+                            )
+                        )
+                        return
                     if state.state in (
-                        DeviceFlowStateKind.COMPLETE,
                         DeviceFlowStateKind.ERROR,
                         DeviceFlowStateKind.EXPIRED,
                     ):
@@ -1139,6 +1709,18 @@ def create_app(manager: ProxyManager | None = None):
         except Exception as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc)}, status_code=400,
+            )
+        # Provider went from ready → not-ready for this user: re-run
+        # default asset generation so backends gated on this provider
+        # don't keep showing a stale 'N tools' playbook from the
+        # connected era. User-edited rows are preserved.
+        try:
+            await manager.regenerate_assets_for_provider(provider_name)
+        except Exception:
+            logging.getLogger("zelosmcp").warning(
+                "auth revoke: regenerate_assets_for_provider(%s) failed",
+                provider_name,
+                exc_info=True,
             )
         return JSONResponse({"ok": True})
 
@@ -1532,6 +2114,44 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/repos", api_repos_list),
             Route("/api/repos/write-rule", api_repo_write_rule, methods=["POST"]),
             Route("/api/repos/index", api_repo_index, methods=["POST"]),
+            Route("/api/assets", api_assets_list),
+            Route("/api/assets/kinds", api_assets_kinds),
+            Route("/api/assets/summary", api_assets_summary),
+            Route("/api/assets/seed", api_assets_seed, methods=["POST"]),
+            Route("/api/assets/yaml/{backend}", api_assets_yaml_get),
+            Route("/api/assets/yaml/{backend}", api_assets_yaml_put, methods=["PUT"]),
+            Route("/api/assets/yaml/{backend}", api_assets_yaml_delete, methods=["DELETE"]),
+            Route(
+                "/api/assets/yaml/{backend}/validate",
+                api_assets_yaml_validate,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/assets/push/{kind}",
+                api_assets_push_kind,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/assets/{kind}/{backend}/{name}/invoke",
+                api_assets_extension_invoke,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/assets/{kind}/{backend}/{name}/push",
+                api_assets_push,
+                methods=["POST"],
+            ),
+            Route("/api/assets/{kind}/{backend}/{name}", api_assets_get),
+            Route(
+                "/api/assets/{kind}/{backend}/{name}",
+                api_assets_put,
+                methods=["PUT"],
+            ),
+            Route(
+                "/api/assets/{kind}/{backend}/{name}",
+                api_assets_delete,
+                methods=["DELETE"],
+            ),
             Route("/api/auth/providers/config", api_auth_providers_config_get),
             Route(
                 "/api/auth/providers/config",

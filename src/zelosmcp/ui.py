@@ -923,6 +923,11 @@ HTML_TEMPLATE = """\
     background: var(--surface);
     color: var(--mid);
   }
+  .assets-tab.active {
+    color: var(--black);
+    border-bottom-color: var(--black) !important;
+  }
+  .assets-tab:hover:not(.active) { color: var(--black); }
   .rule-write-actions {
     display: flex;
     gap: 8px;
@@ -1558,6 +1563,54 @@ HTML_TEMPLATE = """\
       </div>
     </section>
 
+    <!-- Assets: Rules view -->
+    <section class="view" data-view="assets-rules">
+      <p class="intro">Cursor <code>.mdc</code> and VS Code <code>copilot-instructions.md</code> rule content — playbooks, per-tool guidance, and access-mode directives. Seed rows come from <code>configs/assets/rules/</code>; your edits are preserved across restarts.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Rules</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('rule')">Refresh</button>
+        </div>
+        <div id="assets-rules-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Extensions view -->
+    <section class="view" data-view="assets-extensions">
+      <p class="intro">UI action buttons that call MCP tools. The "Index in pincher" button in the Repos panel is powered by the <code>pincher/index_project</code> extension below. Edit <code>args_template</code> or add new extensions.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Extensions</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('extension')">Refresh</button>
+        </div>
+        <div id="assets-extensions-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Agents view -->
+    <section class="view" data-view="assets-agents">
+      <p class="intro">Cursor Subagent / Skill definitions. Each agent can be pushed to <code>.cursor/skills/&lt;name&gt;/SKILL.md</code> in any indexed repo.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Agents</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('agent')">Refresh</button>
+        </div>
+        <div id="assets-agents-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Hooks view -->
+    <section class="view" data-view="assets-hooks">
+      <p class="intro">Cursor hook entries (event → command). Pushed to <code>.cursor/hooks.json</code> — only zelosMCP-owned entries are updated; your manually-added hooks are preserved.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Hooks</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('hook')">Refresh</button>
+        </div>
+        <div id="assets-hooks-list" class="assets-list"></div>
+      </div>
+    </section>
+
     <!-- Connections view: per-provider auth cards + device-flow modal -->
     <section class="view" data-view="connections">
       <p class="intro">Per-user authentication for OAuth-protected MCP backends. Connecting a provider here unlocks the corresponding wrappers in <code>tools/list</code> at <code>localhost:8000/mcp</code> &mdash; until a backend's provider is connected, its wrappers are hidden from Cursor entirely.</p>
@@ -1571,6 +1624,7 @@ HTML_TEMPLATE = """\
           <span class="docs-empty">Loading providers...</span>
         </div>
       </div>
+
 
       <!-- Device-flow modal. Hidden by default; shown via showConnectModal() -->
       <div class="connect-modal-backdrop hidden" id="connect-modal-backdrop">
@@ -1608,6 +1662,93 @@ HTML_TEMPLATE = """\
       </div>
     </section>
 
+    <!-- Backend Assets view: per-backend tabbed asset manager -->
+    <section class="view" data-view="assets-backend">
+      <div class="section">
+        <div class="section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span id="assets-backend-title">Backend assets</span>
+          <span class="dashboard-meta" id="assets-backend-meta"></span>
+          <span style="flex:1;"></span>
+          <!-- YAML editor action group -->
+          <button type="button" class="btn btn-outline btn-mini" id="assets-yaml-edit-btn"
+            onclick="openYamlEditor()" style="display:none;" title="Edit the full YAML for this backend">
+            Edit YAML
+          </button>
+          <a id="assets-yaml-export-a" style="display:none;" download="">
+            <button type="button" class="btn btn-outline btn-mini" id="assets-yaml-export-btn"
+              onclick="exportYaml()" title="Download YAML file">Export</button>
+          </a>
+          <label class="btn btn-outline btn-mini" id="assets-yaml-import-label"
+            style="display:none;cursor:pointer;margin:0;" title="Import YAML file to overwrite">
+            Import
+            <input type="file" id="assets-yaml-import-input" accept=".yaml,.yml"
+              style="display:none;" onchange="importYaml(this)">
+          </label>
+          <button type="button" class="btn btn-mini btn-outline"
+            id="assets-backend-refresh-btn" onclick="refreshBackendAssets()" style="display:none;">
+            Refresh
+          </button>
+        </div>
+
+        <!-- Tab bar -->
+        <div id="assets-backend-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;">
+          <button type="button" class="assets-tab active" data-tab="rule"
+            onclick="switchBackendAssetsTab('rule')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Rules
+          </button>
+          <button type="button" class="assets-tab" data-tab="extension"
+            onclick="switchBackendAssetsTab('extension')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Extensions
+          </button>
+          <button type="button" class="assets-tab" data-tab="agent"
+            onclick="switchBackendAssetsTab('agent')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Agents
+          </button>
+          <button type="button" class="assets-tab" data-tab="hook"
+            onclick="switchBackendAssetsTab('hook')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Hooks
+          </button>
+          <button type="button" class="assets-tab" data-tab="all"
+            onclick="switchBackendAssetsTab('all')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            All
+          </button>
+          <!-- Add stub button injected per-tab by JS -->
+          <span style="flex:1;"></span>
+          <button type="button" class="btn btn-mini btn-outline" id="assets-add-stub-btn"
+            onclick="addStubRow()" style="display:none;margin:4px 0;">
+            + Add
+          </button>
+        </div>
+
+        <!-- YAML editor (hidden until Edit YAML is clicked) -->
+        <div id="assets-yaml-editor-panel" style="display:none;margin-top:8px;">
+          <textarea id="assets-yaml-textarea"
+            style="width:100%;height:380px;font-family:monospace;font-size:12px;resize:vertical;
+                   padding:8px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box;"
+            spellcheck="false" oninput="onYamlEditorInput(this)"></textarea>
+          <!-- Live lint status panel -->
+          <div id="assets-yaml-lint-status"
+            style="margin-top:4px;font-size:11px;min-height:20px;"></div>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+            <button type="button" class="btn btn-primary" id="assets-yaml-save-btn"
+              onclick="saveYamlEditor()" disabled>Save</button>
+            <button type="button" class="btn btn-outline"
+              onclick="closeYamlEditor()">Cancel</button>
+            <span id="assets-yaml-save-status" style="font-size:12px;color:var(--muted);"></span>
+          </div>
+        </div>
+
+        <div id="assets-backend-content" class="assets-list" style="min-height:80px;margin-top:8px;">
+          <span class="docs-empty">Select a backend from the right column.</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Server details view (catalog rendered in the center pane) -->
     <section class="view" data-view="server-details">
       <div class="section">
@@ -1623,7 +1764,7 @@ HTML_TEMPLATE = """\
       </div>
     </section>
 
-    <!-- Repo details view: rule editor + pincher index button for one repo -->
+    <!-- Repo details view: rule editor, comprehensive push, extensions -->
     <section class="view" data-view="repo-details">
       <div class="section">
         <div class="section-label">
@@ -1632,10 +1773,8 @@ HTML_TEMPLATE = """\
         </div>
         <div class="card">
           <p class="repo-paths" id="repo-details-paths">&mdash;</p>
-          <p class="intro" style="margin: 0 0 12px 0;">
-            Generate a Cursor rule and write it to <code>.cursor/rules/zelosmcp.mdc</code> in the selected repo, or register the repo with pincher so its tools are queryable. The rule body is identical to the one produced by <strong>Cursor rule (.mdc)</strong> in the left nav &mdash; same generator, same knobs.
-          </p>
 
+          <!-- Rule format controls -->
           <div class="rule-write-form">
             <label for="repo-rule-format">Format</label>
             <select id="repo-rule-format">
@@ -1661,22 +1800,66 @@ HTML_TEMPLATE = """\
             <input type="text" id="repo-rule-globs" placeholder="**/*.py" disabled>
           </div>
 
-          <div class="rule-write-actions">
-            <button type="button" class="btn btn-outline" onclick="previewRepoRule()">Preview</button>
-            <button type="button" class="btn btn-primary" onclick="saveRepoRule()">Save rule to repo</button>
-            <button type="button" class="btn btn-outline" onclick="indexRepo()">Index in pincher</button>
+          <!-- Push assets section -->
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+                        color:var(--muted);margin-bottom:6px;">Push assets</div>
+            <div id="repo-push-running-hint"
+              style="font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              <button type="button" class="btn btn-primary"
+                onclick="pushAllAssets()" title="Push rules + agents + hooks in one click">
+                Push all
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('rule')" title="Write .cursor/rules/zelosmcp.mdc">
+                Push rules
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('agent')" title="Write .cursor/skills/*/SKILL.md">
+                Push agents
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('hook')" title="Merge .cursor/hooks.json">
+                Push hooks
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="previewRepoRule()" title="Preview the rule body">
+                Preview rule
+              </button>
+            </div>
           </div>
+
+          <!-- Execute extensions section — populated dynamically -->
+          <div id="repo-asset-actions" style="margin-top:12px;"></div>
 
           <div class="rule-write-status" id="repo-rule-status"></div>
 
           <div class="snippet" style="margin-top: 12px;">
-            <pre id="repo-rule-preview">Click <strong>Preview</strong> to render the rule body that will be saved.</pre>
+            <pre id="repo-rule-preview">Click <strong>Preview rule</strong> to render the rule body.</pre>
           </div>
         </div>
       </div>
     </section>
 
   </main>
+
+  <!-- Global asset edit modal — outside all .view sections so it
+       renders regardless of which view is currently active -->
+  <div id="assets-edit-backdrop" class="connect-modal-backdrop hidden" style="z-index:200;">
+    <div class="connect-modal" style="max-width:720px;width:95%;">
+      <button type="button" class="connect-modal-close" onclick="closeAssetsEdit()">&times;</button>
+      <h3 id="assets-edit-title">Edit asset</h3>
+      <div id="assets-edit-meta" style="font-size:11px;color:var(--muted);margin-bottom:8px;"></div>
+      <textarea id="assets-edit-body" style="width:100%;height:360px;font-family:monospace;font-size:12px;resize:vertical;padding:8px;border:1px solid var(--border);border-radius:4px;" placeholder="Markdown body..."></textarea>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn btn-primary" onclick="saveAssetsEdit()">Save</button>
+        <button type="button" class="btn btn-outline" onclick="revertAssetsEdit()">Revert to seed</button>
+        <span style="flex:1;"></span>
+        <span id="assets-edit-status" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+    </div>
+  </div>
 
   <!-- Right column: status badge, global action, servers list -->
   <aside class="right-col">
@@ -2014,6 +2197,17 @@ HTML_TEMPLATE = """\
       };
       row.appendChild(detailsBtn);
 
+      // "Assets" button — opens the asset editor pre-filtered to this backend.
+      const assetsBtn = document.createElement("button");
+      assetsBtn.className = "btn btn-mini btn-outline";
+      assetsBtn.textContent = "Assets";
+      assetsBtn.title = `View / edit assets for the ${s.name} backend`;
+      assetsBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        showBackendAssets(s.name);
+      };
+      row.appendChild(assetsBtn);
+
       // Click anywhere on the row toggles the inline catalog block.
       row.onclick = () => toggleServerCatalog(s.name);
       entry.appendChild(row);
@@ -2326,6 +2520,260 @@ HTML_TEMPLATE = """\
     setView("server-details");
     renderServerDetails(name);
     refreshCatalog(currentStatus);
+  }
+
+  // ── Per-backend tabbed asset manager ────────────────────────────────
+
+  let currentBackendAssetsName = null;
+  let currentBackendAssetsTab = "rule";
+
+  async function showBackendAssets(backendName) {
+    currentBackendAssetsName = backendName;
+    currentBackendAssetsTab = "rule";
+    const title = document.getElementById("assets-backend-title");
+    const meta = document.getElementById("assets-backend-meta");
+    if (title) title.textContent = `Backend: ${backendName}`;
+    if (meta) meta.textContent = "";
+    // Show action buttons
+    for (const id of [
+      "assets-yaml-edit-btn","assets-yaml-export-btn","assets-yaml-import-label",
+      "assets-backend-refresh-btn","assets-add-stub-btn",
+    ]) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = "";
+    }
+    setView("assets-backend");
+    _activateBackendTab("rule");
+    await _loadBackendAssetsTab("rule", backendName);
+  }
+
+  function refreshBackendAssets() {
+    if (currentBackendAssetsName)
+      _loadBackendAssetsTab(currentBackendAssetsTab, currentBackendAssetsName);
+  }
+
+  function switchBackendAssetsTab(kind) {
+    if (!currentBackendAssetsName) return;
+    currentBackendAssetsTab = kind;
+    _activateBackendTab(kind);
+    _loadBackendAssetsTab(kind, currentBackendAssetsName);
+    // Add button is only meaningful for specific-kind tabs, not "All"
+    const addBtn = document.getElementById("assets-add-stub-btn");
+    if (addBtn) {
+      addBtn.disabled = (kind === "all");
+      addBtn.title = kind === "all"
+        ? "Switch to a specific tab to add a row"
+        : `Add a new ${kind} stub for ${currentBackendAssetsName}`;
+    }
+  }
+
+  // ── YAML editor ─────────────────────────────────────────────────────
+
+  let _yamlLintDebounce = null;
+
+  async function openYamlEditor() {
+    if (!currentBackendAssetsName) return;
+    const panel = document.getElementById("assets-yaml-editor-panel");
+    const ta = document.getElementById("assets-yaml-textarea");
+    if (!panel || !ta) return;
+    ta.value = "Loading...";
+    panel.style.display = "";
+    try {
+      const r = await fetch(`/api/assets/yaml/${encodeURIComponent(currentBackendAssetsName)}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      ta.value = await r.text();
+      lintYaml(ta.value);
+    } catch (err) {
+      ta.value = `# Error loading YAML: ${err.message}`;
+    }
+  }
+
+  function closeYamlEditor() {
+    const panel = document.getElementById("assets-yaml-editor-panel");
+    if (panel) panel.style.display = "none";
+    const status = document.getElementById("assets-yaml-save-status");
+    if (status) status.textContent = "";
+  }
+
+  function onYamlEditorInput(ta) {
+    clearTimeout(_yamlLintDebounce);
+    _yamlLintDebounce = setTimeout(() => lintYaml(ta.value), 400);
+  }
+
+  async function lintYaml(text) {
+    if (!currentBackendAssetsName) return;
+    const statusEl = document.getElementById("assets-yaml-lint-status");
+    const saveBtn = document.getElementById("assets-yaml-save-btn");
+    if (!statusEl || !saveBtn) return;
+    statusEl.textContent = "Validating…";
+    try {
+      const r = await fetch(
+        `/api/assets/yaml/${encodeURIComponent(currentBackendAssetsName)}/validate`,
+        { method: "POST", body: text, headers: { "Content-Type": "text/yaml" } }
+      );
+      const data = await r.json();
+      if (data.ok) {
+        statusEl.innerHTML = '<span style="color:var(--ok)">✓ Valid</span>';
+        saveBtn.disabled = false;
+      } else {
+        const errHtml = (data.errors || []).map((e) => {
+          const lineLabel = e.line ? `line ${e.line} — ` : "";
+          const path = e.path ? `<code>${e.path}</code>: ` : "";
+          return `<li style="cursor:pointer;" onclick="jumpToYamlLine(${e.line || 1})">${lineLabel}${path}${e.message}</li>`;
+        }).join("");
+        statusEl.innerHTML = `<ul style="margin:0;padding:0 0 0 16px;color:var(--warn);">${errHtml}</ul>`;
+        saveBtn.disabled = true;
+      }
+    } catch (err) {
+      statusEl.textContent = "Lint error: " + err.message;
+      saveBtn.disabled = true;
+    }
+  }
+
+  function jumpToYamlLine(lineNo) {
+    const ta = document.getElementById("assets-yaml-textarea");
+    if (!ta || !lineNo) return;
+    const lines = ta.value.split("\\n");
+    let pos = 0;
+    for (let i = 0; i < Math.min(lineNo - 1, lines.length); i++) {
+      pos += lines[i].length + 1;
+    }
+    ta.focus();
+    ta.setSelectionRange(pos, pos + (lines[lineNo - 1] || "").length);
+  }
+
+  async function saveYamlEditor() {
+    if (!currentBackendAssetsName) return;
+    const ta = document.getElementById("assets-yaml-textarea");
+    const status = document.getElementById("assets-yaml-save-status");
+    const saveBtn = document.getElementById("assets-yaml-save-btn");
+    if (!ta || !status) return;
+    status.textContent = "Saving…";
+    saveBtn.disabled = true;
+    try {
+      const r = await fetch(
+        `/api/assets/yaml/${encodeURIComponent(currentBackendAssetsName)}`,
+        { method: "PUT", body: ta.value, headers: { "Content-Type": "text/yaml" } }
+      );
+      const data = await r.json();
+      if (r.ok && data.ok) {
+        status.textContent = `Saved (${data.rows_written} rows).`;
+        closeYamlEditor();
+        _loadBackendAssetsTab(currentBackendAssetsTab, currentBackendAssetsName);
+      } else {
+        const errs = (data.errors || []).map((e) => `${e.path}: ${e.message}`).join("; ");
+        status.textContent = "Error: " + (errs || data.error || "unknown");
+        saveBtn.disabled = false;
+      }
+    } catch (err) {
+      status.textContent = "Error: " + err.message;
+      saveBtn.disabled = false;
+    }
+  }
+
+  async function exportYaml() {
+    if (!currentBackendAssetsName) return;
+    const r = await fetch(`/api/assets/yaml/${encodeURIComponent(currentBackendAssetsName)}`);
+    if (!r.ok) { alert("Export failed: HTTP " + r.status); return; }
+    const text = await r.text();
+    const blob = new Blob([text], { type: "text/yaml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${currentBackendAssetsName}.yaml`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importYaml(input) {
+    if (!input.files || !input.files[0] || !currentBackendAssetsName) return;
+    const text = await input.files[0].text();
+    const ta = document.getElementById("assets-yaml-textarea");
+    const panel = document.getElementById("assets-yaml-editor-panel");
+    if (ta && panel) {
+      panel.style.display = "";
+      ta.value = text;
+      lintYaml(text);
+    }
+    input.value = "";  // reset so same file can be re-imported
+  }
+
+  async function addStubRow() {
+    if (!currentBackendAssetsName || !currentBackendAssetsTab) return;
+    const name = prompt(
+      `New ${currentBackendAssetsTab} name for backend '${currentBackendAssetsName}':`
+    );
+    if (!name) return;
+    const r = await fetch(
+      `/api/assets/${currentBackendAssetsTab}/${encodeURIComponent(currentBackendAssetsName)}/${encodeURIComponent(name)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: "", meta: {} }),
+      }
+    );
+    if (!r.ok) { alert("Add failed: HTTP " + r.status); return; }
+    _loadBackendAssetsTab(currentBackendAssetsTab, currentBackendAssetsName);
+  }
+
+  function _activateBackendTab(kind) {
+    document.querySelectorAll(".assets-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.tab === kind);
+    });
+  }
+
+  async function _fetchBackendAssets(kind, backend) {
+    // Only fetch this backend's own rows.
+    // Global (zelosmcp) assets are edited by clicking Assets on the zelosmcp row.
+    const resp = await fetch(`/api/assets?kind=${encodeURIComponent(kind)}&backend=${encodeURIComponent(backend)}`);
+    return resp.ok ? await resp.json() : [];
+  }
+
+  async function _loadBackendAssetsTab(kind, backend) {
+    const container = document.getElementById("assets-backend-content");
+    if (!container) return;
+    container.innerHTML = '<span class="docs-empty">Loading...</span>';
+
+    const kindLabels = { rule: "Rules", extension: "Extensions", agent: "Agents", hook: "Hooks", all: "All" };
+
+    try {
+      let rows;
+      if (kind === "all") {
+        // Fetch all kinds in parallel and merge.
+        const kinds = ["rule", "extension", "agent", "hook"];
+        const resps = await Promise.all(
+          kinds.map((k) => fetch(`/api/assets?kind=${k}&backend=${encodeURIComponent(backend)}`))
+        );
+        const arrays = await Promise.all(resps.map((r) => r.ok ? r.json() : []));
+        rows = arrays.flat();
+      } else {
+        rows = await _fetchBackendAssets(kind, backend);
+      }
+
+      container.innerHTML = "";
+
+      if (rows.length === 0) {
+        const msg = backend === "zelosmcp"
+          ? `No global ${kindLabels[kind] || kind} assets yet.`
+          : `No ${kindLabels[kind] || kind} assets for <strong>${backend}</strong>. Click <strong>+ Add</strong> to create one, or use <strong>Edit YAML</strong>.`;
+        container.innerHTML = `<span class="docs-empty">${msg}</span>`;
+        return;
+      }
+
+      _renderBackendAssetGroup(container, backend, rows, kind);
+    } catch (err) {
+      container.innerHTML = `<span class="docs-empty" style="color:var(--warn)">Error: ${err.message}</span>`;
+    }
+  }
+
+  function _renderBackendAssetGroup(container, backend, rows, kind) {
+    const grp = document.createElement("div");
+    grp.className = "cat-group";
+    grp.style.marginBottom = "8px";
+    for (const row of rows) {
+      grp.appendChild(_buildAssetItem(row, kind));
+    }
+    container.appendChild(grp);
   }
 
   function renderServerDetails(name) {
@@ -2643,6 +3091,7 @@ HTML_TEMPLATE = """\
     setView("repo-details");
     renderRepoDetails(repo);
     renderReposList(); // re-paint to mark the active row
+    loadRepoAssetActions(); // populate extension run + asset push buttons
   }
 
   function renderRepoDetails(repo) {
@@ -2761,19 +3210,35 @@ HTML_TEMPLATE = """\
     }
   }
 
+  // Legacy helper kept for backward compat; new path uses extensions.
   async function indexRepo() {
     if (!currentDetailsRepo) return;
     const status = document.getElementById("repo-rule-status");
     if (status) { status.className = "rule-write-status"; status.textContent = "Indexing..."; }
     try {
-      const r = await fetch("/api/repos/index", {
+      // Try the extension-based invoke first; fall back to legacy route.
+      const ctx = { repo: {
+        ro_path: currentDetailsRepo.path_ro,
+        rw_path: currentDetailsRepo.path_rw,
+        name: currentDetailsRepo.name,
+      }};
+      const r = await fetch("/api/assets/extension/pincher/index_project/invoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: currentDetailsRepo.path_ro }),
+        body: JSON.stringify({ ctx }),
       });
-      const data = await r.json();
-      if (!r.ok || !data.ok) {
-        throw new Error(data.error || ("HTTP " + r.status));
+      if (r.status === 503) {
+        // Fall back to legacy route
+        const r2 = await fetch("/api/repos/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: currentDetailsRepo.path_ro }),
+        });
+        const d2 = await r2.json();
+        if (!r2.ok || !d2.ok) throw new Error(d2.error || ("HTTP " + r2.status));
+      } else {
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || data.message);
       }
       if (status) {
         status.className = "rule-write-status ok";
@@ -2791,6 +3256,151 @@ HTML_TEMPLATE = """\
       }
     }
   }
+
+  // ── Comprehensive push ──────────────────────────────────────────────
+
+  async function pushComprehensive(kind) {
+    if (!currentDetailsRepo) return;
+    const status = document.getElementById("repo-rule-status");
+    const fmt = document.getElementById("repo-rule-format")?.value || "cursor-mdc";
+    const access = document.getElementById("repo-rule-access")?.value || "read-only";
+    const tool_use = document.getElementById("repo-rule-tool-use")?.value || "priority";
+    if (status) { status.className = "rule-write-status"; status.textContent = `Pushing ${kind}…`; }
+    try {
+      const r = await fetch(`/api/assets/push/${encodeURIComponent(kind)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: currentDetailsRepo.name, fmt, access, tool_use }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        const files = (data.files || []).filter((f) => f.ok).map((f) => f.path.split("/").pop());
+        const hint = data.backends_included ? `(${data.backends_included.join(", ")})` : "";
+        if (status) {
+          status.className = "rule-write-status ok";
+          status.textContent = `Pushed ${kind} ${hint}: ${files.join(", ") || "(no files)"}`;
+        }
+        if (kind === "rule") {
+          currentDetailsRepo.has_rule = true;
+          const idx = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+          if (idx >= 0) currentRepos[idx] = { ...currentRepos[idx], has_rule: true };
+          renderReposList();
+          renderRepoDetailsMetaOnly();
+        }
+      } else {
+        if (status) {
+          status.className = "rule-write-status err";
+          status.textContent = `Push ${kind} failed: ` + (data.error || JSON.stringify(data.files?.filter((f) => !f.ok)));
+        }
+      }
+    } catch (err) {
+      if (status) { status.className = "rule-write-status err"; status.textContent = "Push error: " + err.message; }
+    }
+  }
+
+  async function pushAllAssets() {
+    await pushComprehensive("rule");
+    await pushComprehensive("agent");
+    await pushComprehensive("hook");
+  }
+
+  // Update the running-backends hint in the push section.
+  function updateRepoPushHint(status) {
+    const hint = document.getElementById("repo-push-running-hint");
+    if (!hint || !status) return;
+    const running = (status.servers || []).filter((s) => s.running && !s.builtin).map((s) => s.name);
+    hint.textContent = running.length
+      ? `Push includes: zelosmcp + ${running.join(", ")}`
+      : "Push includes: zelosmcp global (no user backends running)";
+  }
+
+  // ── Execute extensions in repo panel ────────────────────────────────
+
+  // Called whenever a repo details pane is opened.
+  async function loadRepoAssetActions() {
+    const container = document.getElementById("repo-asset-actions");
+    if (!container) return;
+    container.innerHTML = "";
+    const status = document.getElementById("repo-rule-status");
+
+    // Update running-backends hint
+    updateRepoPushHint(currentStatus);
+
+    try {
+      const extResp = await fetch("/api/assets?kind=extension");
+      const extensions = extResp.ok ? await extResp.json() : [];
+      const repoExts = Array.isArray(extensions) ? extensions.filter((row) => {
+        const targets = (row.meta && row.meta.targets) || [];
+        return targets.includes("repos_row");
+      }) : [];
+      if (repoExts.length === 0) return;
+
+      const heading = document.createElement("div");
+      heading.style.cssText = "font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;";
+      heading.textContent = "Execute extensions";
+      container.appendChild(heading);
+
+      const actionsRow = document.createElement("div");
+      actionsRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;";
+      container.appendChild(actionsRow);
+
+      for (const ext of repoExts) {
+        const isRunning = (currentStatus.servers || []).some(
+          (s) => s.name === ext.backend && s.running
+        );
+        const requiresRunning = ext.meta?.requires_running !== false;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-outline";
+        btn.textContent = (ext.meta && ext.meta.label) || ext.name;
+        btn.title = requiresRunning && !isRunning
+          ? `${ext.meta?.description || ext.name} (${ext.backend} is not running)`
+          : (ext.meta && ext.meta.description) || "";
+        btn.disabled = requiresRunning && !isRunning;
+        btn.onclick = async () => {
+          btn.disabled = true;
+          const orig = btn.textContent;
+          btn.textContent = "Running…";
+          if (status) { status.className = "rule-write-status"; status.textContent = btn.title || "Running..."; }
+          try {
+            const ctx = { repo: currentDetailsRepo ? {
+              ro_path: currentDetailsRepo.path_ro,
+              rw_path: currentDetailsRepo.path_rw,
+              name: currentDetailsRepo.name,
+            } : {} };
+            const res = await fetch(
+              `/api/assets/extension/${encodeURIComponent(ext.backend)}/${encodeURIComponent(ext.name)}/invoke`,
+              { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ctx }) }
+            );
+            const data = await res.json();
+            if (data.ok) {
+              if (status) { status.className = "rule-write-status ok"; status.textContent = data.message; }
+              if (ext.name === "index_project" && ext.backend === "pincher" && currentDetailsRepo) {
+                currentDetailsRepo.pincher_indexed = true;
+                const idx2 = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+                if (idx2 >= 0) currentRepos[idx2] = { ...currentRepos[idx2], pincher_indexed: true };
+                renderReposList();
+                renderRepoDetailsMetaOnly();
+              }
+            } else {
+              if (status) { status.className = "rule-write-status err"; status.textContent = data.error || data.message; }
+            }
+          } catch (err) {
+            if (status) { status.className = "rule-write-status err"; status.textContent = "Error: " + err.message; }
+          } finally {
+            btn.disabled = requiresRunning && !isRunning;
+            btn.textContent = orig;
+          }
+        };
+        actionsRow.appendChild(btn);
+      }
+    } catch (_) {}
+  }
+
+  // Keep old names as aliases
+  async function loadRepoExtensions() { return loadRepoAssetActions(); }
+  function _makeRepoPushBtn() {}
 
   function renderRepoDetailsMetaOnly() {
     if (!currentDetailsRepo) return;
@@ -2833,9 +3443,333 @@ HTML_TEMPLATE = """\
     }
     if (name === "docs") loadDocsIndex();
     if (name === "connections") loadConnections();
+    if (name === "assets-rules") { currentAssetsBackendFilter = null; loadAssets("rule"); }
+    if (name === "assets-extensions") { currentAssetsBackendFilter = null; loadAssets("extension"); }
+    if (name === "assets-agents") { currentAssetsBackendFilter = null; loadAssets("agent"); }
+    if (name === "assets-hooks") { currentAssetsBackendFilter = null; loadAssets("hook"); }
+    // assets-backend is driven by showBackendAssets(); no left-nav auto-load.
   }
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.addEventListener("click", () => setView(b.dataset.view)));
+
+  // ── Assets pane ────────────────────────────────────────────────────
+
+  const _ASSETS_KIND_TO_CONTAINER = {
+    rule: "assets-rules-list",
+    extension: "assets-extensions-list",
+    agent: "assets-agents-list",
+    hook: "assets-hooks-list",
+  };
+
+  let currentAssetsKind = null;
+  let currentAssetsRow = null;
+  let currentAssetsBackendFilter = null;  // set by showBackendAssets()
+
+  async function loadAssets(kind, backendFilter) {
+    currentAssetsKind = kind;
+    if (backendFilter !== undefined) currentAssetsBackendFilter = backendFilter;
+    const containerId = _ASSETS_KIND_TO_CONTAINER[kind];
+    if (!containerId) return;
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '<span class="docs-empty">Loading...</span>';
+
+    // Show / clear the backend filter banner
+    const bannerId = containerId + "-filter-banner";
+    let banner = document.getElementById(bannerId);
+    if (currentAssetsBackendFilter) {
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.id = bannerId;
+        banner.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 0 10px;font-size:12px;color:var(--muted);";
+        container.parentNode.insertBefore(banner, container);
+      }
+      banner.innerHTML = `<span>Filtered to backend: <strong>${currentAssetsBackendFilter}</strong></span>` +
+        `<button type="button" class="btn btn-mini btn-outline" onclick="clearAssetsFilter('${kind}')">Show all</button>`;
+    } else if (banner) {
+      banner.remove();
+    }
+
+    try {
+      let url = `/api/assets?kind=${encodeURIComponent(kind)}`;
+      if (currentAssetsBackendFilter) url += `&backend=${encodeURIComponent(currentAssetsBackendFilter)}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const rows = await r.json();
+      if (!Array.isArray(rows) || rows.length === 0) {
+        container.innerHTML = '<span class="docs-empty">No assets found for this backend.</span>';
+        return;
+      }
+      container.innerHTML = "";
+      // Group by backend (only one group when filtered)
+      const byBackend = {};
+      for (const row of rows) {
+        (byBackend[row.backend] = byBackend[row.backend] || []).push(row);
+      }
+      for (const [backend, bRows] of Object.entries(byBackend)) {
+        const grp = document.createElement("div");
+        grp.className = "cat-group";
+        const hdr = document.createElement("div");
+        hdr.className = "cat-label";
+        hdr.textContent = backend;
+        grp.appendChild(hdr);
+        const ul = document.createElement("ul");
+        for (const row of bRows) {
+          ul.appendChild(_buildAssetItem(row, kind));
+        }
+        grp.appendChild(ul);
+        container.appendChild(grp);
+      }
+    } catch (err) {
+      container.innerHTML = `<span class="docs-empty" style="color:var(--warn)">Error loading assets: ${err.message}</span>`;
+    }
+  }
+
+  function clearAssetsFilter(kind) {
+    currentAssetsBackendFilter = null;
+    loadAssets(kind, null);
+  }
+
+  function _buildAssetItem(row, kind) {
+    // Card-style row: flex container so name+pill and action button stay aligned.
+    const card = document.createElement("div");
+    card.style.cssText = (
+      "display:flex;align-items:center;gap:8px;" +
+      "padding:7px 10px;border-radius:4px;margin-bottom:4px;" +
+      "background:var(--surface);border:1px solid var(--border);"
+    );
+
+    // Left: name + source pill + optional description
+    const left = document.createElement("div");
+    left.style.cssText = "flex:1;min-width:0;";
+
+    const nameRow = document.createElement("div");
+    nameRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+
+    const nameEl = document.createElement("code");
+    nameEl.style.cssText = "font-size:12px;word-break:break-all;";
+    nameEl.textContent = row.name.startsWith("tool:") ? row.name.slice(5) : row.name;
+    if (row.target) nameEl.textContent += ` [${row.target}]`;
+    nameRow.appendChild(nameEl);
+
+    const sourcePill = document.createElement("span");
+    sourcePill.className = "pill" + (row.source === "user" ? " on" : "");
+    sourcePill.style.cssText = "font-size:10px;flex-shrink:0;";
+    sourcePill.textContent = row.source;
+    nameRow.appendChild(sourcePill);
+
+    // Kind badge for "All" tab clarity
+    if (kind === "all") {
+      const kindBadge = document.createElement("span");
+      kindBadge.className = "pill";
+      kindBadge.style.cssText = "font-size:10px;flex-shrink:0;opacity:.65;";
+      kindBadge.textContent = row.kind;
+      nameRow.appendChild(kindBadge);
+    }
+
+    left.appendChild(nameRow);
+
+    if (row.meta && row.meta.description) {
+      const desc = document.createElement("div");
+      desc.style.cssText = "font-size:11px;color:var(--muted);margin-top:2px;";
+      desc.textContent = row.meta.description;
+      left.appendChild(desc);
+    }
+    card.appendChild(left);
+
+    // Right: action buttons (always visible, no float)
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:4px;flex-shrink:0;";
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn btn-mini btn-outline";
+    editBtn.textContent = "Edit";
+    editBtn.onclick = () => openAssetsEdit(row, kind === "all" ? row.kind : kind);
+    actions.appendChild(editBtn);
+
+    if ((kind === "extension" || (kind === "all" && row.kind === "extension")) &&
+        (row.meta?.type || "tool") === "tool") {
+      const runBtn = document.createElement("button");
+      runBtn.type = "button";
+      runBtn.className = "btn btn-mini btn-outline";
+      runBtn.textContent = row.meta?.label || "Run";
+      runBtn.title = row.meta?.description || "";
+      runBtn.onclick = () => runExtension(row.backend, row.name, runBtn);
+      actions.appendChild(runBtn);
+    }
+
+    card.appendChild(actions);
+    return card;
+  }
+
+  function openAssetsEdit(row, kind) {
+    currentAssetsRow = { row, kind };
+    const backdrop = document.getElementById("assets-edit-backdrop");
+    const title    = document.getElementById("assets-edit-title");
+    const metaEl   = document.getElementById("assets-edit-meta");
+    const bodyEl   = document.getElementById("assets-edit-body");
+    const status   = document.getElementById("assets-edit-status");
+    if (!backdrop || !title || !bodyEl) return;
+    title.textContent = row.name.startsWith("tool:") ? `Tool guidance: ${row.name.slice(5)}` : row.name;
+    if (metaEl) {
+      const sourceLabel = row.source === "user" ? "user-edited" : "seed";
+      metaEl.textContent = `${row.kind}  ·  backend: ${row.backend}  ·  ${sourceLabel}`;
+    }
+    bodyEl.value = row.body || "";
+    if (status) status.textContent = "";
+    backdrop.classList.remove("hidden");
+    bodyEl.focus();
+  }
+
+  function closeAssetsEdit() {
+    const backdrop = document.getElementById("assets-edit-backdrop");
+    if (backdrop) backdrop.classList.add("hidden");
+    currentAssetsRow = null;
+    const status = document.getElementById("assets-edit-status");
+    if (status) status.textContent = "";
+  }
+
+  function _afterAssetsEdit(kind) {
+    // Reload whichever view is currently showing assets.
+    if (currentBackendAssetsName) {
+      _loadBackendAssetsTab(kind, currentBackendAssetsName);
+    } else {
+      loadAssets(kind);
+    }
+  }
+
+  async function saveAssetsEdit() {
+    if (!currentAssetsRow) return;
+    const { row, kind } = currentAssetsRow;
+    const bodyEl = document.getElementById("assets-edit-body");
+    const status = document.getElementById("assets-edit-status");
+    if (!bodyEl || !status) return;
+    status.textContent = "Saving…";
+    try {
+      const r = await fetch(
+        `/api/assets/${row.kind}/${row.backend}/${encodeURIComponent(row.name)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: bodyEl.value, meta: row.meta, target: row.target }),
+        }
+      );
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      status.textContent = "Saved.";
+      setTimeout(() => { closeAssetsEdit(); _afterAssetsEdit(kind); }, 500);
+    } catch (err) {
+      status.textContent = "Error: " + err.message;
+    }
+  }
+
+  async function revertAssetsEdit() {
+    if (!currentAssetsRow) return;
+    const { row, kind } = currentAssetsRow;
+    const status = document.getElementById("assets-edit-status");
+    if (!status) return;
+    if (!confirm(`Revert "${row.name}" to the seed value? Your edits will be lost.`)) return;
+    status.textContent = "Reverting…";
+    try {
+      const r = await fetch(
+        `/api/assets/${row.kind}/${row.backend}/${encodeURIComponent(row.name)}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      status.textContent = "Reverted.";
+      setTimeout(() => { closeAssetsEdit(); _afterAssetsEdit(kind); }, 500);
+    } catch (err) {
+      status.textContent = "Error: " + err.message;
+    }
+  }
+
+  async function pushAssetsEdit() {
+    if (!currentAssetsRow) return;
+    const repo = prompt("Push to which repo? (enter the repo name shown in the Repos panel)");
+    if (!repo) return;
+    const { row } = currentAssetsRow;
+    const status = document.getElementById("assets-edit-status");
+    if (status) status.textContent = "Pushing…";
+    try {
+      const r = await fetch(
+        `/api/assets/${row.kind}/${row.backend}/${encodeURIComponent(row.name)}/push`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo }),
+        }
+      );
+      const data = await r.json();
+      if (data.ok) {
+        if (status) status.textContent = `Pushed to ${repo}.`;
+      } else {
+        if (status) status.textContent = "Push failed: " + (data.error || JSON.stringify(data));
+      }
+    } catch (err) {
+      if (status) status.textContent = "Push error: " + err.message;
+    }
+  }
+
+  async function promptPushAsset(row) {
+    const repo = prompt(`Push ${row.backend}/${row.name} to which repo?`);
+    if (!repo) return;
+    await _pushAssetToRepo(row, repo);
+  }
+
+  async function _pushAssetToRepo(row, repo) {
+    try {
+      const r = await fetch(`/api/assets/${row.kind}/${row.backend}/${encodeURIComponent(row.name)}/push`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        const paths = (data.files || []).map((f) => f.path).join(", ");
+        alert(`Pushed: ${paths}`);
+      } else {
+        alert("Push failed: " + (data.error || JSON.stringify(data)));
+      }
+    } catch (err) {
+      alert("Push error: " + err.message);
+    }
+  }
+
+  async function runExtension(backend, name, btn) {
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Running…";
+    try {
+      const ctx = {};
+      const r = await fetch(`/api/assets/extension/${encodeURIComponent(backend)}/${encodeURIComponent(name)}/invoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ctx }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        btn.textContent = "Done";
+        addLog(`extension ${backend}/${name}: ${data.message}`);
+      } else {
+        btn.textContent = "Error";
+        addLog(`ERROR extension ${backend}/${name}: ${data.error || data.message}`);
+      }
+    } catch (err) {
+      btn.textContent = "Error";
+      addLog("ERROR: " + err.message);
+    } finally {
+      setTimeout(() => { btn.disabled = false; btn.textContent = origText; }, 2000);
+    }
+  }
+
+  // Close assets edit on backdrop click.
+  (function() {
+    const backdrop = document.getElementById("assets-edit-backdrop");
+    if (!backdrop) return;
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) closeAssetsEdit();
+    });
+  })();
 
   // ── Documentation view ──────────────────────────────────────────────
   // Two modes share the same view:

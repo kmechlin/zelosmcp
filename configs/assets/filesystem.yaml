@@ -1,0 +1,85 @@
+backend: filesystem
+seed_version: 2
+
+rules:
+  sections:
+    playbook_read_only:
+      body: |
+        ### `filesystem` (sandboxed file access)
+
+        **MANDATORY: For any of the following user intents, your FIRST tool call MUST be a `filesystem__*` tool — before any `Shell`, `Read`, or `Grep`:**
+
+        | User intent | Required tool |
+        |---|---|
+        | read this file / show me file X | `filesystem__read_text_file` |
+        | compare / diff / summarize multiple files | `filesystem__read_multiple_files` |
+        | list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |
+        | find files matching pattern X | `filesystem__search_files` |
+        | what's the size / mtime / permissions of X | `filesystem__get_file_info` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, `tree`, `wc`, `du`, `stat` against workspace paths.
+        - `Read` on a path under the workspace when `filesystem__read_text_file` would work.
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>."
+
+        The `filesystem` backend is a sandboxed file server: every path must live under one of the allowed directories returned by `filesystem__list_allowed_directories`. Read-only workflow:
+
+        - **Read text.** Use `filesystem__read_text_file` (supports `head`/`tail` for large files); use `filesystem__read_multiple_files` to fetch several files in one round trip when comparing or summarizing.
+        - **Browse structure.** `filesystem__list_directory` for a flat listing, `filesystem__directory_tree` for a recursive JSON tree, `filesystem__list_directory_with_sizes` when size matters.
+        - **Find files.** `filesystem__search_files` accepts glob patterns relative to a starting directory (use `**/*.ext` for recursive matches).
+        - **Inspect metadata.** `filesystem__get_file_info` returns size / mtime / permissions without reading content.
+        - **Do NOT call** `filesystem__write_file`, `filesystem__edit_file`, `filesystem__move_file`, or `filesystem__create_directory` — they mutate state and the rule is configured for read-only access.
+
+    playbook_read_write:
+      body: |
+        ### `filesystem` (sandboxed file access)
+
+        **MANDATORY: For any of the following user intents, your FIRST tool call MUST be a `filesystem__*` tool — before any `Shell`, `Read`, or `Grep`:**
+
+        | User intent | Required tool |
+        |---|---|
+        | read this file / show me file X | `filesystem__read_text_file` |
+        | compare / diff / summarize multiple files | `filesystem__read_multiple_files` |
+        | list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |
+        | find files matching pattern X | `filesystem__search_files` |
+        | edit / patch file X | `filesystem__edit_file` (preferred) or `filesystem__write_file` |
+        | create / move / rename file or directory | `filesystem__create_directory` / `filesystem__move_file` |
+        | what's the size / mtime / permissions of X | `filesystem__get_file_info` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, `tree`, `wc`, `du`, `stat` against workspace paths.
+        - `Read` on a path under the workspace when `filesystem__read_text_file` would work.
+        - `sed`, `awk`, or `echo > file` for edits — use `filesystem__edit_file`.
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>."
+
+        The `filesystem` backend is a sandboxed file server: every path must live under one of the allowed directories returned by `filesystem__list_allowed_directories`. Workflow:
+
+        - **Read text.** Use `filesystem__read_text_file` (supports `head`/`tail` for large files); use `filesystem__read_multiple_files` to fetch several files in one round trip when comparing or summarizing.
+        - **Browse structure.** `filesystem__list_directory` for a flat listing, `filesystem__directory_tree` for a recursive JSON tree, `filesystem__list_directory_with_sizes` when size matters.
+        - **Find files.** `filesystem__search_files` accepts glob patterns relative to a starting directory (use `**/*.ext` for recursive matches).
+        - **Edit precisely.** Prefer `filesystem__edit_file` (line-based edits, returns a git-style diff) over `filesystem__write_file` (full overwrite) whenever you can — `write_file` is destructive and silently replaces existing content.
+        - **Create / move.** `filesystem__create_directory` is idempotent (safe to call on existing dirs); `filesystem__move_file` fails if the destination exists, so it's safe for renames and reorganizations.
+        - **Inspect metadata.** `filesystem__get_file_info` returns size / mtime / permissions without reading content.
+
+  tool_instructions:
+    read_text_file:
+      body: |
+        Use `head=N` or `tail=N` for large files. Prefer this over the native `Read` tool for any file under the workspace root.
+    read_multiple_files:
+      body: |
+        One round trip for multiple files — use this when comparing or summarizing several files at once.
+    edit_file:
+      body: |
+        Line-based edits only. Returns a git-style diff on success. Prefer over `write_file` for targeted changes.
+    search_files:
+      body: |
+        Glob patterns relative to the starting directory — use `**/*.ext` for recursive matches. Much faster than shell `find`.
+    directory_tree:
+      body: |
+        Returns a recursive JSON tree with name/type/children. Pass `excludePatterns` to skip `node_modules`, `.venv`, etc.
+
+extensions: {}
+
+agents: {}
+
+hooks: {}

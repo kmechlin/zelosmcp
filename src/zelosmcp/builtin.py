@@ -300,71 +300,15 @@ _TOOLS: list[Tool] = [
 # fallback (see ``_classify_tool``). The agent reads the markers and
 # the directive block to decide which tools are safe to invoke.
 
-# Tool name prefixes that strongly imply state-mutating semantics; used
-# as a fallback when a tool's MCP annotations don't set readOnlyHint.
-_MUTATING_PREFIXES: tuple[str, ...] = (
-    "create_", "update_", "set_", "delete_", "remove_", "start_", "stop_",
-    "restart_", "run_", "push_", "pull_", "build_", "write_", "edit_",
-    "move_", "configure_", "reload_",
+# Tool classifier + arg formatter — shared with
+# zelosmcp.framework.assetstore.tool_classify to avoid duplication.
+from zelosmcp.framework.assetstore.tool_classify import (
+    classify_tool as _classify_tool,
+    format_args as _format_args,
 )
 
-
-def _classify_tool(tool: dict[str, Any]) -> str:
-    """Return a mutability marker string for ``tool``: one of
-    ``"readonly"``, ``"destructive"``, ``"mutates"``, or ``"?"``.
-
-    Precedence:
-      1. ``annotations.destructiveHint == True`` -> destructive (most dangerous).
-      2. ``annotations.readOnlyHint == True``    -> readonly.
-      3. tool name starts with a known mutation prefix -> mutates.
-      4. otherwise -> ``"?"`` (unknown; conservative read-only blocks call).
-    """
-    ann = tool.get("annotations") or {}
-    if ann.get("destructiveHint") is True:
-        return "destructive"
-    if ann.get("readOnlyHint") is True:
-        return "readonly"
-    name = (tool.get("name") or "").lower()
-    if any(name.startswith(p) for p in _MUTATING_PREFIXES):
-        return "mutates"
-    return "?"
-
-
-def _format_args(input_schema: Any) -> str:
-    """Return a parenthesized arg summary for a tool's ``inputSchema``,
-    e.g. ``"(path, head?, tail?)"``. Required args first (in their
-    declared order), then optionals with a trailing ``?``.
-
-      - Empty / non-object schema -> ``"()"``.
-      - Object schema with no declared properties -> ``"(...)"`` to flag
-        "accepts an arbitrary object".
-      - Otherwise: required (in ``required`` order, falling back to
-        ``properties`` insertion order for any required key without a
-        properties entry) followed by optionals (in ``properties`` order).
-    """
-    if not isinstance(input_schema, dict):
-        return "()"
-    if input_schema.get("type") not in (None, "object"):
-        return f"({input_schema.get('type', 'value')})"
-    props = input_schema.get("properties")
-    if not isinstance(props, dict) or not props:
-        # ``object`` with no declared properties: still accepts an object.
-        return "(...)" if input_schema else "()"
-    required = input_schema.get("required") or []
-    required_set = set(required) if isinstance(required, list) else set()
-    parts: list[str] = []
-    seen: set[str] = set()
-    if isinstance(required, list):
-        for r in required:
-            if isinstance(r, str) and r not in seen:
-                parts.append(r)
-                seen.add(r)
-    for k in props.keys():
-        if k in seen:
-            continue
-        parts.append(f"{k}?" if k not in required_set else k)
-        seen.add(k)
-    return "(" + ", ".join(parts) + ")"
+# Keep the module-level constants here for any third-party callers.
+_MUTATING_PREFIXES = tuple()  # actual list lives in tool_classify
 
 
 def _backend_intro(
@@ -704,8 +648,14 @@ def _render_mandatory_playbook(
     mandatory_names: set[str] | frozenset[str],
     *,
     access: str,
+    rule_assets: "dict[str, Any] | None" = None,
 ) -> str:
     """Build the ``## Mandatory backend playbook`` section.
+
+    When ``rule_assets`` is supplied (a ``{backend: BackendRuleAssets}``
+    dict loaded from the asset store), the playbook body is taken from
+    the store row so user edits are respected.  Falls back to the
+    hardcoded string constants when the store is unavailable.
 
     Only emits blocks for mandatory backends that are actually present
     in ``catalog`` (so a rule generated when pincher is down doesn't
@@ -713,16 +663,27 @@ def _render_mandatory_playbook(
     backend is loaded — callers should skip the section header entirely
     in that case.
     """
+    def _playbook_body(backend: str, fallback_ro: str, fallback_rw: str) -> str:
+        if rule_assets is not None:
+            assets = rule_assets.get(backend)
+            if assets is not None:
+                body = (
+                    assets.playbook_read_only
+                    if access == "read-only"
+                    else assets.playbook_read_write
+                )
+                if body:
+                    return body
+        return fallback_ro if access == "read-only" else fallback_rw
+
     blocks: list[str] = []
     if "filesystem" in mandatory_names and "filesystem" in catalog:
         blocks.append(
-            _FILESYSTEM_PLAYBOOK_RO if access == "read-only"
-            else _FILESYSTEM_PLAYBOOK_RW
+            _playbook_body("filesystem", _FILESYSTEM_PLAYBOOK_RO, _FILESYSTEM_PLAYBOOK_RW)
         )
     if "pincher" in mandatory_names and "pincher" in catalog:
         blocks.append(
-            _PINCHER_PLAYBOOK_RO if access == "read-only"
-            else _PINCHER_PLAYBOOK_RW
+            _playbook_body("pincher", _PINCHER_PLAYBOOK_RO, _PINCHER_PLAYBOOK_RW)
         )
     if not blocks:
         return ""
@@ -744,6 +705,7 @@ def render_comprehensive_rule(
     fmt: str = "cursor-mdc",
     tool_use: str = "priority",
     mandatory_names: set[str] | frozenset[str] | None = None,
+    rule_assets: "dict[str, Any] | None" = None,
 ) -> str:
     """Render a comprehensive agent-instructions document from the output
     of :func:`collect_backend_full_catalog`. Lists every tool from every
@@ -773,6 +735,15 @@ def render_comprehensive_rule(
     ``mandatory_names`` is the set of backends that get the curated
     playbook block when ``tool_use=priority``. Defaults to the
     canonical set ``{"filesystem", "pincher"}`` when ``None``.
+
+    ``rule_assets`` is an optional ``{backend: BackendRuleAssets}`` dict
+    loaded from the asset store (see
+    :func:`~zelosmcp.framework.assetstore.kinds.rule.load_all_rule_assets`).
+    When supplied, per-backend playbooks and per-tool instructions from
+    the store take precedence over the hardcoded string constants so
+    user edits are respected.  Pass ``None`` (the default) to use the
+    bundled defaults — required for callers that don't open the store
+    (e.g. tests).
     """
     if access not in ("read-only", "read-write"):
         raise ValueError(f"Unknown access mode: {access!r}")
@@ -848,11 +819,35 @@ def render_comprehensive_rule(
         directive,
     ]
 
+    # When rule_assets is available, pull directives from the store;
+    # otherwise fall through to the hardcoded string constants.
+    _default_assets = rule_assets.get("zelosmcp") if rule_assets else None
+
+    def _pick(section: str, fallback: str) -> str:
+        if _default_assets is not None:
+            store_body = getattr(_default_assets, section, "") or ""
+            if store_body:
+                return store_body
+        return fallback
+
+    directive = _pick(
+        "directive_read_only" if access == "read-only" else "directive_read_write",
+        _DIRECTIVE_READ_ONLY if access == "read-only" else _DIRECTIVE_READ_WRITE,
+    )
+    # Replace the directive line we already appended above with the
+    # (possibly store-overridden) value.
+    lines[-1] = directive
+
     if tool_use == "priority":
-        lines.append(_DIRECTIVE_TOOL_USE_PRIORITY)
-        lines.append(_SELF_CHECK_GATE)
+        lines.append(
+            _pick("directive_tool_use_priority", _DIRECTIVE_TOOL_USE_PRIORITY)
+        )
+        lines.append(_pick("self_check_gate", _SELF_CHECK_GATE))
         playbook = _render_mandatory_playbook(
-            user_backends, effective_mandatory, access=access
+            user_backends,
+            effective_mandatory,
+            access=access,
+            rule_assets=rule_assets,
         )
         if playbook:
             lines.append(playbook)
@@ -886,6 +881,15 @@ def render_comprehensive_rule(
         lines.append("")
         lines.append(_backend_intro(server_name, len(tools), tool_use=tool_use))
         lines.append("")
+
+        # Per-backend rule assets (tool instructions, compressed rules).
+        backend_assets = rule_assets.get(server_name) if rule_assets else None
+        tool_instr: dict[str, str] = (
+            backend_assets.tool_instructions
+            if backend_assets is not None
+            else {}
+        )
+
         if not tools:
             lines.append("- _(no tools advertised)_")
             lines.append("")
@@ -902,6 +906,10 @@ def render_comprehensive_rule(
                 desc = "_(no description)_"
             lines.append(f"- `{qualified}` `{args}` [{marker}]")
             lines.append(f"  {desc}")
+            instr = tool_instr.get(tool_name, "").strip()
+            if instr:
+                for instr_line in instr.splitlines():
+                    lines.append(f"  {instr_line}")
         lines.append("")
 
     lines.extend(
@@ -1127,6 +1135,14 @@ async def _h_generate_cursor_rule(
     globs = args.get("globs")
     catalog = await collect_backend_full_catalog(self_.manager, skip_self=True)
     mandatory = self_.manager.mandatory_names()
+    rule_assets: dict[str, Any] | None = None
+    if self_.manager.assets is not None:
+        try:
+            from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
+            backends = list(catalog.keys()) + ["zelosmcp"]
+            rule_assets = await load_all_rule_assets(self_.manager.assets, backends)
+        except Exception:
+            rule_assets = None
     return _text(
         render_comprehensive_rule(
             catalog,
@@ -1136,6 +1152,7 @@ async def _h_generate_cursor_rule(
             fmt=fmt,
             tool_use=tool_use,
             mandatory_names=mandatory,
+            rule_assets=rule_assets,
         )
     )
 

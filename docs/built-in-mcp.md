@@ -37,6 +37,8 @@ The most-used tool. Synthesizes an agent-instructions document from the live cat
 
 The same generator also drives `GET /api/cursor-rule` — both surfaces are guaranteed-equivalent (covered by `test_aggregate_call_tool_round_trip` in [tests/test_app_integration.py](../tests/test_app_integration.py)).
 
+> **Asset-store sourced playbooks.** The per-backend playbook blocks (the mandatory `### \`pincher\`` and `### \`filesystem\`` sections in `priority` mode) are no longer hardcoded in `builtin.py`. They are loaded from the asset store via `load_all_rule_assets()` at render time. This means any edits you make to a backend's `playbook_read_only` / `playbook_read_write` rule assets in the web UI's Assets pane are immediately reflected the next time this tool is called — no restart needed. See [docs/asset-kinds.md#rule](asset-kinds.md#rule-rules) for the rule asset schema and [docs/assets-editor.md](assets-editor.md) for the editor walkthrough.
+
 Mutability classification per tool:
 
 | Marker | Trigger |
@@ -114,3 +116,5 @@ User backends are explicitly stoppable; the built-in is not. This is so:
 - [architecture.md](architecture.md) — how the built-in plugs into the dispatcher and aggregator.
 - [http-api.md](http-api.md) — full reference for `/api/catalog`, `/api/cursor-rule`, and `/catalog`.
 - [cursor-integration.md](cursor-integration.md) / [vscode-integration.md](vscode-integration.md) — IDE-side workflows that consume the rule generator.
+- [assets.md](assets.md) — the assets framework whose store backs the rule generator's per-backend playbooks.
+- [asset-kinds.md#rule](asset-kinds.md#rule-rules) — the `rule` kind schema that defines what the store contains.
