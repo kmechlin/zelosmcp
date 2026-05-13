@@ -1,5 +1,5 @@
 backend: filesystem
-seed_version: 2
+seed_version: 3
 
 rules:
   sections:
@@ -29,6 +29,65 @@ rules:
         - **Find files.** `filesystem__search_files` accepts glob patterns relative to a starting directory (use `**/*.ext` for recursive matches).
         - **Inspect metadata.** `filesystem__get_file_info` returns size / mtime / permissions without reading content.
         - **Do NOT call** `filesystem__write_file`, `filesystem__edit_file`, `filesystem__move_file`, or `filesystem__create_directory` — they mutate state and the rule is configured for read-only access.
+
+    playbook_compressed_read_only:
+      body: |
+        ### `filesystem` (sandboxed file access) — compressed
+
+        **MANDATORY: filesystem is wire-compressed. Use `filesystem__invoke_tool` to call filesystem tools — do NOT call `filesystem__read_text_file` etc. directly.**
+
+        | User intent | How to call |
+        |---|---|
+        | read this file / show me file X | `filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"...", "head":N})` |
+        | compare / diff / summarize multiple files | `filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |
+        | list files in / browse directory X | `filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` or `tool_name="directory_tree"` |
+        | find files matching pattern X | `filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |
+        | what's the size / mtime / permissions of X | `filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, `tree`, `wc`, `du`, `stat` against workspace paths.
+        - `Read` on a workspace path when `filesystem__invoke_tool` → `read_text_file` would work.
+        - **Calling `filesystem__read_text_file` / `filesystem__list_directory` etc. directly** — they are not exposed at `/mcp` when filesystem is compressed. The aggregator will return "unknown tool".
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>."
+
+        Read-only workflow — do NOT invoke `write_file`, `edit_file`, `move_file`, or `create_directory` via the wrapper:
+
+        - **Read text.** `tool_name="read_text_file"` — use `head` or `tail` for large files. `tool_name="read_multiple_files"` for several files in one round trip when comparing or summarizing.
+        - **Browse structure.** `tool_name="list_directory"` for a flat listing; `tool_name="directory_tree"` for a recursive JSON tree. Pass `excludePatterns` to skip `node_modules`, `.venv`, etc.
+        - **Find files.** `tool_name="search_files"` with `"pattern":"**/*.ext"` — much faster than shell `find`.
+        - **Inspect metadata.** `tool_name="get_file_info"` — size, mtime, permissions without reading content.
+
+    playbook_compressed_read_write:
+      body: |
+        ### `filesystem` (sandboxed file access) — compressed
+
+        **MANDATORY: filesystem is wire-compressed. Use `filesystem__invoke_tool` to call filesystem tools — do NOT call `filesystem__read_text_file` etc. directly.**
+
+        | User intent | How to call |
+        |---|---|
+        | read this file / show me file X | `filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"..."})` |
+        | compare / diff / summarize multiple files | `filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |
+        | list files in / browse directory X | `filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` or `tool_name="directory_tree"` |
+        | find files matching pattern X | `filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |
+        | edit / patch file X | `filesystem__invoke_tool(tool_name="edit_file", tool_input={"path":"...", "edits":[...]})` |
+        | create / move / rename file or directory | `filesystem__invoke_tool(tool_name="create_directory", ...)` / `filesystem__invoke_tool(tool_name="move_file", ...)` |
+        | what's the size / mtime / permissions of X | `filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, `tree`, `wc`, `du`, `stat` against workspace paths.
+        - `Read` on a workspace path when `filesystem__invoke_tool` → `read_text_file` would work.
+        - `sed`, `awk`, or `echo > file` for edits — use `filesystem__invoke_tool` → `edit_file`.
+        - **Calling `filesystem__read_text_file` / `filesystem__edit_file` etc. directly** — they are not exposed at `/mcp` when filesystem is compressed. The aggregator will return "unknown tool".
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>."
+
+        Read-write workflow:
+
+        - **Read text.** `tool_name="read_text_file"` — use `head` or `tail` for large files. `tool_name="read_multiple_files"` for several files in one round trip.
+        - **Browse structure.** `tool_name="list_directory"` (flat) or `tool_name="directory_tree"` (recursive JSON).
+        - **Find files.** `tool_name="search_files"` with `"pattern":"**/*.ext"` — much faster than shell `find`.
+        - **Edit precisely.** Prefer `tool_name="edit_file"` (line-based, returns a git-style diff) over `tool_name="write_file"` (full overwrite, destructive).
+        - **Create / move.** `tool_name="create_directory"` is idempotent; `tool_name="move_file"` fails if the destination exists (safe for renames).
+        - **Inspect metadata.** `tool_name="get_file_info"` — size, mtime, permissions without reading content.
 
     playbook_read_write:
       body: |

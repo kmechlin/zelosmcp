@@ -54,6 +54,8 @@ class BackendRuleAssets:
     backend: str
     playbook_read_only: str = ""
     playbook_read_write: str = ""
+    playbook_compressed_read_only: str = ""
+    playbook_compressed_read_write: str = ""
     compressed_rules_read_only: str = ""
     compressed_rules_read_write: str = ""
     tool_instructions: dict[str, str] = field(default_factory=dict)
@@ -86,6 +88,8 @@ async def load_backend_rule_assets(
         backend=backend,
         playbook_read_only=by_name.get("playbook_read_only", ""),
         playbook_read_write=by_name.get("playbook_read_write", ""),
+        playbook_compressed_read_only=by_name.get("playbook_compressed_read_only", ""),
+        playbook_compressed_read_write=by_name.get("playbook_compressed_read_write", ""),
         compressed_rules_read_only=by_name.get("compressed_rules_read_only", ""),
         compressed_rules_read_write=by_name.get("compressed_rules_read_write", ""),
         tool_instructions=tool_instructions,

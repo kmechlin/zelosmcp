@@ -588,6 +588,107 @@ class TestRenderComprehensiveRule:
         assert "`kubernetes__pods_delete`" in out
 
 
+class TestRenderComprehensiveRuleCompressed:
+    """Integration tests for the compressed-backend rendering path
+    inside ``render_comprehensive_rule``."""
+
+    _MEDIUM = {"level": "medium", "scope": "aggregator"}
+    _MAX = {"level": "max", "scope": "global"}
+
+    def _cat(self, **kwargs) -> dict:
+        """Build a minimal catalog. kwargs maps backend -> list[tool_name]."""
+        return {
+            name: _backend([_tool(t) for t in tools])
+            for name, tools in kwargs.items()
+        }
+
+    def test_wrapper_trio_shown_for_compressed_backend(self):
+        out = render_comprehensive_rule(
+            self._cat(pincher=["architecture", "search"]),
+            compressed_backends={"pincher": self._MEDIUM},
+        )
+        assert "pincher__get_tool_schema" in out
+        assert "pincher__search_tools" in out
+        assert "pincher__invoke_tool" in out
+
+    def test_underlying_tools_not_qualified(self):
+        """Underlying tool names in the sub-list must not be prefixed with
+        `backend__` because they cannot be called directly when compressed."""
+        # Use a synthetic tool name that doesn't appear in any global-block
+        # example text so the assertion is unambiguous.
+        out = render_comprehensive_rule(
+            self._cat(pincher=["xyzzy_unique_tool"]),
+            compressed_backends={"pincher": self._MEDIUM},
+        )
+        # Underlying tool listed as bare name in the sub-list
+        assert "- `xyzzy_unique_tool`" in out
+        # NOT as a qualified direct call — must not appear in the output at all
+        assert "pincher__xyzzy_unique_tool" not in out
+
+    def test_level_max_emits_single_list_tools(self):
+        # Use tool_use=available to suppress the mandatory playbook which
+        # mentions invoke_tool in its text; we want to isolate the per-backend
+        # section behavior.
+        out = render_comprehensive_rule(
+            self._cat(pincher=["architecture"]),
+            compressed_backends={"pincher": self._MAX},
+            tool_use="available",
+        )
+        assert "pincher__list_tools" in out
+        assert "pincher__get_tool_schema" not in out
+        # invoke_tool may appear in sub-section noun but NOT as a wire-level bullet
+        assert "- `pincher__invoke_tool`" not in out
+
+    def test_compressed_rules_block_present_when_compressed_backend_exists(self):
+        out = render_comprehensive_rule(
+            self._cat(pincher=["architecture"]),
+            tool_use="priority",
+            compressed_backends={"pincher": self._MEDIUM},
+        )
+        assert "Compressed backends" in out
+
+    def test_uncompressed_backend_unaffected(self):
+        out = render_comprehensive_rule(
+            self._cat(mybackend=["do_thing"]),
+            compressed_backends={"other_backend": self._MEDIUM},
+        )
+        assert "mybackend__do_thing" in out
+        assert "Compressed backends" not in out
+
+    def test_mandatory_pincher_compressed_playbook_used(self):
+        """When pincher is compressed, the mandatory playbook should use
+        invoke_tool framing, not direct `pincher__architecture` calls."""
+        out = render_comprehensive_rule(
+            self._cat(
+                pincher=["architecture", "search"],
+                filesystem=["read_text_file"],
+            ),
+            tool_use="priority",
+            compressed_backends={"pincher": self._MEDIUM},
+        )
+        # Mandatory section must reference the wrapper, not raw tools
+        assert "pincher__invoke_tool" in out
+        # Mandatory section header still present
+        assert "## Mandatory backend playbook" in out
+
+    def test_mandatory_filesystem_compressed_playbook_used(self):
+        out = render_comprehensive_rule(
+            self._cat(filesystem=["read_text_file"]),
+            tool_use="priority",
+            access="read-write",
+            compressed_backends={"filesystem": self._MEDIUM},
+        )
+        assert "filesystem__invoke_tool" in out
+
+    def test_no_compressed_backends_dict_behaves_normally(self):
+        out = render_comprehensive_rule(
+            self._cat(pincher=["architecture"]),
+            compressed_backends=None,
+        )
+        assert "pincher__architecture" in out
+        assert "Compressed backends" not in out
+
+
 class TestToolRegistry:
     def test_eight_tools_registered(self):
         # Count history: 7 → 8 (`list_compressed_tools`) → 9 (`warm_up_

@@ -1,5 +1,5 @@
 backend: pincher
-seed_version: 2
+seed_version: 3
 
 rules:
   sections:
@@ -38,6 +38,81 @@ rules:
         - **Read persistent knowledge.** `pincher__adr` action=`get`/`list` retrieves architectural decisions, conventions, and gotchas the team has stored across sessions.
         - **Stable IDs.** Symbol IDs follow `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
         - **Do NOT call** `pincher__index` / `pincher__fetch` / `pincher__adr` with action=`set` or `delete` — they mutate state and the rule is configured for read-only access.
+
+    playbook_compressed_read_only:
+      body: |
+        ### `pincher` (codebase intelligence) — compressed
+
+        **MANDATORY: pincher is wire-compressed. Your FIRST pincher call MUST use `pincher__invoke_tool` — do NOT call `pincher__architecture` etc. directly.**
+
+        | User intent (any phrasing) | How to call |
+        |---|---|
+        | summarize / explain / understand this repo, project, or codebase | `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |
+        | summarize / explain the test suite, module, or package | `pincher__invoke_tool(tool_name="architecture", ...)` then `pincher__invoke_tool(tool_name="search", ...)` |
+        | find a function / class / method / symbol named X | `pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |
+        | show me function X / how does X work | `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |
+        | what calls X / what does X call / impact of changing X | `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |
+        | what does my git diff break / blast radius | `pincher__invoke_tool(tool_name="changes", tool_input={})` |
+        | recall stored architectural decisions / conventions | `pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
+        - `Grep` to find a symbol by name (use `pincher__invoke_tool` → `search`).
+        - `Read` on 3+ files in sequence to understand one function (use `pincher__invoke_tool` → `context`).
+        - **Calling `pincher__architecture` / `pincher__search` / etc. directly** — they are not exposed at `/mcp` when pincher is compressed. The aggregator will return "unknown tool".
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
+
+        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical compressed read-only workflow:
+
+        - **Orient first.** `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` — language breakdown, entry points, hotspot functions.
+        - **Scope to the active project.** Pass `project=<basename of git toplevel>` in every `tool_input`. Fall back to `project=user_data_ro` if the per-repo project isn't indexed. Use `pincher__invoke_tool(tool_name="list", tool_input={})` to confirm available project names.
+        - **Find symbols by name.** `pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` — FTS5 BM25; wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters.
+        - **Read source efficiently.** `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` — symbol body + direct imports + callees in one shot (~90% token savings vs reading files).
+        - **Batch lookups.** `pincher__invoke_tool(tool_name="symbols", tool_input={"ids":[...]})` — up to 100 IDs in one round trip.
+        - **Impact analysis.** `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` — CRITICAL=depth 1, HIGH=2, MEDIUM=3.
+        - **Pre-commit safety.** `pincher__invoke_tool(tool_name="changes", tool_input={})` before committing.
+        - **Graph queries.** `pincher__invoke_tool(tool_name="query", tool_input={"pinchql":"MATCH ..."})` — call `pincher__invoke_tool(tool_name="schema")` first.
+        - **Read persistent knowledge.** `pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` — architectural decisions and gotchas stored across sessions.
+        - **Stable IDs.** `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
+        - **Do NOT invoke** `tool_name="index"`, `tool_name="fetch"`, or `tool_name="adr"` with `action=set`/`delete` — they mutate state and the rule is read-only.
+
+    playbook_compressed_read_write:
+      body: |
+        ### `pincher` (codebase intelligence) — compressed
+
+        **MANDATORY: pincher is wire-compressed. Your FIRST pincher call MUST use `pincher__invoke_tool` — do NOT call `pincher__architecture` etc. directly.**
+
+        | User intent (any phrasing) | How to call |
+        |---|---|
+        | summarize / explain / understand this repo, project, or codebase | `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |
+        | summarize / explain the test suite, module, or package | `pincher__invoke_tool(tool_name="architecture", ...)` then `pincher__invoke_tool(tool_name="search", ...)` |
+        | find a function / class / method / symbol named X | `pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |
+        | show me function X / how does X work | `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |
+        | what calls X / what does X call / impact of changing X | `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |
+        | what does my git diff break / blast radius | `pincher__invoke_tool(tool_name="changes", tool_input={})` |
+        | store / recall architectural decisions, conventions, gotchas | `pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` |
+        | ingest external docs (URL → searchable Document) | `pincher__invoke_tool(tool_name="fetch", tool_input={"url":"...", "project":"<name>"})` |
+
+        **Forbidden fallbacks** (rule violation if used for the intents above):
+        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
+        - `Grep` to find a symbol by name (use `pincher__invoke_tool` → `search`).
+        - `Read` on 3+ files in sequence to understand one function (use `pincher__invoke_tool` → `context`).
+        - **Calling `pincher__architecture` / `pincher__search` / etc. directly** — they are not exposed at `/mcp` when pincher is compressed. The aggregator will return "unknown tool".
+        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
+
+        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical compressed read-write workflow:
+
+        - **Orient first.** `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` — language breakdown, entry points, hotspot functions.
+        - **Scope to the active project.** Pass `project=<basename of git toplevel>` in every `tool_input`. Fall back to `project=user_data_ro` if not indexed.
+        - **Index before querying.** `pincher__invoke_tool(tool_name="index", tool_input={"path":"/user_data_ro/<repo>"})` once per project (incremental by default; `force=true` to re-parse everything).
+        - **Find symbols by name.** `pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` — FTS5 BM25; wildcards, phrases, `kind=Function`/`language=Go` filters.
+        - **Read source efficiently.** `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` — symbol body + direct imports + callees in one shot.
+        - **Batch lookups.** `pincher__invoke_tool(tool_name="symbols", tool_input={"ids":[...]})` — up to 100 IDs per call.
+        - **Impact analysis.** `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` — CRITICAL=depth 1, HIGH=2, MEDIUM=3.
+        - **Pre-commit safety.** `pincher__invoke_tool(tool_name="changes", tool_input={})` before committing.
+        - **Graph queries.** `pincher__invoke_tool(tool_name="query", tool_input={"pinchql":"MATCH ..."})` — call `pincher__invoke_tool(tool_name="schema")` first.
+        - **Persist project knowledge.** `pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` — survives across sessions. Ingest external docs with `tool_name="fetch"` and retrieve via `tool_name="search"` with `kind=Document`.
+        - **Stable IDs.** `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
 
     playbook_read_write:
       body: |
