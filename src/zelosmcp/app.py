@@ -29,9 +29,9 @@ from zelosmcp.docs import list_docs, read_doc
 from zelosmcp.manager import ProxyManager
 from zelosmcp.repos import (
     RULE_RELATIVE_PATHS,
+    RULE_TARGET_PATHS,
     discover_repos,
     is_under_scan_root,
-    rule_target,
     to_rw_path,
 )
 from zelosmcp.ui import CATALOG_HTML_TEMPLATE, HTML_TEMPLATE
@@ -213,11 +213,21 @@ def _extract_pincher_indexed_paths(result) -> set[str]:
 
 
 def _prefix_openapi_path(mount: str, path: str) -> str:
-    """Mount an upstream OpenAPI path under the public reverse-proxy prefix."""
+    """Mount an upstream OpenAPI path under the public reverse-proxy prefix.
+
+    Some upstream servers include their own mount prefix in their OpenAPI path
+    keys (e.g. pincher exposes ``/pincher/v1/adr`` when mounted at
+    ``/pincher``).  If the path already starts with *mount* we must not
+    prepend it a second time — strip it first so we re-attach it cleanly.
+    """
     normalized = path if path.startswith("/") else f"/{path}"
     if normalized == "/":
         return mount
-    return f"{mount}{normalized}"
+    # Strip an accidental duplicate mount prefix that some upstreams include.
+    mount_prefix = mount.rstrip("/")
+    if mount_prefix and normalized.startswith(mount_prefix + "/"):
+        normalized = normalized[len(mount_prefix):]
+    return f"{mount_prefix}{normalized}"
 
 
 def _rewrite_component_refs(value: Any, ref_map: dict[str, str]) -> Any:
@@ -786,10 +796,21 @@ def create_app(manager: ProxyManager | None = None):
         description: |
           Aggregates assets from the zelosmcp global backend AND every
           currently-running user backend, then writes the combined set into
-          the target repo.  For `rule`: writes `.cursor/rules/zelosmcp.mdc`
-          (and/or `.github/copilot-instructions.md`).  For `agent`: writes
-          one SKILL.md per agent.  For `hook`: merges into
-          `.cursor/hooks.json`.
+          the target repo.
+
+          For `rule`: writes to IDE targets specified by `targets`
+          (default: both `cursor` and `vscode`).
+          - cursor: `.cursor/rules/zelosmcp.mdc`
+          - vscode: `.github/copilot-instructions.md` +
+                    `.vscode/copilot-instructions.md`
+
+          For `agent`: writes one SKILL.md per agent per active target.
+          For `hook`: merges into per-target hook files.
+
+          The legacy `fmt` field is still accepted as a single-target
+          shortcut (`cursor-mdc` → cursor only, `copilot-instructions`
+          → vscode only) and is overridden by `targets` when both are
+          present.
         tags: [lifecycle]
         requestBody:
           required: true
@@ -800,7 +821,11 @@ def create_app(manager: ProxyManager | None = None):
                 required: [repo]
                 properties:
                   repo: { type: string }
-                  fmt: { type: string }
+                  fmt: { type: string, description: "Legacy single-target format selector. Prefer `targets`." }
+                  targets:
+                    type: array
+                    items: { type: string, enum: [cursor, vscode] }
+                    description: "IDE targets to push. Defaults to [cursor, vscode]."
                   access: { type: string }
                   tool_use: { type: string }
         responses:
@@ -826,9 +851,18 @@ def create_app(manager: ProxyManager | None = None):
         fmt = body.get("fmt", "cursor-mdc")
         access = body.get("access", "read-only")
         tool_use = body.get("tool_use", "priority")
+        style = body.get("style", "always-apply")
+        globs = body.get("globs", "")
+        raw_targets = body.get("targets")
+        targets: list[str] | None = (
+            [t for t in raw_targets if t in ("cursor", "vscode")]
+            if isinstance(raw_targets, list)
+            else None
+        )
 
         from zelosmcp.repos import to_rw_path
-        repo_rw_path = to_rw_path(f"/user_data_ro/{repo_name}")
+        repo_ro_path = f"/user_data_ro/{repo_name}"
+        repo_rw_path = to_rw_path(repo_ro_path)
 
         fs_state = manager.servers.get("filesystem")
         if fs_state is None or not getattr(fs_state, "running", False):
@@ -852,9 +886,13 @@ def create_app(manager: ProxyManager | None = None):
                 manager,
                 kind=kind,
                 repo_rw_path=repo_rw_path,
+                repo_ro_path=repo_ro_path,
                 fmt=fmt,
                 access=access,
                 tool_use=tool_use,
+                style=style,
+                globs=globs,
+                targets=targets,
             )
         except NotPushable as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1910,7 +1948,11 @@ def create_app(manager: ProxyManager | None = None):
               application/json: {}
         """
         refresh = request.query_params.get("refresh") == "1"
-        repos = discover_repos(refresh=refresh)
+        repos = discover_repos(refresh=refresh, store=manager.assets)
+        # Async-seed prefs for repos newly discovered without a DB row.
+        if manager.assets is not None:
+            from zelosmcp.repos import seed_repo_prefs_async
+            await seed_repo_prefs_async(manager.assets, repos)
         indexed: set[str] = set()
         pi = manager.servers.get("pincher")
         if pi is not None and pi.running and pi.client_session is not None:
@@ -1930,19 +1972,24 @@ def create_app(manager: ProxyManager | None = None):
 
     async def api_repo_write_rule(request: Request) -> JSONResponse:
         """
-        summary: Generate a Cursor rule and write it into a discovered repo.
+        summary: Generate rule(s) and write them into a discovered repo.
         description: |
           Builds the rule body via the same code path as
-          ``GET /api/cursor-rule``, then forwards a ``write_file`` call to
-          the running ``filesystem`` MCP backend. The target directory is
-          computed by swapping the read-only mount prefix for the
-          read-write one (e.g. ``/user_data_ro/foo`` ->
-          ``/user_data_rw/foo/.cursor/rules/zelosmcp.mdc``). Filesystem's
-          own sandbox refuses writes outside ``/user_data_rw``, so this
-          handler trusts that gate after a single prefix check.
+          ``GET /api/cursor-rule``, then forwards ``write_file`` calls to
+          the running ``filesystem`` MCP backend.
+
+          The ``targets`` array controls which IDE output files are written:
+          - ``cursor``: ``.cursor/rules/zelosmcp.mdc`` (mdc with frontmatter)
+          - ``vscode``: ``.github/copilot-instructions.md`` +
+                        ``.vscode/copilot-instructions.md`` (plain markdown)
+
+          Defaults to both targets.  The legacy ``format`` field is still
+          accepted (``cursor-mdc`` → cursor only, ``copilot-instructions``
+          → vscode only) and is overridden by ``targets`` when both are
+          present.
         tags: [introspection]
         responses:
-          200: { description: "Rule written. Returns ``{ok, path, bytes}``." }
+          200: { description: "Rules written. Returns ``{ok, files}``." }
           400: { description: Invalid path or unknown enum value. }
           503: { description: filesystem backend not running. }
         """
@@ -1975,6 +2022,16 @@ def create_app(manager: ProxyManager | None = None):
         if globs is not None and not isinstance(globs, str):
             return JSONResponse({"ok": False, "error": "globs must be a string"}, status_code=400)
 
+        # Resolve IDE targets: explicit list overrides legacy fmt.
+        from zelosmcp.framework.assetstore.push import _resolve_targets
+        raw_targets = body.get("targets")
+        targets_list: list[str] | None = (
+            [t for t in raw_targets if t in ("cursor", "vscode")]
+            if isinstance(raw_targets, list)
+            else None
+        )
+        effective_targets = _resolve_targets(targets_list, fmt)
+
         fs = manager.servers.get("filesystem")
         if fs is None or not fs.running or fs.client_session is None:
             return JSONResponse(
@@ -1991,32 +2048,58 @@ def create_app(manager: ProxyManager | None = None):
             if _c.level == "low" or _c.scope not in ("aggregator", "global"):
                 continue
             _push_compressed[_n] = {"level": _c.level, "scope": _c.scope}
-        rule_body = render_comprehensive_rule(
-            catalog,
-            access=access,
-            style=style,
-            globs=globs,
-            fmt=fmt,
-            tool_use=tool_use,
-            mandatory_names=manager.mandatory_names(),
-            compressed_backends=_push_compressed or None,
-        )
 
-        target = rule_target(path, fmt)
-        parent = os.path.dirname(target)
-        try:
-            await fs.client_session.call_tool("create_directory", {"path": parent})
-            await fs.client_session.call_tool(
-                "write_file", {"path": target, "content": rule_body}
+        written_files: list[dict] = []
+
+        # Write one render pass per format needed.
+        for target_name in effective_targets:
+            render_fmt = "cursor-mdc" if target_name == "cursor" else "copilot-instructions"
+            render_style = style if target_name == "cursor" else "always-apply"
+            render_globs = globs if target_name == "cursor" else None
+            rule_body = render_comprehensive_rule(
+                catalog,
+                access=access,
+                style=render_style,
+                globs=render_globs,
+                fmt=render_fmt,
+                tool_use=tool_use,
+                mandatory_names=manager.mandatory_names(),
+                compressed_backends=_push_compressed or None,
             )
-        except Exception as exc:
-            return JSONResponse(
-                {"ok": False, "error": f"filesystem write failed: {exc}"},
-                status_code=500,
-            )
-        return JSONResponse(
-            {"ok": True, "path": target, "bytes": len(rule_body.encode("utf-8"))}
-        )
+
+            for rel_path in RULE_TARGET_PATHS.get(target_name, []):
+                abs_path = os.path.join(to_rw_path(path), rel_path)
+                parent = os.path.dirname(abs_path)
+                try:
+                    await fs.client_session.call_tool("create_directory", {"path": parent})
+                    await fs.client_session.call_tool(
+                        "write_file", {"path": abs_path, "content": rule_body}
+                    )
+                    written_files.append({
+                        "ok": True,
+                        "path": abs_path,
+                        "bytes": len(rule_body.encode("utf-8")),
+                        "target": target_name,
+                    })
+                except Exception as exc:
+                    written_files.append({
+                        "ok": False,
+                        "path": abs_path,
+                        "error": str(exc),
+                        "target": target_name,
+                    })
+
+        all_ok = all(f["ok"] for f in written_files)
+        return JSONResponse({
+            "ok": all_ok,
+            # Legacy compat: single-file case returns flat path/bytes.
+            **(
+                {"path": written_files[0]["path"], "bytes": written_files[0].get("bytes", 0)}
+                if len(written_files) == 1
+                else {}
+            ),
+            "files": written_files,
+        })
 
     async def api_repo_index(request: Request) -> JSONResponse:
         """
@@ -2064,6 +2147,141 @@ def create_app(manager: ProxyManager | None = None):
                 "result": _flatten_call_result(result),
             }
         )
+
+    async def api_repo_prefs_get(request: Request) -> JSONResponse:
+        """
+        summary: Get stored per-project preferences.
+        tags: [introspection]
+        responses:
+          200: { description: "``ProjectPrefs`` dict." }
+          400: { description: Invalid or missing path. }
+          404: { description: No prefs row found for this path. }
+          503: { description: Asset store not initialised. }
+        """
+        if manager.assets is None:
+            return JSONResponse({"error": "asset store not initialised"}, status_code=503)
+        path = request.query_params.get("path", "")
+        if not isinstance(path, str) or not is_under_scan_root(path):
+            return JSONResponse({"error": "path must be under /user_data_ro"}, status_code=400)
+        from zelosmcp.framework.assetstore.prefs import get_prefs
+        prefs = await get_prefs(manager.assets, path)
+        if prefs is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(prefs.to_dict())
+
+    async def api_repo_prefs_put(request: Request) -> JSONResponse:
+        """
+        summary: Upsert per-project preferences.
+        tags: [introspection]
+        responses:
+          200: { description: Persisted prefs dict. }
+          400: { description: Invalid request body. }
+          503: { description: Asset store not initialised. }
+        """
+        if manager.assets is None:
+            return JSONResponse({"error": "asset store not initialised"}, status_code=503)
+        try:
+            body = await request.json()
+        except Exception as exc:
+            return JSONResponse({"error": f"invalid JSON: {exc}"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be an object"}, status_code=400)
+        path = body.get("path", "")
+        if not isinstance(path, str) or not is_under_scan_root(path):
+            return JSONResponse({"error": "path must be under /user_data_ro"}, status_code=400)
+        import os as _os
+        from zelosmcp.framework.assetstore.prefs import ProjectPrefs, get_prefs, upsert_prefs
+        existing = await get_prefs(manager.assets, path)
+        prefs = ProjectPrefs(
+            path_ro=path,
+            name=existing.name if existing else (_os.path.basename(path.rstrip("/")) or path),
+            targets=body.get("targets") or (existing.targets if existing else ["cursor", "vscode"]),
+            tool_use=body.get("tool_use") or (existing.tool_use if existing else "priority"),
+            access=body.get("access") or (existing.access if existing else "read-only"),
+            style=body.get("style") or (existing.style if existing else "always-apply"),
+            globs=body.get("globs", existing.globs if existing else ""),
+            last_pushed_rule=existing.last_pushed_rule if existing else None,
+            last_pushed_agent=existing.last_pushed_agent if existing else None,
+            last_pushed_hook=existing.last_pushed_hook if existing else None,
+        )
+        await upsert_prefs(manager.assets, prefs)
+        return JSONResponse(prefs.to_dict())
+
+    async def api_repos_push_all_with_rules(request: Request) -> JSONResponse:
+        """
+        summary: Push rules + agents + hooks to every repo that already has zelosmcp rules.
+        description: |
+          Iterates every discovered repo with ``has_rule=true``, loads its
+          stored ``project_prefs``, and runs ``push_kind_for_all_running`` for
+          each requested kind (default: rule, agent, hook).  Runs sequentially
+          to avoid overwhelming the filesystem backend.
+        tags: [lifecycle]
+        responses:
+          200: { description: Per-repo push results. }
+          503: { description: Filesystem backend not running or asset store unavailable. }
+        """
+        if manager.assets is None:
+            return JSONResponse({"error": "asset store not initialised"}, status_code=503)
+        fs = manager.servers.get("filesystem")
+        if fs is None or not getattr(fs, "running", False) or fs.client_session is None:
+            return JSONResponse({"error": "filesystem backend not running"}, status_code=503)
+
+        # Parse optional body
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        requested_kinds: list[str] = body.get("kinds") or ["rule", "agent", "hook"]
+
+        from zelosmcp.repos import discover_repos as _discover, seed_repo_prefs_async, to_rw_path
+        from zelosmcp.framework.assetstore.prefs import get_prefs, ProjectPrefs
+        from zelosmcp.framework.assetstore.push import push_kind_for_all_running, NotPushable
+
+        repos = _discover(refresh=True, store=manager.assets)
+        await seed_repo_prefs_async(manager.assets, repos)
+        repos_with_rules = [r for r in repos if r.has_rule]
+
+        results = []
+        for repo in repos_with_rules:
+            prefs = await get_prefs(manager.assets, repo.path_ro)
+            if prefs is None:
+                prefs = ProjectPrefs(path_ro=repo.path_ro, name=repo.name)
+            repo_rw = to_rw_path(repo.path_ro)
+            repo_result: dict = {"repo": repo.name, "path_ro": repo.path_ro, "kinds": {}}
+            for kind in requested_kinds:
+                try:
+                    pushed = await push_kind_for_all_running(
+                        manager.assets,
+                        fs.client_session,
+                        manager,
+                        kind=kind,
+                        repo_rw_path=repo_rw,
+                        repo_ro_path=repo.path_ro,
+                        targets=prefs.targets,
+                        access=prefs.access,
+                        tool_use=prefs.tool_use,
+                        style=prefs.style,
+                        globs=prefs.globs,
+                    )
+                    ok = all(p.ok for p in pushed)
+                    repo_result["kinds"][kind] = {
+                        "ok": ok,
+                        "files": [{"path": p.path, "ok": p.ok, "error": p.error} for p in pushed],
+                    }
+                except NotPushable as exc:
+                    repo_result["kinds"][kind] = {"ok": False, "error": str(exc)}
+                except Exception as exc:
+                    repo_result["kinds"][kind] = {"ok": False, "error": str(exc)}
+            results.append(repo_result)
+
+        overall_ok = all(
+            kd.get("ok", False)
+            for r in results
+            for kd in r["kinds"].values()
+        )
+        return JSONResponse({"ok": overall_ok, "repos": results})
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -2139,6 +2357,9 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/repos", api_repos_list),
             Route("/api/repos/write-rule", api_repo_write_rule, methods=["POST"]),
             Route("/api/repos/index", api_repo_index, methods=["POST"]),
+            Route("/api/repos/prefs", api_repo_prefs_get),
+            Route("/api/repos/prefs", api_repo_prefs_put, methods=["PUT"]),
+            Route("/api/repos/push-all-with-rules", api_repos_push_all_with_rules, methods=["POST"]),
             Route("/api/assets", api_assets_list),
             Route("/api/assets/kinds", api_assets_kinds),
             Route("/api/assets/summary", api_assets_summary),

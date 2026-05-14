@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "targets": [
+    "vscode"
+  ],
+  "tool_use": "priority",
+  "access": "read-write",
+  "style": "always-apply",
+  "globs": "",
+  "last_pushed": {
+    "rule": "2026-05-14T18:20:15Z",
+    "agent": null,
+    "hook": null
+  }
+}

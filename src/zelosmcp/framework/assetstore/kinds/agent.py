@@ -1,6 +1,10 @@
 """``agent`` asset kind.
 
-Agent assets contain Cursor Subagent / Skill definitions.
+Agent assets contain Cursor Subagent / Skill definitions.  When a VS Code
+target is included the generated SKILL.md receives the required YAML
+frontmatter (``name:`` + ``description:``) so VS Code Copilot can discover
+the skill under ``.github/skills/<slug>/SKILL.md`` or
+``.vscode/skills/<slug>/SKILL.md``.
 
 Unified YAML section format (top-level ``agents:`` key):
 
@@ -10,7 +14,7 @@ Unified YAML section format (top-level ``agents:`` key):
       code_reviewer:
         name: "Code Reviewer"
         description: "Reviews diffs for bugs and style issues"
-        targets: [cursor]
+        targets: [cursor, vscode]
         push:
           cursor: ".cursor/skills/code_reviewer/SKILL.md"
         body: |
@@ -20,6 +24,7 @@ Unified YAML section format (top-level ``agents:`` key):
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from zelosmcp.framework.assetstore.registry import (
@@ -34,6 +39,39 @@ logger = logging.getLogger("zelosmcp.assets.agent")
 
 KIND_ID = "agent"
 
+# Maximum field lengths from the VS Code agent-skills spec.
+_SLUG_MAX = 64
+_DESC_MAX = 1024
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────
+
+
+def _slug(name: str) -> str:
+    """Convert *name* to a VS Code-compatible skill slug.
+
+    Only lowercase letters, numbers, and hyphens; max 64 characters.
+    Names with invalid characters cause the skill to silently fail to load
+    in VS Code, so we normalise here rather than reject.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug[:_SLUG_MAX] or "skill"
+
+
+def _vscode_skill_body(row: AssetRow, meta: dict) -> str:
+    """Prepend VS Code SKILL.md frontmatter to *row.body*.
+
+    The frontmatter ``name`` must match the parent directory name and the
+    ``description`` guides Copilot's automatic skill-selection logic.
+    """
+    name = _slug(row.name)
+    desc = (meta.get("description") or row.name)[:_DESC_MAX]
+    frontmatter = f"---\nname: {name}\ndescription: {desc}\n---\n\n"
+    return frontmatter + row.body
+
+
+# ── Validate / render ────────────────────────────────────────────────────
+
 
 def _validate(row: AssetRow) -> None:
     if not row.backend:
@@ -45,8 +83,30 @@ def _validate(row: AssetRow) -> None:
 def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
     meta = row.meta or {}
     push = meta.get("push") or {}
-    cursor_path: str = push.get("cursor") or f".cursor/skills/{row.name}/SKILL.md"
-    return [ProjectFile(rel_path=cursor_path, body=row.body, mode="overwrite")]
+    targets: list[str] = list(meta.get("targets") or ["cursor", "vscode"])
+
+    files: list[ProjectFile] = []
+
+    if "cursor" in targets:
+        cursor_path: str = push.get("cursor") or f".cursor/skills/{row.name}/SKILL.md"
+        files.append(ProjectFile(rel_path=cursor_path, body=row.body, mode="overwrite"))
+
+    if "vscode" in targets:
+        vscode_body = _vscode_skill_body(row, meta)
+        slug = _slug(row.name)
+        github_path: str = (
+            push.get("vscode_github") or f".github/skills/{slug}/SKILL.md"
+        )
+        vscode_path: str = (
+            push.get("vscode_vscode") or f".vscode/skills/{slug}/SKILL.md"
+        )
+        files.append(ProjectFile(rel_path=github_path, body=vscode_body, mode="overwrite"))
+        files.append(ProjectFile(rel_path=vscode_path, body=vscode_body, mode="overwrite"))
+
+    return files
+
+
+# ── Section parser ───────────────────────────────────────────────────────
 
 
 def _parse_section(section: dict, backend: str, seed_version: int) -> list[AssetRow]:
@@ -61,12 +121,15 @@ def _parse_section(section: dict, backend: str, seed_version: int) -> list[Asset
             continue
 
         body = agent_data.get("body") or ""
+        slug = _slug(agent_name)
         meta: dict[str, Any] = {
             "name": agent_data.get("name") or agent_name,
             "description": agent_data.get("description", ""),
-            "targets": agent_data.get("targets") or ["cursor"],
+            "targets": agent_data.get("targets") or ["cursor", "vscode"],
             "push": agent_data.get("push") or {
-                "cursor": f".cursor/skills/{agent_name}/SKILL.md"
+                "cursor": f".cursor/skills/{agent_name}/SKILL.md",
+                "vscode_github": f".github/skills/{slug}/SKILL.md",
+                "vscode_vscode": f".vscode/skills/{slug}/SKILL.md",
             },
         }
 
@@ -109,8 +172,9 @@ AGENT_KIND = AssetKind(
     label="Agents",
     description=(
         "Cursor Subagent / Skill definitions. "
-        "Each agent can be pushed to `.cursor/skills/<name>/SKILL.md` "
-        "in any indexed repo."
+        "Each agent is pushed to `.cursor/skills/<name>/SKILL.md` (Cursor) and "
+        "`.github/skills/<slug>/SKILL.md` + `.vscode/skills/<slug>/SKILL.md` "
+        "(VS Code, with required YAML frontmatter)."
     ),
     parse_section=_parse_section,
     validate=_validate,

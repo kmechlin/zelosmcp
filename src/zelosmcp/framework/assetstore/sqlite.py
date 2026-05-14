@@ -43,6 +43,22 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS assets_kind    ON assets(kind)",
     "CREATE INDEX IF NOT EXISTS assets_backend ON assets(backend)",
     "CREATE INDEX IF NOT EXISTS assets_kind_backend ON assets(kind, backend)",
+    """
+    CREATE TABLE IF NOT EXISTS project_prefs (
+        path_ro           TEXT PRIMARY KEY,
+        name              TEXT NOT NULL DEFAULT '',
+        targets           TEXT NOT NULL DEFAULT '["cursor","vscode"]',
+        tool_use          TEXT NOT NULL DEFAULT 'priority',
+        access            TEXT NOT NULL DEFAULT 'read-only',
+        style             TEXT NOT NULL DEFAULT 'always-apply',
+        globs             TEXT NOT NULL DEFAULT '',
+        last_pushed_rule  REAL,
+        last_pushed_agent REAL,
+        last_pushed_hook  REAL,
+        updated_at        REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS project_prefs_name ON project_prefs(name)",
 ]
 
 

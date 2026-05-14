@@ -53,8 +53,26 @@ async def _fs_read(fs_session: Any, path: str) -> str:
         return ""
 
 
+async def _fs_ensure_dir(fs_session: Any, path: str) -> None:
+    """Create the parent directory of *path* via the filesystem MCP.
+
+    ``filesystem__create_directory`` is idempotent (safe on existing dirs).
+    We call it before every write so that new directories such as
+    ``.github/``, ``.vscode/``, ``.github/skills/<slug>/`` etc. are
+    created automatically — ``write_file`` does not create missing parents.
+    """
+    import os
+    parent = os.path.dirname(path)
+    if parent:
+        try:
+            await fs_session.call_tool("create_directory", {"path": parent})
+        except Exception as exc:
+            logger.debug("push: create_directory %s failed: %s", parent, exc)
+
+
 async def _fs_write(fs_session: Any, path: str, body: str) -> None:
-    """Write via the filesystem MCP."""
+    """Ensure the parent directory exists, then write *path* via the filesystem MCP."""
+    await _fs_ensure_dir(fs_session, path)
     await fs_session.call_tool("write_file", {"path": path, "content": body})
 
 
@@ -172,13 +190,23 @@ async def push_asset(
 
 def _merge_file(kind: str, pf: "Any", existing: str) -> str:
     """Dispatch to the per-kind merge helper for ``mode='merge'`` files."""
-    if kind == "hook" and pf.rel_path.endswith("hooks.json"):
-        from zelosmcp.framework.assetstore.kinds.hook import merge_hooks_json
-        try:
-            new_entry = json.loads(pf.body)
-        except (ValueError, TypeError) as exc:
-            raise ValueError(f"hook push: body is not valid JSON: {exc}") from exc
-        return merge_hooks_json(existing, new_entry)
+    if kind == "hook":
+        rel = pf.rel_path
+        if rel == ".cursor/hooks.json":
+            from zelosmcp.framework.assetstore.kinds.hook import merge_hooks_json
+            try:
+                new_entry = json.loads(pf.body)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"hook push: body is not valid JSON: {exc}") from exc
+            return merge_hooks_json(existing, new_entry)
+        elif rel.endswith("hooks.json") or rel.startswith(".github/hooks/"):
+            # VS Code hook files: .vscode/hooks.json and .github/hooks/zelosmcp.json
+            from zelosmcp.framework.assetstore.kinds.hook import merge_vscode_hooks_json
+            try:
+                new_entry = json.loads(pf.body)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"hook push: body is not valid JSON: {exc}") from exc
+            return merge_vscode_hooks_json(existing, new_entry)
     # Generic fallback: overwrite.
     return pf.body
 
@@ -196,6 +224,10 @@ async def push_kind_for_all_running(
     fmt: str = "cursor-mdc",
     access: str = "read-only",
     tool_use: str = "priority",
+    style: str = "always-apply",
+    globs: str = "",
+    targets: list[str] | None = None,
+    repo_ro_path: str | None = None,
 ) -> list[PushedFile]:
     """Push every asset of the given kind across the zelosmcp global backend
     AND every currently-running user backend.
@@ -208,8 +240,18 @@ async def push_kind_for_all_running(
         ``"rule"``, ``"agent"``, or ``"hook"``.  Extensions are not pushed.
     repo_rw_path:
         Absolute read-write path of the target repo.
-    fmt, access, tool_use:
-        Passed to the rule renderer for ``kind='rule'`` only.
+    fmt, access, tool_use, style, globs:
+        Passed to the rule renderer for ``kind='rule'`` only.  ``fmt`` is
+        kept for backward compatibility; when ``targets`` is also specified
+        it takes precedence.
+    targets:
+        For ``kind='rule'``: list of IDE targets to write.  Supported
+        values are ``"cursor"`` and ``"vscode"``.  Defaults to both.
+        For other kinds, targets are driven by each row's ``meta.targets``
+        field.
+    repo_ro_path:
+        Read-only path of the repo (for prefs DB update + zelosmcp.json
+        write).  Inferred from ``repo_rw_path`` when omitted.
 
     Returns
     -------
@@ -231,30 +273,138 @@ async def push_kind_for_all_running(
 
     if kind == "rule":
         # For rules, use the comprehensive renderer rather than per-row push.
-        return await _push_comprehensive_rule(
+        effective_targets = _resolve_targets(targets, fmt)
+        pushed = await _push_comprehensive_rule(
             store=store,
             fs_session=fs_session,
             manager=manager,
             repo_rw_path=repo_rw_path,
-            fmt=fmt,
             access=access,
             tool_use=tool_use,
             backends=backends_to_push,
+            targets=effective_targets,
+        )
+    else:
+        # For agents and hooks: collect all rows across global + running backends.
+        pushed = []
+        for backend in backends_to_push:
+            p = await push_asset(
+                store,
+                fs_session,
+                kind=kind,
+                backend=backend,
+                name="*",
+                repo_rw_path=repo_rw_path,
+            )
+            pushed.extend(p)
+
+    # After any push: update the prefs DB row and write zelosmcp.json to all
+    # three IDE directories so the next discovery seeds from disk correctly.
+    if store is not None and any(p.ok for p in pushed):
+        await _post_push_update_prefs(
+            store=store,
+            fs_session=fs_session,
+            kind=kind,
+            repo_rw_path=repo_rw_path,
+            repo_ro_path=repo_ro_path,
+            targets=_resolve_targets(targets, fmt),
+            tool_use=tool_use,
+            access=access,
+            style=style,
+            globs=globs,
         )
 
-    # For agents and hooks: collect all rows across global + running backends.
-    pushed: list[PushedFile] = []
-    for backend in backends_to_push:
-        p = await push_asset(
-            store,
-            fs_session,
-            kind=kind,
-            backend=backend,
-            name="*",
-            repo_rw_path=repo_rw_path,
-        )
-        pushed.extend(p)
     return pushed
+
+
+async def _post_push_update_prefs(
+    store: Any,
+    fs_session: Any,
+    *,
+    kind: str,
+    repo_rw_path: str,
+    repo_ro_path: str | None,
+    targets: list[str],
+    tool_use: str,
+    access: str,
+    style: str,
+    globs: str,
+) -> None:
+    """Update the prefs DB + write zelosmcp.json to all three IDE dirs."""
+    import os
+    from zelosmcp.framework.assetstore.prefs import (
+        ProjectPrefs,
+        get_prefs,
+        upsert_prefs,
+        update_last_pushed,
+        prefs_to_json,
+    )
+    from zelosmcp.framework.assetstore.registry import ProjectFile
+
+    # Derive ro path from rw path when not supplied.
+    ro_path = repo_ro_path
+    if ro_path is None:
+        ro_path = repo_rw_path.replace("/user_data_rw/", "/user_data_ro/", 1)
+
+    name = os.path.basename(ro_path.rstrip("/")) or ro_path
+
+    # Load existing prefs to preserve other last_pushed_* values.
+    existing = await get_prefs(store, ro_path)
+    prefs = ProjectPrefs(
+        path_ro=ro_path,
+        name=name,
+        targets=targets,
+        tool_use=tool_use,
+        access=access,
+        style=style,
+        globs=globs,
+        last_pushed_rule=existing.last_pushed_rule if existing else None,
+        last_pushed_agent=existing.last_pushed_agent if existing else None,
+        last_pushed_hook=existing.last_pushed_hook if existing else None,
+    )
+    # Update the just-pushed kind timestamp.
+    import time as _time
+    ts = _time.time()
+    if kind == "rule":
+        prefs.last_pushed_rule = ts
+    elif kind == "agent":
+        prefs.last_pushed_agent = ts
+    elif kind == "hook":
+        prefs.last_pushed_hook = ts
+
+    await upsert_prefs(store, prefs)
+
+    # Write zelosmcp.json to .cursor/, .github/, .vscode/.
+    json_body = prefs_to_json(prefs)
+    for rel in (
+        ".cursor/zelosmcp.json",
+        ".github/zelosmcp.json",
+        ".vscode/zelosmcp.json",
+    ):
+        try:
+            abs_path = _safe_abs_path(repo_rw_path, rel)
+            await _fs_write(fs_session, abs_path, json_body)
+        except Exception as exc:
+            logger.debug("prefs: failed to write %s: %s", rel, exc)
+
+
+def _resolve_targets(
+    targets: list[str] | None,
+    fmt: str,
+) -> list[str]:
+    """Resolve the effective rule targets from explicit ``targets`` or legacy ``fmt``.
+
+    When ``targets`` is provided it is used directly.  Otherwise ``fmt`` is
+    translated: ``"cursor-mdc"`` → ``["cursor"]``,
+    ``"copilot-instructions"`` → ``["vscode"]``, any other value → both.
+    """
+    if targets is not None:
+        return [t for t in targets if t in ("cursor", "vscode")]
+    if fmt == "cursor-mdc":
+        return ["cursor"]
+    if fmt == "copilot-instructions":
+        return ["vscode"]
+    return ["cursor", "vscode"]
 
 
 async def _push_comprehensive_rule(
@@ -263,49 +413,63 @@ async def _push_comprehensive_rule(
     manager: Any,
     *,
     repo_rw_path: str,
-    fmt: str,
     access: str,
     tool_use: str,
     backends: list[str],
+    targets: list[str],
 ) -> list[PushedFile]:
-    """Render a comprehensive rule document and write it to the repo."""
+    """Render comprehensive rule document(s) and write them to the repo.
+
+    One render pass per distinct format is performed so the catalog is
+    built only once per call.  For ``"cursor"`` target the ``cursor-mdc``
+    format is used; for ``"vscode"`` the ``copilot-instructions`` format is
+    used and the body is written to both ``.github/copilot-instructions.md``
+    and ``.vscode/copilot-instructions.md``.
+    """
     from zelosmcp.builtin import (
         collect_backend_full_catalog,
         render_comprehensive_rule,
     )
     from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
+    from zelosmcp.framework.assetstore.registry import ProjectFile
 
     catalog = await collect_backend_full_catalog(manager, skip_self=False)
     rule_assets = await load_all_rule_assets(store, list(catalog.keys()) + ["zelosmcp"])
 
-    body = render_comprehensive_rule(
-        catalog,
-        access=access,
-        fmt=fmt,
-        tool_use=tool_use,
-        rule_assets=rule_assets,
-    )
+    project_files: list[ProjectFile] = []
 
-    ctx = RepoCtx(
-        name=repo_rw_path.rstrip("/").rsplit("/", 1)[-1],
-        ro_path=repo_rw_path.replace("/user_data_rw/", "/user_data_ro/", 1),
-        rw_path=repo_rw_path,
-    )
-
-    # Determine output paths based on fmt.
-    from zelosmcp.framework.assetstore.registry import ProjectFile
-    if fmt == "copilot-instructions":
-        project_files = [ProjectFile(
-            rel_path=".github/copilot-instructions.md",
-            body=body,
-            mode="overwrite",
-        )]
-    else:
-        project_files = [ProjectFile(
+    if "cursor" in targets:
+        cursor_body = render_comprehensive_rule(
+            catalog,
+            access=access,
+            fmt="cursor-mdc",
+            tool_use=tool_use,
+            rule_assets=rule_assets,
+        )
+        project_files.append(ProjectFile(
             rel_path=".cursor/rules/zelosmcp.mdc",
-            body=body,
+            body=cursor_body,
             mode="overwrite",
-        )]
+        ))
+
+    if "vscode" in targets:
+        vscode_body = render_comprehensive_rule(
+            catalog,
+            access=access,
+            fmt="copilot-instructions",
+            tool_use=tool_use,
+            rule_assets=rule_assets,
+        )
+        project_files.append(ProjectFile(
+            rel_path=".github/copilot-instructions.md",
+            body=vscode_body,
+            mode="overwrite",
+        ))
+        project_files.append(ProjectFile(
+            rel_path=".vscode/copilot-instructions.md",
+            body=vscode_body,
+            mode="overwrite",
+        ))
 
     pushed: list[PushedFile] = []
     for pf in project_files:

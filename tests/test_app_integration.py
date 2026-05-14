@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from zelosmcp.app import create_app
+from zelosmcp.app import create_app, _prefix_openapi_path
 from zelosmcp.manager import ProxyManager
 from tests.conftest import (
     fake_stdio_client,
@@ -235,6 +235,88 @@ class TestOpenAPI:
         assert "alpha_SearchRequest" in spec["components"]["schemas"]
         assert captured["url"] == "http://upstream.test/v1/openapi.json"
         assert captured["headers"]["x-forwarded-prefix"] == "/alpha"
+
+    # ── _prefix_openapi_path unit tests ──────────────────────────────────
+
+    def test_prefix_plain_path(self):
+        """Standard case: upstream path has no mount prefix yet."""
+        assert _prefix_openapi_path("/pincher", "/v1/adr") == "/pincher/v1/adr"
+
+    def test_prefix_strips_duplicate_mount(self):
+        """Upstream that self-reports its mount prefix must not double it."""
+        assert _prefix_openapi_path("/pincher", "/pincher/v1/adr") == "/pincher/v1/adr"
+
+    def test_prefix_strips_duplicate_mount_nested(self):
+        assert _prefix_openapi_path("/alpha", "/alpha/v1/search") == "/alpha/v1/search"
+
+    def test_prefix_root_path(self):
+        assert _prefix_openapi_path("/alpha", "/") == "/alpha"
+
+    def test_prefix_exact_mount_path(self):
+        # Upstream exposes its root as the mount path itself.
+        assert _prefix_openapi_path("/alpha", "/alpha") == "/alpha/alpha"
+
+    def test_prefix_does_not_strip_partial_overlap(self):
+        # '/alphabeta' should NOT strip '/alpha'.
+        assert _prefix_openapi_path("/alpha", "/alphabeta/v1") == "/alpha/alphabeta/v1"
+
+    def test_prefix_no_leading_slash_in_path(self):
+        assert _prefix_openapi_path("/alpha", "v1/items") == "/alpha/v1/items"
+
+    # ── integration: duplicate-mount path regression ──────────────────────
+
+    @pytest.mark.asyncio
+    async def test_openapi_does_not_double_prefix_when_upstream_includes_mount(self):
+        """Regression test: upstream returning /pincher/v1/... paths must not
+        become /pincher/pincher/v1/... in the merged spec."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "openapi": "3.0.3",
+                    "info": {"title": "Pincher", "version": "1.0.0"},
+                    "paths": {
+                        # Upstream self-reports its mount prefix in path keys.
+                        "/pincher/v1/adr": {
+                            "post": {
+                                "summary": "Store ADR",
+                                "responses": {"200": {"description": "OK"}},
+                            }
+                        }
+                    },
+                },
+            )
+
+        cfg = {
+            "mcpServers": {
+                "pincher": {
+                    "command": "echo",
+                    "args": ["p"],
+                    "reverseProxy": {
+                        "mount": "/pincher",
+                        "upstream": "http://pincher.test",
+                        "openapi": {"path": "/v1/openapi.json"},
+                    },
+                },
+            }
+        }
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=cfg)
+                    r = await c.get("/openapi.json")
+
+        assert r.status_code == 200
+        spec = r.json()
+        paths = spec["paths"]
+        # Must appear exactly once under the correct key.
+        assert "/pincher/v1/adr" in paths
+        # Must NOT be doubled.
+        assert "/pincher/pincher/v1/adr" not in paths
 
     @pytest.mark.asyncio
     async def test_openapi_json_survives_upstream_contract_failure(self):
