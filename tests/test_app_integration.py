@@ -1279,7 +1279,7 @@ class TestReverseProxy:
             # Skip _apply_patches so start_all is never called — the spec is
             # injected directly into _specs but no ProxyState exists.
             from zelosmcp.config import parse_config
-            specs, _ = parse_config(_PROXY_CONFIG)
+            specs, _, _ = parse_config(_PROXY_CONFIG)
             manager._specs = {s.name: s for s in specs}
 
             async with _client(app) as c:

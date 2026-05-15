@@ -387,6 +387,94 @@ async def _post_push_update_prefs(
         except Exception as exc:
             logger.debug("prefs: failed to write %s: %s", rel, exc)
 
+    # When the VS Code target is active, also write .vscode/mcp.json with the
+    # aggregator MCP server entry so VS Code Copilot picks up zelosMCP via
+    # the single /mcp endpoint without further setup.
+    if "vscode" in targets:
+        try:
+            mcp_body = _build_vscode_mcp_json()
+            abs_path = _safe_abs_path(repo_rw_path, ".vscode/mcp.json")
+            existing = await _fs_read(fs_session, abs_path)
+            merged = _merge_vscode_mcp_json(existing, mcp_body)
+            await _fs_write(fs_session, abs_path, merged)
+        except Exception as exc:
+            logger.debug("vscode mcp.json write failed: %s", exc)
+
+
+# ── VS Code mcp.json helpers ─────────────────────────────────────────────
+
+
+_DEFAULT_AGGREGATOR_URL = "http://localhost:8000/mcp"
+_AGGREGATOR_ENTRY_NAME = "zelosmcp-aggregate"
+
+
+def _aggregator_url() -> str:
+    """Return the public URL of the zelosMCP aggregator endpoint.
+
+    Honours the ``ZELOSMCP_PUBLIC_URL`` env var (e.g. when the proxy runs
+    behind a reverse proxy on a non-default host/port).  Falls back to the
+    hardcoded ``http://localhost:8000/mcp`` default that the rest of the
+    codebase already assumes.
+    """
+    import os
+    base = os.environ.get("ZELOSMCP_PUBLIC_URL")
+    if base:
+        return base.rstrip("/") + "/mcp"
+    return _DEFAULT_AGGREGATOR_URL
+
+
+def _build_vscode_mcp_json() -> str:
+    """Render the VS Code-flavoured ``mcp.json`` body for the aggregator.
+
+    VS Code's MCP config uses the top-level ``servers`` key (Cursor uses
+    ``mcpServers``) and ``type: "http"`` for streamable HTTP servers
+    (Cursor uses ``streamable-http``).  See
+    https://code.visualstudio.com/docs/copilot/customization/mcp-servers
+    """
+    payload = {
+        "servers": {
+            _AGGREGATOR_ENTRY_NAME: {
+                "type": "http",
+                "url": _aggregator_url(),
+            },
+        },
+    }
+    return json.dumps(payload, indent=2) + "\n"
+
+
+def _merge_vscode_mcp_json(existing_text: str, new_body: str) -> str:
+    """Merge our aggregator entry into a (possibly empty) VS Code mcp.json.
+
+    Preserves any user-added entries under ``servers`` and only overwrites
+    the single ``zelosmcp-aggregate`` key.  Falls back to overwriting the
+    whole file if the existing content can't be parsed as JSON (corrupt /
+    empty / missing).
+    """
+    try:
+        new_payload = json.loads(new_body)
+    except (ValueError, TypeError):
+        return new_body
+
+    if not existing_text.strip():
+        return json.dumps(new_payload, indent=2) + "\n"
+
+    try:
+        data = json.loads(existing_text)
+    except (ValueError, TypeError):
+        return json.dumps(new_payload, indent=2) + "\n"
+
+    if not isinstance(data, dict):
+        return json.dumps(new_payload, indent=2) + "\n"
+
+    servers = data.get("servers")
+    if not isinstance(servers, dict):
+        servers = {}
+    new_servers = new_payload.get("servers", {})
+    for name, spec in new_servers.items():
+        servers[name] = spec
+    data["servers"] = servers
+    return json.dumps(data, indent=2) + "\n"
+
 
 def _resolve_targets(
     targets: list[str] | None,

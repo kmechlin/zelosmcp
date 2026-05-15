@@ -1,4 +1,10 @@
 {
+  "builtin": {
+    "response_format": "compact_json",
+    "compress": {
+      "level": "low"
+    }
+  },
   "mcpServers": {
     "pincher": {
       "command": "pincher",

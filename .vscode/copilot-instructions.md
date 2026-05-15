@@ -3,7 +3,7 @@
 
 Generated from the zelosMCP aggregator at `http://localhost:8000/mcp`. Every tool below is reachable as `<server>__<tool>` (double underscore) on that single Cursor entry. Prefer these over shelling out — they return structured data and keep paths inside the container's `/user_data_rw` (read-write) and `/user_data_ro` (kernel-enforced read-only) mounts.
 
-Currently-loaded backends: `kubernetes`, `docker`, `pincher`, `filesystem`, `github`.
+Currently-loaded backends: `kubernetes`, `pincher`, `filesystem`, `github`.
 
 ## Access mode: READ-WRITE
 
@@ -187,87 +187,6 @@ Tool, prompt, and resource names at the aggregate `/mcp` are `<server>__<origina
   Get or update the scale of a Kubernetes resource in the current cluster by providing its apiVersion, kind, name, and optionally the namespace. If the scale is set in the tool call, the scale will be updated to that value. Always returns the current scale of the resource
   `kubernetes__resources_scale` `(apiVersion, kind, name, context?, namespace?, scale?)` [destructive]
     Get or update the scale of a Kubernetes resource in the current cluster by providing its apiVersion, kind, name, and optionally the namespace. If the scale is set in the tool call, the scale will be updated to that value. Always returns the current scale of the resource
-
-## `docker`
-
-`docker` exposes 19 tools via the aggregator at `/mcp` (namespaced `docker__<tool>`). Prefer these over equivalent shell commands.
-
-- `docker__list_containers` `(all?, filters?)` [?]
-  List all Docker containers
-  `docker__list_containers` `(all?, filters?)` [?]
-    List all Docker containers
-- `docker__create_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-  Create a new Docker container
-  `docker__create_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-    Create a new Docker container
-- `docker__run_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-  Run an image in a new Docker container (preferred over `create_container` + `start_container`)
-  `docker__run_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-    Run an image in a new Docker container (preferred over `create_container` + `start_container`)
-- `docker__recreate_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?, container_id?)` [?]
-  Stop and remove a container, then run a new container. Fails if the container does not exist.
-  `docker__recreate_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?, container_id?)` [?]
-    Stop and remove a container, then run a new container. Fails if the container does not exist.
-- `docker__start_container` `(container_id)` [mutates]
-  Start a Docker container
-  `docker__start_container` `(container_id)` [mutates]
-    Start a Docker container
-- `docker__fetch_container_logs` `(container_id, tail?)` [?]
-  Fetch logs for a Docker container
-  `docker__fetch_container_logs` `(container_id, tail?)` [?]
-    Fetch logs for a Docker container
-- `docker__stop_container` `(container_id)` [mutates]
-  Stop a Docker container
-  `docker__stop_container` `(container_id)` [mutates]
-    Stop a Docker container
-- `docker__remove_container` `(container_id, force?)` [mutates]
-  Remove a Docker container
-  `docker__remove_container` `(container_id, force?)` [mutates]
-    Remove a Docker container
-- `docker__list_images` `(name?, all?, filters?)` [?]
-  List Docker images
-  `docker__list_images` `(name?, all?, filters?)` [?]
-    List Docker images
-- `docker__pull_image` `(repository, tag?)` [mutates]
-  Pull a Docker image
-  `docker__pull_image` `(repository, tag?)` [mutates]
-    Pull a Docker image
-- `docker__push_image` `(repository, tag?)` [mutates]
-  Push a Docker image
-  `docker__push_image` `(repository, tag?)` [mutates]
-    Push a Docker image
-- `docker__build_image` `(path, tag, dockerfile?)` [mutates]
-  Build a Docker image from a Dockerfile
-  `docker__build_image` `(path, tag, dockerfile?)` [mutates]
-    Build a Docker image from a Dockerfile
-- `docker__remove_image` `(image, force?)` [mutates]
-  Remove a Docker image
-  `docker__remove_image` `(image, force?)` [mutates]
-    Remove a Docker image
-- `docker__list_networks` `(filters?)` [?]
-  List Docker networks
-  `docker__list_networks` `(filters?)` [?]
-    List Docker networks
-- `docker__create_network` `(name, driver?, internal?, labels?)` [mutates]
-  Create a Docker network
-  `docker__create_network` `(name, driver?, internal?, labels?)` [mutates]
-    Create a Docker network
-- `docker__remove_network` `(network_id)` [mutates]
-  Remove a Docker network
-  `docker__remove_network` `(network_id)` [mutates]
-    Remove a Docker network
-- `docker__list_volumes` `(...)` [?]
-  List Docker volumes
-  `docker__list_volumes` `(...)` [?]
-    List Docker volumes
-- `docker__create_volume` `(name, driver?, labels?)` [mutates]
-  Create a Docker volume
-  `docker__create_volume` `(name, driver?, labels?)` [mutates]
-    Create a Docker volume
-- `docker__remove_volume` `(volume_name, force?)` [mutates]
-  Remove a Docker volume
-  `docker__remove_volume` `(volume_name, force?)` [mutates]
-    Remove a Docker volume
 
 ## `pincher`
 

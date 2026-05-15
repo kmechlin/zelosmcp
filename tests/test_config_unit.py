@@ -35,7 +35,7 @@ class TestParseStructure:
 
 class TestStdio:
     def test_basic_command(self):
-        specs, primary = parse_config({
+        specs, primary, _ = parse_config({
             "mcpServers": {
                 "fs": {"command": "npx", "args": ["-y", "@m/fs"]},
             }
@@ -51,7 +51,7 @@ class TestStdio:
         assert s.cwd is None
 
     def test_command_with_env_and_cwd(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "fs": {
                     "command": "uvx",
@@ -84,7 +84,7 @@ class TestStdio:
 
 class TestRemote:
     def test_sse(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "linear": {"type": "sse", "url": "https://x/sse",
                            "headers": {"Authorization": "Bearer t"}}
@@ -96,7 +96,7 @@ class TestRemote:
         assert s.headers == {"Authorization": "Bearer t"}
 
     def test_streamable_http(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "gh": {"type": "streamable-http", "url": "https://x/mcp"}
             }
@@ -139,7 +139,7 @@ class TestNames:
 
 class TestPrimary:
     def test_primary_resolved(self):
-        specs, primary = parse_config({
+        specs, primary, _ = parse_config({
             "primaryMCP": "b",
             "mcpServers": {
                 "a": {"command": "echo"},
@@ -153,7 +153,7 @@ class TestPrimary:
         # primaryMCP is deprecated — unknown values no longer raise (the field
         # is informational only; ProxyManager.start_all logs a deprecation
         # warning when it sees a value).
-        specs, primary = parse_config({
+        specs, primary, _ = parse_config({
             "primaryMCP": "ghost",
             "mcpServers": {"a": {"command": "echo"}},
         })
@@ -203,7 +203,7 @@ def _stdio_with_proxy(rp: dict) -> dict:
 
 class TestReverseProxy:
     def test_minimal_block_parses(self):
-        specs, _ = parse_config(_stdio_with_proxy({
+        specs, _, _ = parse_config(_stdio_with_proxy({
             "mount": "/alpha",
             "upstream": "http://127.0.0.1:8080",
         }))
@@ -216,7 +216,7 @@ class TestReverseProxy:
         assert rp.auth_bearer is None
 
     def test_full_block_parses(self):
-        specs, _ = parse_config(_stdio_with_proxy({
+        specs, _, _ = parse_config(_stdio_with_proxy({
             "mount": "/alpha",
             "upstream": "https://upstream.example.com:9443",
             "stripPrefix": True,
@@ -234,7 +234,7 @@ class TestReverseProxy:
         assert rp.to_status()["openapi"] == {"path": "/v1/openapi.json"}
 
     def test_remote_backend_can_have_proxy(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "alpha": {
                     "type": "streamable-http",
@@ -249,7 +249,7 @@ class TestReverseProxy:
         assert specs[0].reverse_proxy is not None
 
     def test_missing_proxy_field_is_optional(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {"alpha": {"command": "echo"}},
         })
         assert specs[0].reverse_proxy is None
@@ -319,7 +319,7 @@ class TestReverseProxy:
 
     def test_auth_bearer_env_interpolation(self, monkeypatch):
         monkeypatch.setenv("PINCHER_HTTP_KEY", "s3cret")
-        specs, _ = parse_config(_stdio_with_proxy({
+        specs, _, _ = parse_config(_stdio_with_proxy({
             "mount": "/alpha",
             "upstream": "http://x:8080",
             "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
@@ -386,7 +386,7 @@ class TestReverseProxy:
 
     def test_sibling_mounts_allowed(self):
         # `/foo` and `/foobar` look prefix-y but split on segment boundaries.
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "a": {
                     "command": "echo",
@@ -461,7 +461,7 @@ class TestCompressSpec:
         # Omitting the block is the recommended path: every backend
         # gets `medium` compression at the aggregator unless it opts
         # out explicitly.
-        specs, _ = parse_config(_stdio_with_compress(_OMITTED))
+        specs, _, _ = parse_config(_stdio_with_compress(_OMITTED))
         c = specs[0].compress
         assert c is not None
         assert c.level == "medium"
@@ -469,17 +469,17 @@ class TestCompressSpec:
 
     def test_explicit_null_disables_compress(self):
         # `compress: null` is the documented opt-out form.
-        specs, _ = parse_config(_stdio_with_compress(None))
+        specs, _, _ = parse_config(_stdio_with_compress(None))
         assert specs[0].compress is None
 
     def test_explicit_false_disables_compress(self):
         # JSON booleans are accepted as a convenience opt-out form.
-        specs, _ = parse_config(_stdio_with_compress(False))
+        specs, _, _ = parse_config(_stdio_with_compress(False))
         assert specs[0].compress is None
 
     def test_empty_block_uses_defaults(self):
         # `compress: {}` is equivalent to omitting the block.
-        specs, _ = parse_config(_stdio_with_compress({}))
+        specs, _, _ = parse_config(_stdio_with_compress({}))
         c = specs[0].compress
         assert c is not None
         assert c.level == "medium"
@@ -487,16 +487,16 @@ class TestCompressSpec:
 
     @pytest.mark.parametrize("level", sorted(COMPRESS_LEVELS))
     def test_each_level_accepted(self, level):
-        specs, _ = parse_config(_stdio_with_compress({"level": level}))
+        specs, _, _ = parse_config(_stdio_with_compress({"level": level}))
         assert specs[0].compress.level == level
 
     @pytest.mark.parametrize("scope", sorted(COMPRESS_SCOPES))
     def test_each_scope_accepted(self, scope):
-        specs, _ = parse_config(_stdio_with_compress({"scope": scope}))
+        specs, _, _ = parse_config(_stdio_with_compress({"scope": scope}))
         assert specs[0].compress.scope == scope
 
     def test_full_block_round_trips(self):
-        specs, _ = parse_config(
+        specs, _, _ = parse_config(
             _stdio_with_compress({"level": "high", "scope": "global"})
         )
         c = specs[0].compress
@@ -517,7 +517,7 @@ class TestCompressSpec:
             parse_config(_stdio_with_compress("medium"))  # type: ignore[arg-type]
 
     def test_remote_backend_can_have_compress(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "alpha": {
                     "type": "streamable-http",
@@ -547,7 +547,7 @@ class TestPassthrough:
     """
 
     def test_basic_passthrough_http(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -571,7 +571,7 @@ class TestPassthrough:
         assert s.compress.scope == "aggregator"
 
     def test_passthrough_with_static_bearer(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -584,7 +584,7 @@ class TestPassthrough:
         assert specs[0].auth_bearer == "ghp_static"
 
     def test_passthrough_pool_block(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -603,7 +603,7 @@ class TestPassthrough:
         assert pool.idle_ttl_seconds == 60
 
     def test_passthrough_pool_defaults(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -621,7 +621,7 @@ class TestPassthrough:
     def test_passthrough_with_explicit_compress_catalog_allowed(self):
         # `scope=catalog` is allowed but degrades to a no-op (no live
         # session means no tools to render in the static catalog).
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -639,7 +639,7 @@ class TestPassthrough:
         # setting it should round-trip cleanly without raising. The
         # aggregator's tools/list emits wrappers; first invocation drives
         # OAuth via the PassthroughChallengeError path.
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -672,7 +672,7 @@ class TestPassthrough:
     def test_passthrough_with_explicit_compress_null_allowed(self):
         # `compress: null` is the documented opt-out form; explicit
         # disabling combined with passthrough should round-trip cleanly.
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -799,7 +799,7 @@ class TestPassthrough:
 
     def test_top_level_auth_envvar_interpolation(self, monkeypatch):
         monkeypatch.setenv("MY_TEST_TOKEN", "secret-xyz")
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -848,3 +848,99 @@ class TestPassthrough:
         assert "passthrough" not in d
         assert "auth" not in d
         assert "passthroughPool" not in d
+
+
+# ── BuiltinConfig ──────────────────────────────────────────────────
+
+
+class TestBuiltinConfig:
+    """Tests for the optional top-level ``"builtin"`` config key."""
+
+    def test_absent_key_defaults_to_raw(self):
+        """No ``builtin`` key → response_format='raw', no compress."""
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert bc.response_format == "raw"
+        assert bc.compress is None
+
+    def test_empty_object_defaults_to_raw(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {},
+        })
+        assert bc.response_format == "raw"
+        assert bc.compress is None
+
+    def test_response_format_toon(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "toon"},
+        })
+        assert bc.response_format == "toon"
+
+    def test_response_format_compact_json(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "compact_json"},
+        })
+        assert bc.response_format == "compact_json"
+
+    def test_invalid_response_format_rejected(self):
+        with pytest.raises(ConfigError, match="response_format"):
+            parse_config({
+                "mcpServers": {"x": {"command": "echo"}},
+                "builtin": {"response_format": "xml"},
+            })
+
+    def test_builtin_not_dict_rejected(self):
+        with pytest.raises(ConfigError, match="builtin"):
+            parse_config({
+                "mcpServers": {"x": {"command": "echo"}},
+                "builtin": "toon",
+            })
+
+    def test_compress_block(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {
+                "compress": {"level": "high", "scope": "global"},
+            },
+        })
+        assert bc.compress is not None
+        assert bc.compress.level == "high"
+        assert bc.compress.scope == "global"
+
+    def test_to_status_empty_when_defaults(self):
+        from zelosmcp.config import BuiltinConfig
+        bc = BuiltinConfig()
+        assert bc.to_status() == {}
+
+    def test_to_status_shows_non_defaults(self):
+        from zelosmcp.config import BuiltinConfig, CompressSpec
+        bc = BuiltinConfig(
+            response_format="toon",
+            compress=CompressSpec(level="high"),
+        )
+        s = bc.to_status()
+        assert s["response_format"] == "toon"
+        assert "compress" in s
+
+    def test_env_var_override(self, monkeypatch):
+        monkeypatch.setenv(
+            "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "compact_json"
+        )
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert bc.response_format == "compact_json"
+
+    def test_explicit_config_beats_env_var(self, monkeypatch):
+        monkeypatch.setenv(
+            "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "compact_json"
+        )
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "toon"},
+        })
+        assert bc.response_format == "toon"

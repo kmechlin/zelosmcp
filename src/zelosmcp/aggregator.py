@@ -36,6 +36,7 @@ from zelosmcp.passthrough_pool import (
     inbound_authorization,
     signal_challenge,
 )
+from zelosmcp.response import transform_response
 from zelosmcp.savings import measure_call
 
 if TYPE_CHECKING:
@@ -216,7 +217,17 @@ class Aggregator:
                             self._log(f"{state.name} list_tools failed: {r}")
                         continue
                     spec = self.manager._specs.get(state.name)
-                    compress = spec.compress if spec is not None else None
+                    _bcfg = getattr(
+                        self.manager, "_builtin_config", None
+                    )
+                    compress = (
+                        spec.compress if spec is not None
+                        else (
+                            _bcfg.compress
+                            if _bcfg is not None
+                            else None
+                        )
+                    )
                     backend_tools = list(getattr(r, "tools", []) or [])
                     # Cache the full catalog whenever compression is configured
                     # so docs/discovery surfaces (`zelosmcp__list_compressed_tools`,
@@ -376,6 +387,21 @@ class Aggregator:
             backend, original = _split_qualified(qualified_name)
             recorder = getattr(self.manager, "savings", None)
 
+            # Resolve per-backend response format.
+            _spec = self.manager._specs.get(backend) if backend else None
+            _builtin_cfg = getattr(
+                self.manager, "_builtin_config", None
+            )
+            _resp_fmt = (
+                _spec.response_format
+                if _spec is not None
+                else (
+                    _builtin_cfg.response_format
+                    if _builtin_cfg is not None
+                    else "raw"
+                )
+            )
+
             # Compression-wrapper interception. Two trigger conditions:
             #   (a) Session-bound backend in compressed_catalog (legacy
             #       behaviour) AND the call name matches a wrapper.
@@ -385,10 +411,21 @@ class Aggregator:
             #       whole point of the lazy-OAuth-on-invoke design.
             if backend:
                 spec = self.manager._specs.get(backend)
+                _bcfg2 = getattr(
+                    self.manager, "_builtin_config", None
+                )
                 state = self.manager.servers.get(backend)
+                _comp = (
+                    spec.compress
+                    if spec is not None
+                    else (
+                        _bcfg2.compress
+                        if _bcfg2 is not None
+                        else None
+                    )
+                )
                 level = (
-                    spec.compress.level
-                    if spec is not None and spec.compress is not None
+                    _comp.level if _comp is not None
                     else "medium"
                 )
                 is_wrapper_call = original in wrapper_tool_names(level)
@@ -534,11 +571,21 @@ class Aggregator:
                             isError=True,
                             meta=None,
                         )
+                    content = list(r.content)
+                    meta = getattr(r, "meta", None)
+                    meta_dict = (
+                        dict(meta) if meta else None
+                    )
+                    content, meta_dict = transform_response(
+                        content,
+                        response_format=_resp_fmt,
+                        meta=meta_dict,
+                    )
                     return CallToolResult(
-                        content=r.content,
+                        content=content,
                         structuredContent=getattr(r, "structuredContent", None),
                         isError=bool(r.isError),
-                        meta=getattr(r, "meta", None),
+                        meta=meta_dict,
                     )
 
                 return await measure_call(
@@ -558,20 +605,21 @@ class Aggregator:
 
             async def _dispatch() -> CallToolResult:
                 r = await state.client_session.call_tool(original, arguments)
-                # Pass through both content and structuredContent unchanged.
-                # The MCP SDK's lowlevel server validates: if the advertised
-                # tool has an outputSchema and the response's
-                # structuredContent is None, it replaces the response with a
-                # validation error. Returning only `r.content` would drop
-                # the backend's structuredContent (when set) and trip that
-                # validation for any tool with a declared outputSchema (e.g.
-                # filesystem, anything using FastMCP/SDK >=1.13 with
-                # auto-generated schemas).
+                content = list(r.content)
+                meta = getattr(r, "meta", None)
+                meta_dict = (
+                    dict(meta) if meta else None
+                )
+                content, meta_dict = transform_response(
+                    content,
+                    response_format=_resp_fmt,
+                    meta=meta_dict,
+                )
                 return CallToolResult(
-                    content=r.content,
+                    content=content,
                     structuredContent=getattr(r, "structuredContent", None),
                     isError=bool(r.isError),
-                    meta=getattr(r, "meta", None),
+                    meta=meta_dict,
                 )
 
             return await measure_call(

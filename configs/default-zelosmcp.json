@@ -15,6 +15,12 @@
     "  make load ZELOSMCP_CONFIG=configs/example-passthrough-zelosmcp.json \\",
     "             ZELOSMCP_AUTH_PROVIDERS_FILE=configs/example-auth-providers.json"
   ],
+  "builtin": {
+    "response_format": "compact_json",
+    "compress": {
+      "level": "low"
+    }
+  },
   "mcpServers": {
     "kubernetes": {
       "command": "npx",
