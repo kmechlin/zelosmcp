@@ -1,156 +1,7 @@
 backend: pincher
-seed_version: 3
+seed_version: 4
 
 rules:
-  sections:
-    playbook_read_only:
-      body: |
-        ### `pincher` (codebase intelligence)
-
-        **MANDATORY: For any of the following user intents, your FIRST tool call MUST be a `pincher__*` tool — before any `Shell`, `Read`, or `Grep`:**
-
-        | User intent (any phrasing) | Required tool |
-        |---|---|
-        | summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |
-        | summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |
-        | find a function / class / method / symbol named X | `pincher__search` |
-        | show me function X / how does X work | `pincher__context` |
-        | what calls X / what does X call / impact of changing X | `pincher__trace` |
-        | what does my git diff break / blast radius | `pincher__changes` |
-        | recall stored architectural decisions / conventions | `pincher__adr` action=`get` or `list` |
-
-        **Forbidden fallbacks** (rule violation if used for the intents above):
-        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
-        - `Grep` to find a symbol by name (use `pincher__search`).
-        - `Read` on 3+ files in sequence to understand one function (use `pincher__context`).
-        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
-
-        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical read-only workflow:
-
-        - **Orient first.** Call `pincher__architecture` on any unfamiliar project to get language breakdown, entry points, hotspot functions, and graph stats. Cheaper than reading files.
-        - **Scope to the active project.** Always pass `project=<basename of git toplevel>` (e.g. `zelosmcp` for this repo) when calling pincher tools — omitting it falls through to an empty `default` index. If the per-repo project isn't indexed, fall back to `project=user_data_ro` (the full-tree warm-index covering every repo under `/user_data_ro`). Run `pincher__list` once if you need to confirm available project names.
-        - **Find symbols by name.** Use `pincher__search` (FTS5 BM25, supports wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters). Always start here when you don't know the exact symbol ID.
-        - **Read source efficiently.** Prefer `pincher__context` over `pincher__symbol` whenever you need a function plus its direct callees in one call (~90% token savings vs reading files).
-        - **Batch lookups.** Use `pincher__symbols` (plural, max **100** IDs per call) instead of calling `pincher__symbol` in a loop.
-        - **Impact analysis.** Use `pincher__trace` to find inbound or outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth 3, LOW=depth 4+).
-        - **Pre-commit safety.** Run `pincher__changes` before committing for blast-radius analysis (git diff → affected symbols → impacted callers with risk labels).
-        - **Graph queries.** Use `pincher__query` with the Cypher subset for relationship questions; call `pincher__schema` first to see what node/edge kinds are indexed.
-        - **Read persistent knowledge.** `pincher__adr` action=`get`/`list` retrieves architectural decisions, conventions, and gotchas the team has stored across sessions.
-        - **Stable IDs.** Symbol IDs follow `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
-        - **Do NOT call** `pincher__index` / `pincher__fetch` / `pincher__adr` with action=`set` or `delete` — they mutate state and the rule is configured for read-only access.
-
-    playbook_compressed_read_only:
-      body: |
-        ### `pincher` (codebase intelligence) — compressed
-
-        **MANDATORY: pincher is wire-compressed. Your FIRST pincher call MUST use `pincher__invoke_tool` — do NOT call `pincher__architecture` etc. directly.**
-
-        | User intent (any phrasing) | How to call |
-        |---|---|
-        | summarize / explain / understand this repo, project, or codebase | `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |
-        | summarize / explain the test suite, module, or package | `pincher__invoke_tool(tool_name="architecture", ...)` then `pincher__invoke_tool(tool_name="search", ...)` |
-        | find a function / class / method / symbol named X | `pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |
-        | show me function X / how does X work | `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |
-        | what calls X / what does X call / impact of changing X | `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |
-        | what does my git diff break / blast radius | `pincher__invoke_tool(tool_name="changes", tool_input={})` |
-        | recall stored architectural decisions / conventions | `pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` |
-
-        **Forbidden fallbacks** (rule violation if used for the intents above):
-        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
-        - `Grep` to find a symbol by name (use `pincher__invoke_tool` → `search`).
-        - `Read` on 3+ files in sequence to understand one function (use `pincher__invoke_tool` → `context`).
-        - **Calling `pincher__architecture` / `pincher__search` / etc. directly** — they are not exposed at `/mcp` when pincher is compressed. The aggregator will return "unknown tool".
-        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
-
-        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical compressed read-only workflow:
-
-        - **Orient first.** `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` — language breakdown, entry points, hotspot functions.
-        - **Scope to the active project.** Pass `project=<basename of git toplevel>` in every `tool_input`. Fall back to `project=user_data_ro` if the per-repo project isn't indexed. Use `pincher__invoke_tool(tool_name="list", tool_input={})` to confirm available project names.
-        - **Find symbols by name.** `pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` — FTS5 BM25; wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters.
-        - **Read source efficiently.** `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` — symbol body + direct imports + callees in one shot (~90% token savings vs reading files).
-        - **Batch lookups.** `pincher__invoke_tool(tool_name="symbols", tool_input={"ids":[...]})` — up to 100 IDs in one round trip.
-        - **Impact analysis.** `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` — CRITICAL=depth 1, HIGH=2, MEDIUM=3.
-        - **Pre-commit safety.** `pincher__invoke_tool(tool_name="changes", tool_input={})` before committing.
-        - **Graph queries.** `pincher__invoke_tool(tool_name="query", tool_input={"pinchql":"MATCH ..."})` — call `pincher__invoke_tool(tool_name="schema")` first.
-        - **Read persistent knowledge.** `pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` — architectural decisions and gotchas stored across sessions.
-        - **Stable IDs.** `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
-        - **Do NOT invoke** `tool_name="index"`, `tool_name="fetch"`, or `tool_name="adr"` with `action=set`/`delete` — they mutate state and the rule is read-only.
-
-    playbook_compressed_read_write:
-      body: |
-        ### `pincher` (codebase intelligence) — compressed
-
-        **MANDATORY: pincher is wire-compressed. Your FIRST pincher call MUST use `pincher__invoke_tool` — do NOT call `pincher__architecture` etc. directly.**
-
-        | User intent (any phrasing) | How to call |
-        |---|---|
-        | summarize / explain / understand this repo, project, or codebase | `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |
-        | summarize / explain the test suite, module, or package | `pincher__invoke_tool(tool_name="architecture", ...)` then `pincher__invoke_tool(tool_name="search", ...)` |
-        | find a function / class / method / symbol named X | `pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |
-        | show me function X / how does X work | `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |
-        | what calls X / what does X call / impact of changing X | `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |
-        | what does my git diff break / blast radius | `pincher__invoke_tool(tool_name="changes", tool_input={})` |
-        | store / recall architectural decisions, conventions, gotchas | `pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` |
-        | ingest external docs (URL → searchable Document) | `pincher__invoke_tool(tool_name="fetch", tool_input={"url":"...", "project":"<name>"})` |
-
-        **Forbidden fallbacks** (rule violation if used for the intents above):
-        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
-        - `Grep` to find a symbol by name (use `pincher__invoke_tool` → `search`).
-        - `Read` on 3+ files in sequence to understand one function (use `pincher__invoke_tool` → `context`).
-        - **Calling `pincher__architecture` / `pincher__search` / etc. directly** — they are not exposed at `/mcp` when pincher is compressed. The aggregator will return "unknown tool".
-        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
-
-        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical compressed read-write workflow:
-
-        - **Orient first.** `pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` — language breakdown, entry points, hotspot functions.
-        - **Scope to the active project.** Pass `project=<basename of git toplevel>` in every `tool_input`. Fall back to `project=user_data_ro` if not indexed.
-        - **Index before querying.** `pincher__invoke_tool(tool_name="index", tool_input={"path":"/user_data_ro/<repo>"})` once per project (incremental by default; `force=true` to re-parse everything).
-        - **Find symbols by name.** `pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` — FTS5 BM25; wildcards, phrases, `kind=Function`/`language=Go` filters.
-        - **Read source efficiently.** `pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` — symbol body + direct imports + callees in one shot.
-        - **Batch lookups.** `pincher__invoke_tool(tool_name="symbols", tool_input={"ids":[...]})` — up to 100 IDs per call.
-        - **Impact analysis.** `pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` — CRITICAL=depth 1, HIGH=2, MEDIUM=3.
-        - **Pre-commit safety.** `pincher__invoke_tool(tool_name="changes", tool_input={})` before committing.
-        - **Graph queries.** `pincher__invoke_tool(tool_name="query", tool_input={"pinchql":"MATCH ..."})` — call `pincher__invoke_tool(tool_name="schema")` first.
-        - **Persist project knowledge.** `pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` — survives across sessions. Ingest external docs with `tool_name="fetch"` and retrieve via `tool_name="search"` with `kind=Document`.
-        - **Stable IDs.** `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
-
-    playbook_read_write:
-      body: |
-        ### `pincher` (codebase intelligence)
-
-        **MANDATORY: For any of the following user intents, your FIRST tool call MUST be a `pincher__*` tool — before any `Shell`, `Read`, or `Grep`:**
-
-        | User intent (any phrasing) | Required tool |
-        |---|---|
-        | summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |
-        | summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |
-        | find a function / class / method / symbol named X | `pincher__search` |
-        | show me function X / how does X work | `pincher__context` |
-        | what calls X / what does X call / impact of changing X | `pincher__trace` |
-        | what does my git diff break / blast radius | `pincher__changes` |
-        | store / recall architectural decisions, conventions, gotchas | `pincher__adr` |
-        | ingest external docs (URL → searchable Document) | `pincher__fetch` |
-
-        **Forbidden fallbacks** (rule violation if used for the intents above):
-        - `Shell` invocations of `pytest --collect-only`, `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`, or pipelines that count or enumerate symbols.
-        - `Grep` to find a symbol by name (use `pincher__search`).
-        - `Read` on 3+ files in sequence to understand one function (use `pincher__context`).
-        If you violate, say so explicitly: "Violating zelosMCP rule because <specific reason>." Silent violations are not acceptable.
-
-        Pincher indexes the repo into a byte-offset symbol store, a knowledge graph, and FTS5 full-text search — every retrieval is structured and ~90% cheaper than reading whole files. Canonical workflow:
-
-        - **Orient first.** Call `pincher__architecture` on any unfamiliar project to get language breakdown, entry points, hotspot functions, and graph stats. Cheaper than reading files.
-        - **Scope to the active project.** Always pass `project=<basename of git toplevel>` (e.g. `zelosmcp` for this repo) when calling pincher tools — omitting it falls through to an empty `default` index. If the per-repo project isn't indexed, fall back to `project=user_data_ro` (the full-tree warm-index covering every repo under `/user_data_ro`). Run `pincher__list` once if you need to confirm available project names.
-        - **Index before querying.** Run `pincher__index` once per project before using any other tool (incremental: xxh3 hashes skip unchanged files; pass `force=true` to re-parse everything).
-        - **Find symbols by name.** Use `pincher__search` (FTS5 BM25, supports wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters). Always start here when you don't know the exact symbol ID.
-        - **Read source efficiently.** Prefer `pincher__context` over `pincher__symbol` whenever you need a function plus its direct callees in one call (~90% token savings vs reading files).
-        - **Batch lookups.** Use `pincher__symbols` (plural, max **100** IDs per call) instead of calling `pincher__symbol` in a loop.
-        - **Impact analysis.** Use `pincher__trace` to find inbound or outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth 3, LOW=depth 4+).
-        - **Pre-commit safety.** Run `pincher__changes` before committing for blast-radius analysis (git diff → affected symbols → impacted callers with risk labels).
-        - **Graph queries.** Use `pincher__query` with the Cypher subset for relationship questions; call `pincher__schema` first to see what node/edge kinds are indexed.
-        - **Persist project knowledge.** `pincher__adr` action=`set`/`get`/`list`/`delete` survives across sessions — store architectural decisions, conventions, gotchas. Ingest external docs with `pincher__fetch` (URL → searchable Document) and retrieve via `pincher__search` with `kind=Document`.
-        - **Stable IDs.** Symbol IDs follow `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
-
   tool_instructions:
     search:
       body: |
@@ -196,6 +47,140 @@ extensions:
       - server_details
     requires_running: true
 
-agents: {}
+agents:
+  explore:
+    name: "Explore"
+    description: >-
+      Fast read-only codebase exploration and Q&A subagent.
+      Prefer over manually chaining multiple search and file-reading
+      operations to avoid cluttering the main conversation.
+      Safe to call in parallel.
+      Specify thoroughness: quick, medium, or thorough.
+    targets: [cursor, vscode]
+    tools:
+      - mcp_zelosmcp-aggr_pincher__invoke_tool
+      - mcp_zelosmcp-aggr_pincher__search_tools
+      - mcp_zelosmcp-aggr_pincher__get_tool_schema
+    body: |
+      # Explore
+
+      You are a read-only codebase investigation agent. Your job is to
+      explore code structure, understand behavior, and produce concise
+      implementation plans — never edit files.
+
+      ## Tools
+
+      Use pincher tools exclusively. If pincher is wire-compressed, call
+      `pincher__invoke_tool(tool_name="<tool>", tool_input={...})`.
+
+      ### Workflow
+
+      1. **Orient.** Call `architecture` once to get language breakdown,
+         entry points, and hotspot functions.
+      2. **Find.** Use `search` (FTS5, wildcards, `kind=`/`language=` filters)
+         to locate symbols by name.
+      3. **Read.** Use `context` to fetch a function's source plus its
+         imports and callees in one shot. Use `symbols` to batch-fetch
+         multiple IDs.
+      4. **Trace.** Use `trace` to map callers (inbound) or callees
+         (outbound). Risk labels: CRITICAL = 1 hop, HIGH = 2, MEDIUM = 3.
+      5. **Blast radius.** Use `changes` to map `git diff` to affected
+         symbols and impacted callers before proposing edits.
+      6. **Recall.** Call `adr list` early — prior agents' notes often
+         save a search chain.
+
+      ### Forbidden
+
+      - Do NOT edit, create, or delete any files.
+      - Do NOT use `grep`, `find`, `cat`, or `read_file` for tasks
+        pincher covers.
+      - Do NOT call tools tagged `[mutates]` or `[destructive]`.
+
+      ## Output format
+
+      End every response with a **Plan** section:
+
+      ```
+      ## Plan
+
+      1. <concrete step with file path and function name>
+      2. ...
+      ```
+
+      Keep the plan minimal — only steps that directly address the user's
+      goal. Reference symbols by their stable pincher IDs where possible.
 
 hooks: {}
+
+skills:
+  zelosmcp-pincher:
+    description: >-
+      Codebase intelligence with pincher: find symbols, read functions,
+      trace callers, analyze blast radius. Use for any code understanding,
+      exploration, or impact analysis task.
+    targets: [cursor, vscode]
+    body: |
+      # Pincher — Codebase Intelligence
+
+      ## Calling convention
+
+      - **Direct:** `pincher__<tool>(args)`
+      - **Compressed:** `pincher__invoke_tool(tool_name="<tool>", tool_input={args})`
+
+      If pincher is wire-compressed, do NOT call `pincher__architecture` etc. directly — the aggregator rejects them. Use `pincher__invoke_tool` instead.
+
+      ## Intent → tool mapping
+
+      | User intent | Tool |
+      |---|---|
+      | Understand repo / project / codebase | `architecture` |
+      | Find a symbol by name | `search` |
+      | Read function + dependencies | `context` |
+      | Callers / callees / impact of change | `trace` |
+      | Blast radius of git diff | `changes` |
+      | Store / recall decisions & conventions | `adr` |
+      | Ingest external docs | `fetch` |
+
+      ## Workflow
+
+      - **Orient first.** Call `architecture` on any unfamiliar project for language breakdown, entry points, and hotspot functions.
+      - **Scope to the active project.** Always pass `project=<repo basename>`. Fall back to `project=user_data_ro` if the per-repo index doesn't exist. Use `list` to confirm available project names.
+      - **Index before querying** (read-write only). Run `index` once per project — incremental by default.
+      - **Find symbols by name.** Use `search` (FTS5 BM25; wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters).
+      - **Read source efficiently.** Prefer `context` over `symbol` — includes deps in one call (~90% token savings).
+      - **Batch lookups.** Use `symbols` (plural, max 100 IDs per call) instead of calling `symbol` in a loop.
+      - **Impact analysis.** Use `trace` for inbound/outbound call paths (CRITICAL=1 hop, HIGH=2, MEDIUM=3).
+      - **Pre-commit safety.** Run `changes` before committing for blast-radius analysis.
+      - **Graph queries.** Use `query` with the Cypher subset; call `schema` first to see node/edge kinds.
+      - **Persist knowledge.** `adr` set/get/list/delete survives across sessions.
+      - **Stable IDs.** Format: `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
+
+      ## Forbidden fallbacks
+
+      Do NOT use these for tasks pincher covers:
+      - `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`
+      - `Grep` to find a symbol by name (use `search`)
+      - `Read` on 3+ files to understand one function (use `context`)
+
+      If you must violate, say so explicitly.
+
+  zelosmcp-pre-commit:
+    description: >-
+      Pre-commit blast radius analysis. Use when committing, pushing,
+      or asking about change impact.
+    targets: [cursor, vscode]
+    body: |
+      # Pre-commit Analysis
+
+      Run `pincher__changes` (or `invoke_tool(tool_name="changes")` if compressed)
+      before committing. Returns:
+      - Changed symbols from `git diff`
+      - Impacted callers with risk labels (CRITICAL/HIGH/MEDIUM/LOW)
+      - Tests to re-run (ranked by overlap)
+
+      ## Scopes
+
+      - `scope=unstaged` (default) — working-tree changes
+      - `scope=staged` — staged changes only
+      - `scope=all` — includes untracked files
+      - `scope=base:<branch>` — diff vs branch's merge-base (PR preview)

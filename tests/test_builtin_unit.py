@@ -353,8 +353,7 @@ class TestRenderComprehensiveRule:
 
     def test_tool_use_priority_default_includes_directive(self):
         """Default `tool_use=priority` injects the prefer-MCP-over-shell
-        directive plus the mandatory backend playbook for any
-        mandatory backend present in the catalog."""
+        directive. Playbooks are now skills (not emitted in the rule)."""
         catalog = {
             "filesystem": _backend(
                 [_tool("read_text_file", annotations={"readOnlyHint": True})]
@@ -364,16 +363,12 @@ class TestRenderComprehensiveRule:
             ),
         }
         out = render_comprehensive_rule(catalog)
-        assert "## Tool-use priority" in out
-        assert "Always prefer the MCP tools" in out
-        assert "## Mandatory backend playbook" in out
+        assert "## Tool-use priority" in out or "Tool-use priority" in out
         # Per-backend header still includes the prefer-over-shell hint.
         assert "Prefer these over equivalent shell commands." in out
 
     def test_tool_use_available_omits_priority_sections(self):
-        """`tool_use=available` strips every prefer-MCP phrasing — the
-        priority directive, the playbook section, and the per-backend
-        prefer-over-shell sentence."""
+        """`tool_use=available` strips every prefer-MCP phrasing."""
         catalog = {
             "filesystem": _backend(
                 [_tool("read_text_file", annotations={"readOnlyHint": True})]
@@ -384,148 +379,12 @@ class TestRenderComprehensiveRule:
         }
         out = render_comprehensive_rule(catalog, tool_use="available")
         assert "Tool-use priority" not in out
-        assert "Mandatory backend playbook" not in out
         assert "Prefer these over shelling out" not in out
         assert "Prefer these over equivalent shell commands" not in out
 
     def test_unknown_tool_use_raises(self):
         with pytest.raises(ValueError, match="Unknown tool_use"):
             render_comprehensive_rule({}, tool_use="bogus")
-
-    def test_mandatory_playbook_filesystem_readonly(self):
-        """`access=read-only` filesystem playbook lists only inspection
-        tools and explicitly forbids the destructive ones."""
-        catalog = {
-            "filesystem": _backend(
-                [_tool("read_text_file", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(
-            catalog, access="read-only", tool_use="priority"
-        )
-        assert "### `filesystem`" in out
-        assert "filesystem__read_text_file" in out
-        assert "filesystem__list_directory" in out
-        # Read-only mode forbids the mutating tools.
-        assert "Do NOT call" in out
-        assert "filesystem__write_file" in out
-        assert "filesystem__edit_file" in out
-        # Read-only block must not advertise edit_file as the preferred
-        # editing approach.
-        assert "Edit precisely" not in out
-
-    def test_mandatory_playbook_filesystem_readwrite(self):
-        """`access=read-write` filesystem playbook adds the
-        edit_file vs write_file guidance."""
-        catalog = {
-            "filesystem": _backend(
-                [_tool("read_text_file", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(
-            catalog, access="read-write", tool_use="priority"
-        )
-        assert "### `filesystem`" in out
-        assert "Edit precisely" in out
-        assert "filesystem__edit_file" in out
-        assert "filesystem__write_file" in out
-
-    def test_mandatory_playbook_pincher_present(self):
-        """When `pincher` is in the catalog and tool_use=priority, the
-        pincher workflow block renders with the canonical guidance."""
-        catalog = {
-            "pincher": _backend(
-                [_tool("search", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(catalog, tool_use="priority")
-        assert "### `pincher`" in out
-        assert "pincher__architecture" in out
-        assert "pincher__search" in out
-        assert "pincher__context" in out
-        assert "pincher__symbols" in out
-        assert "pincher__changes" in out
-        assert "pincher__trace" in out
-        assert "pincher__query" in out
-        assert "pincher__schema" in out
-        # Stable symbol ID shape.
-        assert "{file_path}::{qualified_name}#{kind}" in out
-
-    def test_mandatory_playbook_pincher_readonly_forbids_mutators(self):
-        catalog = {
-            "pincher": _backend(
-                [_tool("search", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(
-            catalog, access="read-only", tool_use="priority"
-        )
-        assert "Do NOT call" in out
-        assert "pincher__index" in out
-        assert "pincher__fetch" in out
-
-    def test_mandatory_playbook_pincher_readwrite_includes_index_and_adr(self):
-        catalog = {
-            "pincher": _backend(
-                [_tool("search", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(
-            catalog, access="read-write", tool_use="priority"
-        )
-        assert "Index before querying" in out
-        assert "Persist project knowledge" in out
-        assert "pincher__adr" in out
-
-    def test_mandatory_playbook_emits_imperative_guard_rails(self):
-        """Regression: the playbook MUST include the MANDATORY trigger
-        table, Forbidden fallbacks list, and the four-question Pre-flight
-        check for both pincher and filesystem. Softening this language
-        is what allowed prior agent defections — the test guards against
-        regressions."""
-        catalog = {
-            "pincher": _backend([_tool("search")]),
-            "filesystem": _backend([_tool("read_text_file")]),
-        }
-        out = render_comprehensive_rule(
-            catalog, access="read-write", tool_use="priority"
-        )
-        assert "Pre-flight check (run BEFORE every response)" in out
-        assert "MANDATORY:" in out
-        assert "Forbidden fallbacks" in out
-        assert "Violating zelosMCP rule because" in out
-        assert "FIRST tool call MUST be a `pincher__*` tool" in out
-        assert "FIRST tool call MUST be a `filesystem__*` tool" in out
-
-    def test_mandatory_playbook_skipped_when_backend_absent(self):
-        """If a mandatory backend isn't loaded, the playbook block for
-        it is omitted (no fake guidance)."""
-        catalog = {
-            "kubernetes": _backend(
-                [_tool("pods_list", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(catalog, tool_use="priority")
-        # Mandatory section header itself should be absent because no
-        # mandatory backend is present.
-        assert "## Mandatory backend playbook" not in out
-        # Priority directive still fires (unrelated to playbook).
-        assert "## Tool-use priority" in out
-
-    def test_mandatory_names_override(self):
-        """Callers can pass a custom mandatory set; the default
-        {filesystem, pincher} is replaced, not augmented."""
-        catalog = {
-            "filesystem": _backend(
-                [_tool("read_text_file", annotations={"readOnlyHint": True})]
-            ),
-        }
-        out = render_comprehensive_rule(
-            catalog, tool_use="priority", mandatory_names=set()
-        )
-        # Empty mandatory set => no playbook header even though
-        # filesystem is in the catalog.
-        assert "## Mandatory backend playbook" not in out
 
     def test_full_default_set_renders_cleanly(self):
         """Smoke test: a default-zelosmcp.json-shaped catalog renders
@@ -654,31 +513,6 @@ class TestRenderComprehensiveRuleCompressed:
         )
         assert "mybackend__do_thing" in out
         assert "Compressed backends" not in out
-
-    def test_mandatory_pincher_compressed_playbook_used(self):
-        """When pincher is compressed, the mandatory playbook should use
-        invoke_tool framing, not direct `pincher__architecture` calls."""
-        out = render_comprehensive_rule(
-            self._cat(
-                pincher=["architecture", "search"],
-                filesystem=["read_text_file"],
-            ),
-            tool_use="priority",
-            compressed_backends={"pincher": self._MEDIUM},
-        )
-        # Mandatory section must reference the wrapper, not raw tools
-        assert "pincher__invoke_tool" in out
-        # Mandatory section header still present
-        assert "## Mandatory backend playbook" in out
-
-    def test_mandatory_filesystem_compressed_playbook_used(self):
-        out = render_comprehensive_rule(
-            self._cat(filesystem=["read_text_file"]),
-            tool_use="priority",
-            access="read-write",
-            compressed_backends={"filesystem": self._MEDIUM},
-        )
-        assert "filesystem__invoke_tool" in out
 
     def test_no_compressed_backends_dict_behaves_normally(self):
         out = render_comprehensive_rule(

@@ -52,12 +52,7 @@ class BackendRuleAssets:
     """Resolved rule content for one MCP backend."""
 
     backend: str
-    playbook_read_only: str = ""
-    playbook_read_write: str = ""
-    playbook_compressed_read_only: str = ""
-    playbook_compressed_read_write: str = ""
-    compressed_rules_read_only: str = ""
-    compressed_rules_read_write: str = ""
+    compressed_rules: str = ""
     tool_instructions: dict[str, str] = field(default_factory=dict)
     directive_read_only: str = ""
     directive_read_write: str = ""
@@ -86,12 +81,7 @@ async def load_backend_rule_assets(
 
     return BackendRuleAssets(
         backend=backend,
-        playbook_read_only=by_name.get("playbook_read_only", ""),
-        playbook_read_write=by_name.get("playbook_read_write", ""),
-        playbook_compressed_read_only=by_name.get("playbook_compressed_read_only", ""),
-        playbook_compressed_read_write=by_name.get("playbook_compressed_read_write", ""),
-        compressed_rules_read_only=by_name.get("compressed_rules_read_only", ""),
-        compressed_rules_read_write=by_name.get("compressed_rules_read_write", ""),
+        compressed_rules=by_name.get("compressed_rules", ""),
         tool_instructions=tool_instructions,
         directive_read_only=by_name.get("directive_read_only", ""),
         directive_read_write=by_name.get("directive_read_write", ""),
@@ -123,7 +113,11 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
     """Push rule assets to the target repo.
 
     The body stored is the pre-rendered markdown blob; the push writer
-    writes it directly.
+    writes it directly.  A ``target`` of ``""`` or ``"cursor"`` writes the
+    Cursor ``.mdc`` file.  A ``target`` of ``""`` or ``"vscode"`` writes
+    both the ``.github/copilot-instructions.md`` and the
+    ``.vscode/copilot-instructions.md`` paths so both Cursor's Copilot
+    variant and the local VS Code workspace discovery pick it up.
     """
     files: list[ProjectFile] = []
     target = row.target or ""
@@ -136,6 +130,11 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
     if target in ("vscode", ""):
         files.append(ProjectFile(
             rel_path=".github/copilot-instructions.md",
+            body=row.body,
+            mode="overwrite",
+        ))
+        files.append(ProjectFile(
+            rel_path=".vscode/copilot-instructions.md",
             body=row.body,
             mode="overwrite",
         ))
@@ -230,7 +229,9 @@ RULE_KIND = AssetKind(
     label="Rules",
     description=(
         "Cursor `.mdc` and VS Code `copilot-instructions.md` rule content — "
-        "playbooks, per-tool guidance, and access-mode directives."
+        "playbooks, per-tool guidance, and access-mode directives.  "
+        "VS Code target writes both `.github/copilot-instructions.md` and "
+        "`.vscode/copilot-instructions.md`."
     ),
     parse_section=_parse_section,
     validate=_validate,

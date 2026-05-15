@@ -254,7 +254,7 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-only' \
 
 ## Bulk-installing the rule into discovered repos
 
-The web UI's **Repositories** panel (right column, collapsed by default) walks `/user_data_ro` for git repos and lets you write `.cursor/rules/zelosmcp.mdc` directly into any of them with one click — same generator, same dropdowns, just persisted to disk via the running `filesystem` MCP. The same panel also exposes a `Index in pincher` button so the repo's symbols become queryable straight away. See [docs/repositories.md](repositories.md).
+The web UI's **Repositories** panel (right column, collapsed by default) walks `/user_data_ro` for git repos and lets you write `.cursor/rules/zelosmcp.mdc` directly into any of them with one click — same generator, same dropdowns, just persisted to disk via the running `filesystem` MCP. The **Push all** button also writes agent definitions (`.cursor/agents/`), skill files (`.cursor/skills/`), and hooks (`.cursor/hooks.json`) in one pass. The same panel also exposes a `Index in pincher` button so the repo's symbols become queryable straight away. See [docs/repositories.md](repositories.md).
 
 ## See also
 

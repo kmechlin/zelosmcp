@@ -47,6 +47,7 @@ RESERVED_MOUNTS: frozenset[str] = frozenset({
 # Compression knobs for tool-list shrinking. See docs/compression.md.
 COMPRESS_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "max"})
 COMPRESS_SCOPES: frozenset[str] = frozenset({"catalog", "aggregator", "global"})
+RESPONSE_FORMATS: frozenset[str] = frozenset({"toon", "compact_json", "raw"})
 
 # Recognised provider types in ``configs/auth-providers.json``. Two are
 # legacy shims around pre-existing zelosMCP behaviour
@@ -235,6 +236,29 @@ class AuthProviderSpec:
 
 
 @dataclass
+class BuiltinConfig:
+    """Configuration for the always-on ``zelosmcp`` builtin backend.
+
+    Parsed from the optional top-level ``"builtin"`` key in the config
+    JSON (alongside ``"mcpServers"``).  Defaults match the pre-feature
+    behaviour: ``response_format="raw"`` and compression off.
+
+    Env-var override: ``ZELOSMCP_BUILTIN_RESPONSE_FORMAT``.
+    """
+
+    response_format: str = "raw"
+    compress: CompressSpec | None = None
+
+    def to_status(self) -> dict[str, Any]:
+        info: dict[str, Any] = {}
+        if self.response_format != "raw":
+            info["response_format"] = self.response_format
+        if self.compress is not None:
+            info["compress"] = self.compress.to_status()
+        return info
+
+
+@dataclass
 class ServerSpec:
     """Normalized, transport-tagged description of one MCP backend."""
 
@@ -276,6 +300,21 @@ class ServerSpec:
     # (they mint a single token regardless of audience). ``None`` means
     # "let the provider use its default audience".
     auth_audience: str | None = None
+    # Response serialization format. Controls how ``TextContent`` blocks
+    # in tool-call responses are transformed before returning to the
+    # client. ``"toon"`` converts JSON/YAML to Token-Optimized Object
+    # Notation for ~40-60% token savings; ``"compact_json"`` minifies
+    # JSON; ``"raw"`` passes through unchanged. Env-var override:
+    # ``ZELOSMCP_RESPONSE_FORMAT``.
+    response_format: str = "toon"
+    # Whether this backend should be started when the config loads.
+    # ``True`` (the default) starts the backend immediately;
+    # ``False`` installs (registers the spec, creates a ProxyState)
+    # but leaves it stopped — excluded from tools/list and generated
+    # rules. Assets can still be edited for stopped backends. The
+    # backend can be started later via the GUI or
+    # ``zelosmcp__start_server``.
+    started: bool = True
 
     def to_status(self) -> dict[str, Any]:
         """Compact JSON-serializable view used by status endpoints."""
@@ -313,6 +352,10 @@ class ServerSpec:
             info["auth"] = auth_block
         if self.passthrough_pool is not None:
             info["passthroughPool"] = self.passthrough_pool.to_status()
+        if self.response_format != "toon":
+            info["response_format"] = self.response_format
+        if not self.started:
+            info["started"] = False
         return info
 
 
@@ -904,6 +947,25 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     else:
         compress = _parse_compress(name, raw["compress"])
 
+    # Started flag: defaults to True (start on config load).
+    started_raw = raw.get("started", True)
+    if not isinstance(started_raw, bool):
+        raise ConfigError(
+            f"Server '{name}': 'started' must be a boolean"
+        )
+
+    # Response format: per-backend override, env-var fallback, then default.
+    response_format_raw = raw.get("response_format")
+    if response_format_raw is None:
+        response_format_raw = os.environ.get(
+            "ZELOSMCP_RESPONSE_FORMAT", "toon"
+        )
+    if response_format_raw not in RESPONSE_FORMATS:
+        raise ConfigError(
+            f"Server '{name}': 'response_format' must be one of "
+            f"{sorted(RESPONSE_FORMATS)}, got {response_format_raw!r}"
+        )
+
     # Stdio: presence of `command` (matches Cursor's discrimination rule).
     if "command" in raw:
         if passthrough_raw:
@@ -955,6 +1017,8 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             cwd=cwd,
             reverse_proxy=reverse_proxy,
             compress=compress,
+            response_format=response_format_raw,
+            started=started_raw,
         )
 
     # Remote transports: discriminated by `type`.
@@ -1034,6 +1098,8 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             passthrough_pool=passthrough_pool,
             auth_provider=auth_provider,
             auth_audience=auth_audience,
+            response_format=response_format_raw,
+            started=started_raw,
         )
 
     raise ConfigError(
@@ -1072,16 +1138,52 @@ def _check_mount_overlap(specs: list[ServerSpec]) -> None:
                 )
 
 
-def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None]:
+def _parse_builtin_config(raw: Any) -> BuiltinConfig:
+    """Parse the optional ``"builtin"`` top-level config key."""
+    if raw is None:
+        return BuiltinConfig(
+            response_format=os.environ.get(
+                "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "raw"
+            ),
+        )
+    if not isinstance(raw, dict):
+        raise ConfigError("'builtin' must be an object")
+
+    rf = raw.get("response_format")
+    if rf is None:
+        rf = os.environ.get(
+            "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "raw"
+        )
+    if rf not in RESPONSE_FORMATS:
+        raise ConfigError(
+            f"builtin.response_format must be one of "
+            f"{sorted(RESPONSE_FORMATS)}, got {rf!r}"
+        )
+
+    compress = None
+    compress_raw = raw.get("compress")
+    if compress_raw is not None:
+        compress = _parse_compress("builtin", compress_raw)
+
+    return BuiltinConfig(
+        response_format=rf,
+        compress=compress,
+    )
+
+
+def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None, BuiltinConfig]:
     """Parse a Cursor-style ``mcpServers`` payload.
 
     Args:
         raw: Decoded JSON object. Must contain ``mcpServers`` mapping
-            name → server config. May also contain ``primaryMCP``.
+            name → server config. May also contain ``primaryMCP``
+            and ``builtin``.
 
     Returns:
-        ``(specs, primary_name)`` — order of ``specs`` matches insertion order
-        of ``mcpServers``. ``primary_name`` is ``None`` if not specified.
+        ``(specs, primary_name, builtin_config)`` — order of ``specs``
+        matches insertion order of ``mcpServers``. ``primary_name`` is
+        ``None`` if not specified. ``builtin_config`` defaults to
+        :class:`BuiltinConfig` defaults when the key is absent.
 
     Raises:
         ConfigError: On any structural or value error.
@@ -1116,4 +1218,6 @@ def parse_config(raw: Any) -> tuple[list[ServerSpec], str | None]:
     # running server. We still parse the field so old pasted configs keep working;
     # ProxyManager.start_all logs a deprecation warning when it sees a value.
 
-    return specs, primary
+    builtin_cfg = _parse_builtin_config(raw.get("builtin"))
+
+    return specs, primary, builtin_cfg

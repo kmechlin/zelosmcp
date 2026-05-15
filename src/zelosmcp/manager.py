@@ -95,6 +95,7 @@ class ProxyManager:
         # (start_all/stop_all/start_one/stop_one) explicitly skip it.
         self.servers: dict[str, Any] = {}
         self._specs: dict[str, ServerSpec] = {}
+        self._builtin_config: "BuiltinConfig | None" = None
         self._primary: str | None = None
         self._log_subscribers: list[asyncio.Queue[str]] = []
         # Ring buffer of every line ever broadcast, capped to keep memory
@@ -127,6 +128,7 @@ class ProxyManager:
         # first read by _read_mandatory_servers; reused across start_all()
         # invocations within a single ProxyManager lifetime).
         self._mandatory_cache: dict[str, Any] | None = None
+        self._mandatory_payload_cache: dict[str, Any] | None = None
         self._mandatory_cache_loaded = False
         # Token-savings store + recorder. The store is opened from the
         # Starlette lifespan hook (start_http_client) so an event loop is
@@ -196,7 +198,7 @@ class ProxyManager:
         await self.stop_all()
 
         merged = self._merge_mandatory(raw_config)
-        specs, primary = parse_config(merged)
+        specs, primary, builtin_cfg = parse_config(merged)
         # Cross-validate any auth.provider references against the
         # currently-loaded providers config. Empty providers dict +
         # zero references = no-op; non-empty references against an
@@ -204,6 +206,7 @@ class ProxyManager:
         # can't silently start backends in a broken state.
         validate_provider_references(specs, self._auth_provider_specs)
         self._specs = {s.name: s for s in specs}
+        self._builtin_config = builtin_cfg
 
         if primary is not None:
             self._broadcast_tagged(
@@ -215,6 +218,7 @@ class ProxyManager:
 
         results: dict[str, Any] = {}
         coros = []
+        started_specs: list[ServerSpec] = []
         for spec in specs:
             if spec.name == BUILTIN_NAME:
                 # parse_config already rejects this via RESERVED_NAMES, but
@@ -224,10 +228,21 @@ class ProxyManager:
             state._recorder_provider = lambda: self.savings
             self.servers[spec.name] = state
             self._attach_log_pump(state)
+            if not spec.started:
+                self._broadcast_tagged(
+                    spec.name,
+                    "configured but not started "
+                    "(started: false)",
+                )
+                results[spec.name] = {
+                    "ok": True, "started": False,
+                }
+                continue
+            started_specs.append(spec)
             coros.append(self._start_one_spec(state, spec))
 
         outcomes = await asyncio.gather(*coros, return_exceptions=True)
-        for spec, outcome in zip(specs, outcomes):
+        for spec, outcome in zip(started_specs, outcomes):
             if isinstance(outcome, BaseException):
                 results[spec.name] = {"ok": False, "error": str(outcome)}
             else:
@@ -274,7 +289,11 @@ class ProxyManager:
         - The mandatory file doesn't exist or fails to parse.
         - ``raw_config`` isn't a dict (parse_config will raise downstream).
         """
-        mandatory = self._read_mandatory_servers()
+        mandatory_payload = self._read_mandatory_payload()
+        mandatory = (
+            mandatory_payload.get("mcpServers")
+            if mandatory_payload else None
+        )
         if not mandatory or not isinstance(raw_config, dict):
             return raw_config
 
@@ -289,6 +308,14 @@ class ProxyManager:
                 injected.append(name)
 
         merged["mcpServers"] = user_servers
+
+        # Merge the mandatory ``builtin`` block when the user
+        # config doesn't provide one.
+        if "builtin" not in merged and mandatory_payload:
+            mand_builtin = mandatory_payload.get("builtin")
+            if mand_builtin is not None:
+                merged["builtin"] = mand_builtin
+
         if injected:
             self._broadcast_tagged(
                 "manager",
@@ -296,15 +323,15 @@ class ProxyManager:
             )
         return merged
 
-    def _read_mandatory_servers(self) -> dict[str, Any] | None:
-        """Read and cache the mandatory file's ``mcpServers`` dict.
+    def _read_mandatory_payload(self) -> dict[str, Any] | None:
+        """Read and cache the full mandatory config payload.
 
-        Returns ``None`` when mandatory is disabled, the file is missing,
-        or the file can't be parsed. Subsequent calls return the cached
-        result (positive or None) without re-reading the file.
+        Returns ``None`` when mandatory is disabled, the file is
+        missing, or the file can't be parsed. Subsequent calls return
+        the cached result without re-reading the file.
         """
         if self._mandatory_cache_loaded:
-            return self._mandatory_cache
+            return self._mandatory_payload_cache
 
         self._mandatory_cache_loaded = True
         path = self._resolve_mandatory_path()
@@ -321,7 +348,14 @@ class ProxyManager:
             _log.warning("mandatory config %s failed to load: %s", path, exc)
             return None
 
-        servers = payload.get("mcpServers") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            _log.warning(
+                "mandatory config %s is not a JSON object; skipping",
+                path,
+            )
+            return None
+
+        servers = payload.get("mcpServers")
         if not isinstance(servers, dict):
             _log.warning(
                 "mandatory config %s missing 'mcpServers' object; skipping merge",
@@ -329,8 +363,19 @@ class ProxyManager:
             )
             return None
 
+        self._mandatory_payload_cache = payload
+        # Keep legacy cache for mandatory_names() compat
         self._mandatory_cache = servers
-        return servers
+        return payload
+
+    def _read_mandatory_servers(
+        self,
+    ) -> dict[str, Any] | None:
+        """Return the ``mcpServers`` dict from the mandatory file."""
+        payload = self._read_mandatory_payload()
+        if payload is None:
+            return None
+        return payload.get("mcpServers")
 
     def mandatory_names(self) -> set[str]:
         """Set of backend names declared in the mandatory config.
@@ -1424,4 +1469,5 @@ class ProxyManager:
             passthrough=spec.passthrough,
             auth_bearer=spec.auth_bearer,
             passthrough_pool=spec.passthrough_pool,
+            response_format=spec.response_format,
         )

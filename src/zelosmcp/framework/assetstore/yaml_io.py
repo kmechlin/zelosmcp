@@ -76,12 +76,14 @@ async def dump_backend_as_yaml(store: Any, backend: str) -> str:
     from zelosmcp.framework.assetstore.kinds import extension as _ext_mod
     from zelosmcp.framework.assetstore.kinds import agent as _agent_mod
     from zelosmcp.framework.assetstore.kinds import hook as _hook_mod
+    from zelosmcp.framework.assetstore.kinds import skill as _skill_mod
 
     kind_dump_map = {
         "rule": ("rules", _rule_mod.dump_section),
         "extension": ("extensions", _ext_mod.dump_section),
         "agent": ("agents", _agent_mod.dump_section),
         "hook": ("hooks", _hook_mod.dump_section),
+        "skill": ("skills", _skill_mod.dump_section),
     }
 
     rows_by_kind: dict[str, list[AssetRow]] = {}

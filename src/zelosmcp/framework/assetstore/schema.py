@@ -141,6 +141,29 @@ _HOOKS_SECTION = {
     "additionalProperties": _HOOK_ENTRY,
 }
 
+_SKILL_ENTRY = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "targets": {
+            "type": "array",
+            "items": {"enum": ["cursor", "vscode"]},
+        },
+        "push": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
+        "body": {"type": "string"},
+    },
+}
+
+_SKILLS_SECTION = {
+    "type": "object",
+    "additionalProperties": _SKILL_ENTRY,
+}
+
 ASSET_FILE_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -160,6 +183,7 @@ ASSET_FILE_SCHEMA: dict[str, Any] = {
         "extensions": _EXTENSIONS_SECTION,
         "agents": _AGENTS_SECTION,
         "hooks": _HOOKS_SECTION,
+        "skills": _SKILLS_SECTION,
     },
 }
 

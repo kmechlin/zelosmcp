@@ -21,6 +21,7 @@ from zelosmcp.compression import (
     wrapper_tool_names,
 )
 from zelosmcp.config import CompressSpec, PassthroughPoolSpec
+from zelosmcp.response import transform_response
 from zelosmcp.savings import measure_call
 
 logger = logging.getLogger("zelosmcp")
@@ -126,6 +127,7 @@ class ProxyState:
         passthrough: bool = False,
         auth_bearer: str | None = None,
         passthrough_pool: PassthroughPoolSpec | None = None,
+        response_format: str = "toon",
     ) -> None:
         if self.running:
             raise RuntimeError("Proxy is already running — stop it first")
@@ -133,6 +135,7 @@ class ProxyState:
         self.error = None
         self._ready = asyncio.Event()
         self._startup_error = None
+        self._response_format = response_format
         # Only retain compress for scope=global — that's the only case
         # where the per-backend /<name>/mcp endpoint should serve wrappers
         # instead of the raw surface. Aggregator-only and catalog-only
@@ -451,20 +454,23 @@ class ProxyState:
 
             async def _dispatch() -> CallToolResult:
                 r = await session.call_tool(name, arguments)
-                # Pass through both content and structuredContent unchanged.
-                # The MCP SDK's lowlevel server validates: if the advertised
-                # tool has an outputSchema and the response's
-                # structuredContent is None, it replaces the response with a
-                # validation error. Returning only `r.content` would drop
-                # the backend's structuredContent (when set) and trip that
-                # validation for any tool with a declared outputSchema (e.g.
-                # filesystem, anything using FastMCP/SDK >=1.13 with
-                # auto-generated schemas).
+                content = list(r.content)
+                meta = getattr(r, "meta", None)
+                meta_dict = (
+                    dict(meta) if meta else None
+                )
+                content, meta_dict = transform_response(
+                    content,
+                    response_format=self._response_format,
+                    meta=meta_dict,
+                )
                 return CallToolResult(
-                    content=r.content,
-                    structuredContent=getattr(r, "structuredContent", None),
+                    content=content,
+                    structuredContent=getattr(
+                        r, "structuredContent", None
+                    ),
                     isError=bool(r.isError),
-                    meta=getattr(r, "meta", None),
+                    meta=meta_dict,
                 )
 
             return await measure_call(

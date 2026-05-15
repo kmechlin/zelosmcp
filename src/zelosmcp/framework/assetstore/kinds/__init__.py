@@ -7,3 +7,4 @@ from zelosmcp.framework.assetstore.kinds import agent as agent  # noqa: F401
 from zelosmcp.framework.assetstore.kinds import extension as extension  # noqa: F401
 from zelosmcp.framework.assetstore.kinds import hook as hook  # noqa: F401
 from zelosmcp.framework.assetstore.kinds import rule as rule  # noqa: F401
+from zelosmcp.framework.assetstore.kinds import skill as skill  # noqa: F401

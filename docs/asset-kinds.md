@@ -1,6 +1,6 @@
 # Asset kinds reference
 
-This page documents each of the four asset kinds (`rule`, `extension`, `agent`, `hook`) in detail — what the YAML section looks like, what `AssetRow` fields each kind uses, how it surfaces in the GUI, and what happens when you push it to a repo.
+This page documents each of the five asset kinds (`rule`, `extension`, `agent`, `hook`, `skill`) in detail — what the YAML section looks like, what `AssetRow` fields each kind uses, how it surfaces in the GUI, and what happens when you push it to a repo.
 
 For the top-level YAML file format and `seed_version` semantics, see [assets-yaml.md](assets-yaml.md). For the HTTP API, see [assets-api.md](assets-api.md). For the GUI editor, see [assets-editor.md](assets-editor.md).
 
@@ -237,7 +237,9 @@ Extensions are not pushed to disk. They are invoked in-browser via `POST /api/as
 
 ## Agent (`agents:`)
 
-Agent assets contain Cursor Subagent / Skill definitions: a markdown `body` the agent uses as its system prompt/skill file, plus metadata controlling where it gets written when pushed to a repo.
+Agent assets define AI agent personas with system prompts, tool restrictions, and model preferences. They are pushed to `.cursor/agents/<name>.md` and `.github/agents/<name>.agent.md` as agent definition files.
+
+Skills (domain knowledge loaded on demand) are a separate kind — see [Skill (`skills:`)](#skill-skills).
 
 ### AssetRow shape
 
@@ -245,10 +247,10 @@ Agent assets contain Cursor Subagent / Skill definitions: a markdown `body` the 
 |---|---|
 | `kind` | `"agent"` |
 | `backend` | The MCP backend this agent is associated with. |
-| `name` | Agent identifier (e.g. `"code_reviewer"`). Also the default directory name under `.cursor/skills/`. |
-| `target` | Always `"cursor"` (agents are a Cursor concept). |
-| `body` | Markdown content of the `SKILL.md` file. |
-| `meta` | `{"name": "<display name>", "description": "...", "targets": ["cursor"], "push": {"cursor": ".cursor/skills/<name>/SKILL.md"}}` |
+| `name` | Agent identifier (e.g. `"code_reviewer"`). Also the default filename under `.cursor/agents/` and `.github/agents/`. |
+| `target` | `"cursor"` (stored value; push targets are driven by `meta.targets`). |
+| `body` | Markdown content of the agent definition file. |
+| `meta` | `{"name": "...", "description": "...", "targets": ["cursor", "vscode"], "push": {"cursor": "...", "vscode_github": "..."}}` |
 
 ### YAML section format
 
@@ -257,9 +259,18 @@ agents:
   <agent_name>:
     name: "Display Name"
     description: "One-line description of what this agent does"
-    targets: [cursor]           # optional; defaults to [cursor]
+    targets: [cursor, vscode]   # optional; defaults to [cursor, vscode]
+    model: "claude-sonnet-4-20250514"  # optional; pin to a specific model
+    tools:                      # optional; restrict which tools the agent can call
+      - mcp_zelosmcp-aggr_pincher__invoke_tool
+    agents:                     # optional; sub-agents this agent can invoke (or '*' for all)
+      - other_agent
+    readonly: true              # optional; Cursor-only — prevent file edits
+    user_invocable: false       # optional; VS Code — hide from direct user invocation
+    disable_model_invocation: true  # optional; VS Code — prevent other agents from calling this one
     push:
-      cursor: ".cursor/skills/<agent_name>/SKILL.md"   # optional; this is the default
+      cursor: ".cursor/agents/<agent_name>.md"              # optional; this is the default
+      vscode_github: ".github/agents/<agent_name>.agent.md" # optional; this is the default
     body: |
       # Agent Name
       You are a ...
@@ -268,7 +279,20 @@ agents:
       ...
 ```
 
-If `push.cursor` is omitted, the push writer defaults to `.cursor/skills/<agent_name>/SKILL.md`.
+If `push` paths are omitted, the push writer defaults to `.cursor/agents/<agent_name>.md` and `.github/agents/<agent_name>.agent.md`.
+
+### Optional fields reference
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | _(editor default)_ | Pin the agent to a specific model. When omitted, the user's currently selected model is used. Use this to enforce a cheaper/faster model for high-volume subagents, or a stronger model for complex analysis. |
+| `tools` | list of strings | _(all available)_ | Restrict which MCP tools the agent can call. Use full tool names as registered at `/mcp` (e.g. `mcp_zelosmcp-aggr_pincher__invoke_tool`). |
+| `agents` | list or `'*'` | _(none)_ | Sub-agents this agent can invoke. Use `'*'` to allow calling any agent. VS Code only. |
+| `readonly` | bool | `false` | Prevent the agent from editing files. Cursor only. |
+| `is_background` | bool | `false` | Mark as a background agent. Cursor only. |
+| `user_invocable` | bool | `true` | Whether users can invoke this agent directly. Set `false` for agents intended only as subagents. VS Code only. |
+| `disable_model_invocation` | bool | `false` | Prevent other agents from calling this one as a subagent. VS Code only. |
+| `handoffs` | list of objects | _(none)_ | Define handoff transitions to other agents. VS Code only. Each entry has `label`, `agent`, and optional `prompt`, `send`, `model`. |
 
 ### Example (minimal stub)
 
@@ -277,7 +301,7 @@ agents:
   code_reviewer:
     name: "Code Reviewer"
     description: "Reviews diffs for bugs and style issues before committing"
-    targets: [cursor]
+    targets: [cursor, vscode]
     body: |
       # Code Reviewer
 
@@ -288,9 +312,37 @@ agents:
       3. Keep feedback concise — one sentence per finding.
 ```
 
+### Example (subagent with model and tool restrictions)
+
+```yaml
+agents:
+  explore:
+    name: "Explore"
+    description: "Fast read-only codebase exploration subagent"
+    targets: [cursor, vscode]
+    model: "claude-sonnet-4-20250514"
+    tools:
+      - mcp_zelosmcp-aggr_pincher__invoke_tool
+      - mcp_zelosmcp-aggr_pincher__search_tools
+      - mcp_zelosmcp-aggr_pincher__get_tool_schema
+    readonly: true
+    body: |
+      # Explore
+
+      You are a read-only codebase investigation agent.
+      Use pincher tools to search, trace, and understand code.
+```
+
 ### Push behavior
 
-`POST /api/assets/push/agent` (or **Push agents** in the repo details pane) writes each agent's `body` to the path specified in `meta.push.cursor`. Write mode is `overwrite`. The file is created with any necessary parent directories.
+`POST /api/assets/push/agent` (or **Push agents** in the repo details pane) writes each agent to the paths specified in `meta.push`. Write mode is `overwrite`. Files are created with any necessary parent directories.
+
+For each agent, the push writer produces files for each target in `meta.targets`:
+
+| Target | Default path | Frontmatter format |
+|---|---|---|
+| `cursor` | `.cursor/agents/<name>.md` | `name`, `description`, `model`, `readonly`, `is_background` |
+| `vscode` | `.github/agents/<name>.agent.md` | `name`, `description`, `tools`, `model`, `agents`, `user-invocable`, `disable-model-invocation`, `handoffs` |
 
 ### GUI surface
 
@@ -372,6 +424,78 @@ The resulting `hooks.json` shape:
 - `backend` and `name` must be non-empty.
 - `meta.event` must be non-empty.
 - `meta.command` must be non-empty.
+
+---
+
+## Skill (`skills:`)
+
+Skill assets define domain knowledge that editors load on demand based on task relevance. Skills define *what the AI knows* — a body of knowledge loaded when the task matches. This is distinct from agents (which define *who* the AI is — personas with tool restrictions and model preferences).
+
+Skills are pushed to all three editor directories: `.cursor/skills/<slug>/SKILL.md`, `.github/skills/<slug>/SKILL.md`, and `.vscode/skills/<slug>/SKILL.md`.
+
+### AssetRow shape
+
+| Field | Value |
+|---|---|
+| `kind` | `"skill"` |
+| `backend` | The MCP backend this skill is associated with. |
+| `name` | Skill identifier (e.g. `"zelosmcp-pincher"`). Slugified for the directory name. |
+| `target` | `""` (both IDEs — skills target both Cursor and VS Code). |
+| `body` | Markdown content of the `SKILL.md` file. |
+| `meta` | `{"name": "...", "description": "...", "paths": ["**/*.py"], "targets": ["cursor", "vscode"], "push": {"cursor": ".cursor/skills/<slug>/SKILL.md", "vscode_github": ".github/skills/<slug>/SKILL.md", "vscode_vscode": ".vscode/skills/<slug>/SKILL.md"}}` |
+
+### YAML section format
+
+```yaml
+skills:
+  <skill_name>:
+    description: "One-line description of what this skill teaches"
+    paths:                        # optional; glob patterns for auto-activation
+      - "**/*.py"
+    targets: [cursor, vscode]     # optional; defaults to [cursor, vscode]
+    body: |
+      # Skill Title
+      Domain knowledge content ...
+```
+
+The `paths` field controls when the editor auto-attaches the skill — if the active file matches any glob, the skill is loaded. Omit `paths` to make the skill always available but never auto-attached.
+
+### Example
+
+```yaml
+skills:
+  zelosmcp-pincher:
+    description: "Codebase intelligence with pincher."
+    paths:
+      - "**/*.py"
+      - "**/*.go"
+    targets: [cursor, vscode]
+    body: |
+      # Pincher — Codebase Intelligence
+
+      Use `pincher__search` to find symbols by name.
+      Use `pincher__context` to read a symbol with its dependencies.
+      Use `pincher__trace` to find callers before changing a function.
+```
+
+### Push behavior
+
+`POST /api/assets/push/skill` (or **Push skills** in the repo details pane) writes each skill's `SKILL.md` to all targeted directories. The file includes editor-specific YAML frontmatter:
+
+- **Cursor** — `name`, `description`, `paths` frontmatter → `.cursor/skills/<slug>/SKILL.md`
+- **VS Code / GitHub** — `name`, `description`, `argument-hint`, `context` frontmatter → `.github/skills/<slug>/SKILL.md`
+- **VS Code / .vscode** — same as GitHub → `.vscode/skills/<slug>/SKILL.md`
+
+Write mode is `overwrite`. Parent directories are created as needed.
+
+### GUI surface
+
+- **Skills tab** in the backend assets pane. Click **Edit** to modify the `body` in the markdown edit modal.
+- Click **+ Add** on the Skills tab to create a stub row.
+
+### Validation
+
+- `backend` and `name` must be non-empty strings.
 
 ---
 
