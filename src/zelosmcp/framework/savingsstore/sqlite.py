@@ -74,7 +74,10 @@ _SCHEMA = [
         latency_ms INTEGER,
         error INTEGER,
         error_message TEXT,
-        meta TEXT
+        meta TEXT,
+        input_text TEXT,
+        upstream_text TEXT,
+        returned_text TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS proxy_events_ts ON proxy_events(ts)",
@@ -252,6 +255,9 @@ class SavingsStore:
         error: bool,
         error_message: str | None,
         meta: dict[str, Any] | None,
+        input_text: str | None = None,
+        upstream_text: str | None = None,
+        returned_text: str | None = None,
     ) -> None:
         ts = time.time()
         async with self._lock:
@@ -262,8 +268,10 @@ class SavingsStore:
                     (event_id, ts, method, backend, tool, qualified,
                      compressed, input_tokens, output_tokens,
                      raw_output_tokens, raw_output_bytes, transform_type,
-                     latency_ms, error, error_message, meta)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     latency_ms, error, error_message, meta,
+                     input_text, upstream_text, returned_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -282,6 +290,9 @@ class SavingsStore:
                     1 if error else 0,
                     error_message,
                     json.dumps(meta) if meta is not None else None,
+                    input_text,
+                    upstream_text,
+                    returned_text,
                 ),
             )
             await db.commit()
@@ -378,7 +389,8 @@ class SavingsStore:
                 SELECT event_id, ts, method, backend, tool, qualified,
                        compressed, input_tokens, output_tokens,
                        raw_output_tokens, raw_output_bytes, transform_type,
-                       latency_ms, error, error_message, meta
+                       latency_ms, error, error_message, meta,
+                       input_text, upstream_text, returned_text
                 FROM proxy_events {where_clause}
                 ORDER BY ts DESC, id DESC
                 LIMIT ? OFFSET ?
@@ -407,6 +419,9 @@ class SavingsStore:
                 error,
                 error_message,
                 meta,
+                input_text,
+                upstream_text,
+                returned_text,
             ) = row
             try:
                 decoded_meta = json.loads(meta) if meta is not None else None
@@ -429,6 +444,9 @@ class SavingsStore:
                 "error": bool(error),
                 "error_message": error_message,
                 "meta": decoded_meta,
+                "input_text": input_text,
+                "upstream_text": upstream_text,
+                "returned_text": returned_text,
             })
         return {
             "events": events,

@@ -138,6 +138,7 @@ class ProxyState:
         auth_bearer: str | None = None,
         passthrough_pool: PassthroughPoolSpec | None = None,
         response_format: str = "toon",
+        strip_meta: bool = True,
     ) -> None:
         if self.running:
             raise RuntimeError("Proxy is already running — stop it first")
@@ -146,6 +147,7 @@ class ProxyState:
         self._ready = asyncio.Event()
         self._startup_error = None
         self._response_format = response_format
+        self._strip_meta = strip_meta
         # Only retain compress for scope=global — that's the only case
         # where the per-backend /<name>/mcp endpoint should serve wrappers
         # instead of the raw surface. Aggregator-only and catalog-only
@@ -498,11 +500,14 @@ class ProxyState:
             raw_output_tokens: int | None = None
             raw_output_bytes: int | None = None
             transform_type: str | None = None
+            upstream_text: str | None = None
 
             async def _dispatch() -> CallToolResult:
-                nonlocal raw_output_tokens, raw_output_bytes, transform_type
+                nonlocal raw_output_tokens, raw_output_bytes, transform_type, upstream_text
                 r = await session.call_tool(name, arguments)
                 if event_recorder is not None:
+                    # Count tokens as text content — what the LLM
+                    # actually sees (Cursor charges for this).
                     try:
                         raw_output_text = render_call_output_text(r)
                     except Exception:
@@ -512,6 +517,7 @@ class ProxyState:
                     )
                     raw_output_bytes = len(raw_output_text.encode("utf-8"))
                     transform_type = self._response_format
+                    upstream_text = raw_output_text[:32 * 1024] if raw_output_text else None
                 content = list(r.content)
                 meta = getattr(r, "meta", None)
                 meta_dict = (
@@ -520,6 +526,7 @@ class ProxyState:
                 content, meta_dict = transform_response(
                     content,
                     response_format=self._response_format,
+                    strip_meta=self._strip_meta,
                     meta=meta_dict,
                 )
                 return CallToolResult(
@@ -543,6 +550,7 @@ class ProxyState:
                 raw_output_tokens_provider=lambda: raw_output_tokens,
                 raw_output_bytes_provider=lambda: raw_output_bytes,
                 transform_type_provider=lambda: transform_type,
+                upstream_text_provider=lambda: upstream_text,
             )
 
         @server.list_resources()

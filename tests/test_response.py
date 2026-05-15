@@ -226,9 +226,11 @@ class TestTransformResponse:
         """Non-text blocks pass through unchanged."""
         from mcp.types import ImageContent
 
+        # Use a payload large enough that toon saves tokens.
+        rows = [{"name": f"item_{i}", "value": i, "active": True} for i in range(10)]
         text_block = TextContent(
             type="text",
-            text=json.dumps([{"a": 1}]),
+            text=json.dumps(rows),
         )
         img_block = ImageContent(
             type="image",
@@ -244,12 +246,14 @@ class TestTransformResponse:
         assert new_content[1] == img_block
 
     def test_multiple_text_blocks(self):
+        # Use payloads large enough that toon saves tokens.
+        rows = [{"name": f"item_{i}", "value": i, "active": True} for i in range(10)]
         content = [
-            TextContent(type="text", text=json.dumps({"a": 1})),
+            TextContent(type="text", text=json.dumps(rows)),
             TextContent(type="text", text="plain text"),
             TextContent(
                 type="text",
-                text=json.dumps([{"x": 1}]),
+                text=json.dumps(rows),
             ),
         ]
         new_content, meta = transform_response(
@@ -261,6 +265,113 @@ class TestTransformResponse:
         assert new_content[1].text == "plain text"
         # Third block: list → TOON
         assert "@schema:" in new_content[2].text
+
+    def test_small_payload_falls_back_to_compact_json(self):
+        """Small payloads where toon adds overhead use compact JSON."""
+        content = [
+            TextContent(type="text", text=json.dumps({"a": 1})),
+        ]
+        new_content, meta = transform_response(
+            content, response_format="toon"
+        )
+        # Too small for toon — should be compact JSON, not @schema:
+        assert new_content[0].text == '{"a":1}'
+        assert meta is None  # no _format annotation
+
+
+# ---------------------------------------------------------------------------
+# strip_meta
+# ---------------------------------------------------------------------------
+
+
+class TestStripMeta:
+    """Tests for _meta / meta key stripping."""
+
+    def test_strip_meta_from_dict(self):
+        """Top-level _meta is removed."""
+        data = {"id": 1, "_meta": {"next_steps": ["foo"]}, "name": "x"}
+        content = [TextContent(type="text", text=json.dumps(data))]
+        new_content, _ = transform_response(
+            content, response_format="compact_json", strip_meta=True,
+        )
+        parsed = json.loads(new_content[0].text)
+        assert "_meta" not in parsed
+        assert parsed["id"] == 1
+        assert parsed["name"] == "x"
+
+    def test_strip_meta_key_from_dict(self):
+        """Top-level 'meta' key is also removed."""
+        data = {"id": 1, "meta": {"info": "bar"}, "name": "x"}
+        content = [TextContent(type="text", text=json.dumps(data))]
+        new_content, _ = transform_response(
+            content, response_format="compact_json", strip_meta=True,
+        )
+        parsed = json.loads(new_content[0].text)
+        assert "meta" not in parsed
+
+    def test_strip_meta_from_list_of_dicts(self):
+        """_meta is removed from each dict in a list."""
+        data = [
+            {"id": 1, "_meta": {"x": 1}},
+            {"id": 2, "_meta": {"y": 2}},
+        ]
+        content = [TextContent(type="text", text=json.dumps(data))]
+        new_content, _ = transform_response(
+            content, response_format="compact_json", strip_meta=True,
+        )
+        parsed = json.loads(new_content[0].text)
+        assert all("_meta" not in item for item in parsed)
+
+    def test_no_strip_when_disabled(self):
+        """strip_meta=False preserves _meta."""
+        data = {"id": 1, "_meta": {"next_steps": ["foo"]}}
+        content = [TextContent(type="text", text=json.dumps(data))]
+        new_content, _ = transform_response(
+            content, response_format="compact_json", strip_meta=False,
+        )
+        parsed = json.loads(new_content[0].text)
+        assert "_meta" in parsed
+
+    def test_strip_meta_with_toon(self):
+        """_meta is stripped before TOON conversion too."""
+        rows = [
+            {"id": i, "name": f"item_{i}", "active": True, "_meta": {"x": i}}
+            for i in range(10)
+        ]
+        content = [TextContent(type="text", text=json.dumps(rows))]
+        new_content, _ = transform_response(
+            content, response_format="toon", strip_meta=True,
+        )
+        # _meta should not appear in the output at all.
+        assert "_meta" not in new_content[0].text
+
+    def test_strip_meta_with_raw_format(self):
+        """strip_meta works even with response_format='raw'."""
+        data = {"id": 1, "_meta": {"info": "x"}, "name": "y"}
+        content = [TextContent(type="text", text=json.dumps(data))]
+        new_content, _ = transform_response(
+            content, response_format="raw", strip_meta=True,
+        )
+        parsed = json.loads(new_content[0].text)
+        assert "_meta" not in parsed
+        assert parsed["id"] == 1
+
+    def test_strip_meta_non_json_passthrough(self):
+        """Non-JSON text is unaffected by strip_meta."""
+        content = [TextContent(type="text", text="Hello world")]
+        new_content, _ = transform_response(
+            content, response_format="toon", strip_meta=True,
+        )
+        assert new_content[0].text == "Hello world"
+
+    def test_strip_meta_block_level(self):
+        """transform_content_block with strip_meta."""
+        data = {"result": 42, "_meta": {"depth_used": 3}}
+        block = TextContent(type="text", text=json.dumps(data))
+        result, was_toon = transform_content_block(block, "compact_json", strip_meta=True)
+        parsed = json.loads(result.text)
+        assert "_meta" not in parsed
+        assert parsed["result"] == 42
 
 
 # ---------------------------------------------------------------------------

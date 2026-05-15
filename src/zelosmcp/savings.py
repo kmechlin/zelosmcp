@@ -239,6 +239,24 @@ def to_wire_payload(payload: Any) -> Any:
     return payload
 
 
+# Max payload text stored per field to avoid DB bloat.
+_MAX_PAYLOAD_TEXT = 32 * 1024
+
+
+def _payload_to_text(payload: Any) -> str | None:
+    """Serialize a payload to a JSON string for storage, capped to avoid bloat."""
+    if payload is None:
+        return None
+    wire = to_wire_payload(payload)
+    try:
+        text = json.dumps(wire, default=str, ensure_ascii=False)
+    except Exception:
+        text = str(wire)
+    if len(text) > _MAX_PAYLOAD_TEXT:
+        text = text[:_MAX_PAYLOAD_TEXT] + "…(truncated)"
+    return text
+
+
 async def measure_event(
     *,
     recorder: EventRecorder | None,
@@ -290,6 +308,9 @@ async def measure_event(
                 compressed_provider()
                 if compressed_provider is not None else None
             )
+            # For non-call events no transform is applied, so upstream = returned.
+            input_text = _payload_to_text(input_payload)
+            output_text = _payload_to_text(payload)
             await recorder.record_event(
                 event_id=uuid4().hex,
                 method=method,
@@ -315,6 +336,9 @@ async def measure_event(
                 error=err,
                 error_message=str(caught) if caught is not None else None,
                 meta=meta,
+                input_text=input_text,
+                upstream_text=output_text,
+                returned_text=output_text,
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("event record swallowed: %s", exc)
@@ -606,6 +630,9 @@ class EventRecorder:
         error: bool = False,
         error_message: str | None = None,
         meta: dict[str, Any] | None = None,
+        input_text: str | None = None,
+        upstream_text: str | None = None,
+        returned_text: str | None = None,
     ) -> None:
         ts = time.time()
         counted_input = (
@@ -617,6 +644,11 @@ class EventRecorder:
             if output_tokens is not None
             else self.count_payload(output_payload)
         )
+        # Default upstream tokens to output tokens when no transform applied.
+        effective_raw = (
+            raw_output_tokens
+            if raw_output_tokens is not None else counted_output
+        )
         try:
             await self.store.insert_event(
                 event_id=event_id,
@@ -627,13 +659,16 @@ class EventRecorder:
                 compressed=compressed,
                 input_tokens=counted_input,
                 output_tokens=counted_output,
-                raw_output_tokens=raw_output_tokens,
+                raw_output_tokens=effective_raw,
                 raw_output_bytes=raw_output_bytes,
                 transform_type=transform_type,
                 latency_ms=latency_ms,
                 error=error,
                 error_message=error_message,
                 meta=meta,
+                input_text=input_text,
+                upstream_text=upstream_text,
+                returned_text=returned_text,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("record_event(%s) write failed: %s", event_id, exc)
@@ -648,7 +683,7 @@ class EventRecorder:
             "compressed": compressed,
             "input_tokens": counted_input,
             "output_tokens": counted_output,
-            "raw_output_tokens": raw_output_tokens,
+            "raw_output_tokens": effective_raw,
             "raw_output_bytes": raw_output_bytes,
             "transform_type": transform_type,
             "latency_ms": latency_ms,
@@ -701,6 +736,7 @@ async def measure_call(
     raw_output_tokens_provider: Callable[[], int | None] | None = None,
     raw_output_bytes_provider: Callable[[], int | None] | None = None,
     transform_type_provider: Callable[[], str | None] | None = None,
+    upstream_text_provider: Callable[[], str | None] | None = None,
 ) -> Any:
     """Run ``dispatch()`` and route its result through the recorder.
 
@@ -741,6 +777,19 @@ async def measure_call(
                 logger.debug("savings record_call swallowed: %s", exc)
         if event_recorder is not None:
             try:
+                input_text = _payload_to_text(arguments)
+                # upstream_text is the raw response before transforms
+                raw_upstream = None
+                if upstream_text_provider is not None:
+                    raw_upstream = upstream_text_provider()
+                # Count returned tokens as text content — what the LLM
+                # actually sees (not the CallToolResult wire envelope).
+                try:
+                    returned_content = render_call_output_text(result) if result is not None else ""
+                except Exception:
+                    returned_content = ""
+                returned_tokens = event_recorder.count_payload(returned_content)
+                returned_text = returned_content[:32 * 1024] if returned_content else None
                 await event_recorder.record_event(
                     event_id=uuid4().hex,
                     method="tools/call",
@@ -750,6 +799,7 @@ async def measure_call(
                     compressed=compressed,
                     input_payload=arguments,
                     output_payload=result,
+                    output_tokens=returned_tokens,
                     raw_output_tokens=(
                         raw_output_tokens_provider()
                         if raw_output_tokens_provider is not None else None
@@ -765,6 +815,9 @@ async def measure_call(
                     latency_ms=latency_ms,
                     error=err,
                     error_message=str(caught) if caught is not None else None,
+                    input_text=input_text,
+                    upstream_text=raw_upstream,
+                    returned_text=returned_text,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("event record swallowed: %s", exc)

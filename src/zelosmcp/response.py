@@ -110,6 +110,23 @@ def _compact_json(obj: Any) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
+def _strip_meta_keys(obj: Any) -> Any:
+    """Remove ``_meta`` and ``meta`` keys from a parsed JSON object.
+
+    Works on dicts (top-level removal) and lists-of-dicts (per-element).
+    Returns the mutated object (or original if not applicable).
+    """
+    if isinstance(obj, dict):
+        obj.pop("_meta", None)
+        obj.pop("meta", None)
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, dict):
+                item.pop("_meta", None)
+                item.pop("meta", None)
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -117,12 +134,13 @@ def _compact_json(obj: Any) -> str:
 def transform_content_block(
     block: TextContent,
     fmt: str,
+    strip_meta: bool = False,
 ) -> tuple[TextContent, bool]:
     """Transform a single ``TextContent`` block.
 
     Returns ``(new_block, was_toon_converted)``.
     """
-    if fmt == "raw":
+    if fmt == "raw" and not strip_meta:
         return block, False
 
     text = block.text if hasattr(block, "text") else None
@@ -134,10 +152,25 @@ def transform_content_block(
         # Not parseable — pass through unchanged.
         return block, False
 
+    # Strip _meta / meta envelopes before any serialization.
+    if strip_meta:
+        obj = _strip_meta_keys(obj)
+
+    if fmt == "raw":
+        # Re-serialize only if we stripped something; otherwise pass through.
+        if strip_meta:
+            return TextContent(type="text", text=_compact_json(obj)), False
+        return block, False
+
     if fmt == "toon":
         toon = _to_toon(obj)
         if toon is not None:
-            return TextContent(type="text", text=toon), True
+            compact = _compact_json(obj)
+            # Only use TOON when it actually saves tokens vs compact JSON.
+            if len(toon) <= len(compact):
+                return TextContent(type="text", text=toon), True
+            # TOON is larger — fall through to compact JSON.
+            return TextContent(type="text", text=compact), False
         # TOON failed — fall through to compact JSON.
 
     # compact_json or toon-fallback
@@ -149,6 +182,7 @@ def transform_response(
     *,
     response_format: str = DEFAULT_RESPONSE_FORMAT,
     accepts_toon: bool = True,
+    strip_meta: bool = False,
     meta: dict[str, Any] | None = None,
 ) -> tuple[list, dict[str, Any] | None]:
     """Transform all ``TextContent`` blocks in a tool-call response.
@@ -158,6 +192,8 @@ def transform_response(
         response_format: ``"toon"`` / ``"compact_json"`` / ``"raw"``.
         accepts_toon: Session-level gate; when ``False``, TOON is
             downgraded to ``"compact_json"``.
+        strip_meta: Remove ``_meta`` / ``meta`` keys from JSON blocks
+            before serialization.
         meta: Existing ``_meta`` dict (or ``None``).  A new dict is
             created when needed.
 
@@ -165,7 +201,7 @@ def transform_response(
         ``(new_content, new_meta)`` — the transformed content list and
         updated meta dict (with ``_format: "toon"`` when applicable).
     """
-    if response_format == "raw":
+    if response_format == "raw" and not strip_meta:
         return content, meta
 
     # Session gate: downgrade toon → compact_json when client opts out.
@@ -179,7 +215,7 @@ def transform_response(
         if isinstance(block, TextContent) or (
             hasattr(block, "type") and getattr(block, "type", None) == "text"
         ):
-            transformed, was_toon = transform_content_block(block, fmt)
+            transformed, was_toon = transform_content_block(block, fmt, strip_meta=strip_meta)
             new_content.append(transformed)
             if was_toon:
                 any_toon = True

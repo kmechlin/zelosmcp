@@ -276,6 +276,30 @@ HTML_TEMPLATE = """\
   .events-table tbody tr {
     cursor: pointer;
   }
+  .events-table-scroll {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .events-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .events-table th, .events-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+  }
+  /* Column widths: Time Backend Method Qualified Input Upstream Returned Saved Latency */
+  .events-table th:nth-child(1), .events-table td:nth-child(1) { width: 72px; }
+  .events-table th:nth-child(2), .events-table td:nth-child(2) { width: 80px; }
+  .events-table th:nth-child(3), .events-table td:nth-child(3) { width: 100px; }
+  .events-table th:nth-child(4), .events-table td:nth-child(4) { width: auto; word-break: break-all; white-space: normal; }
+  .events-table td:nth-child(4) code { word-break: break-all; white-space: normal; }
+  .events-table th:nth-child(5), .events-table td:nth-child(5) { width: 56px; }
+  .events-table th:nth-child(6), .events-table td:nth-child(6) { width: 64px; }
+  .events-table th:nth-child(7), .events-table td:nth-child(7) { width: 64px; }
+  .events-table th:nth-child(8), .events-table td:nth-child(8) { width: 56px; }
+  .events-table th:nth-child(9), .events-table td:nth-child(9) { width: 64px; }
   .events-table tbody tr.is-selected {
     background: var(--surface);
   }
@@ -1741,7 +1765,7 @@ HTML_TEMPLATE = """\
 
       <div class="section">
         <div class="section-label">Recent transactions</div>
-        <div class="card">
+        <div class="card events-table-scroll">
           <table class="savings-table events-table" id="events-table">
             <thead>
               <tr>
@@ -4741,7 +4765,7 @@ HTML_TEMPLATE = """\
   let eventsPollTimer = null;
   let eventsFetchInflight = false;
   let eventsPageOffset = 0;
-  const eventsPageLimit = 50;
+  const eventsPageLimit = 25;
   let currentEventsPage = null;
   let currentEventSelectionId = null;
 
@@ -4997,7 +5021,63 @@ HTML_TEMPLATE = """\
       pre.textContent = "Select an event row to inspect its details.";
       return;
     }
-    pre.textContent = JSON.stringify(event, null, 2);
+    const sections = [];
+    // Header
+    const upstream = event.raw_output_tokens || 0;
+    const returned = event.output_tokens || 0;
+    const saved = upstream - returned;
+    const savedStr = saved < 0 ? `(${Math.abs(saved)})` : String(saved);
+    sections.push(`── Event: ${event.event_id} ──`);
+    sections.push(`Time:      ${event.ts ? new Date(event.ts * 1000).toISOString() : '—'}`);
+    sections.push(`Backend:   ${event.backend || '—'}`);
+    sections.push(`Method:    ${event.method || '—'}`);
+    sections.push(`Tool:      ${event.tool || '—'}`);
+    sections.push(`Qualified: ${event.qualified || '—'}`);
+    sections.push(`Latency:   ${event.latency_ms || 0} ms`);
+    sections.push(`Input:     ${event.input_tokens || 0} tokens`);
+    sections.push(`Upstream:  ${upstream} tokens`);
+    sections.push(`Returned:  ${returned} tokens`);
+    sections.push(`Saved:     ${savedStr} tokens`);
+    if (event.transform_type) sections.push(`Transform: ${event.transform_type}`);
+    if (event.error) sections.push(`Error:     ${event.error_message || 'yes'}`);
+    sections.push('');
+
+    // Input message
+    sections.push('── Input Message ──');
+    if (event.input_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.input_text), null, 2)); }
+      catch(e) { sections.push(event.input_text); }
+    } else {
+      sections.push('(no input)');
+    }
+    sections.push('');
+
+    // Upstream message (raw from backend, before transforms)
+    sections.push('── Upstream Message (raw from backend) ──');
+    if (event.upstream_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.upstream_text), null, 2)); }
+      catch(e) { sections.push(event.upstream_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Returned message (after transforms, sent to IDE/LLM)
+    sections.push('── Returned Message (sent to IDE) ──');
+    if (event.returned_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.returned_text), null, 2)); }
+      catch(e) { sections.push(event.returned_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Meta
+    if (event.meta) {
+      sections.push('── Meta ──');
+      sections.push(JSON.stringify(event.meta, null, 2));
+    }
+    pre.textContent = sections.join('\\n');
   }
 
   function selectEvent(eventId) {
@@ -5043,7 +5123,10 @@ HTML_TEMPLATE = """\
     }
 
     body.innerHTML = rows.map((row) => {
-      const saved = Math.max(0, (row.raw_output_tokens || 0) - (row.output_tokens || 0));
+      const upstream = row.raw_output_tokens || 0;
+      const returned = row.output_tokens || 0;
+      const saved = upstream - returned;
+      const savedStr = saved < 0 ? `(${fmtNum(Math.abs(saved))})` : fmtNum(saved);
       const ts = row.ts ? new Date(row.ts * 1000).toLocaleTimeString() : "—";
       const qualified = row.qualified || row.tool || row.method || "—";
       const rowClass = row.error ? "is-error" : "";
@@ -5054,9 +5137,9 @@ HTML_TEMPLATE = """\
           <td><code>${escapeHtml(row.method || "—")}</code></td>
           <td><code>${escapeHtml(qualified)}</code></td>
           <td class="num">${fmtNum(row.input_tokens || 0)}</td>
-          <td class="num">${fmtNum(row.raw_output_tokens || 0)}</td>
-          <td class="num">${fmtNum(row.output_tokens || 0)}</td>
-          <td class="num">${fmtNum(saved)}</td>
+          <td class="num">${fmtNum(upstream)}</td>
+          <td class="num">${fmtNum(returned)}</td>
+          <td class="num">${savedStr}</td>
           <td class="num">${Number(row.latency_ms || 0).toFixed(0)} ms</td>
         </tr>`;
     }).join("");

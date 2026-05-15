@@ -1618,4 +1618,5 @@ class ProxyManager:
             auth_bearer=spec.auth_bearer,
             passthrough_pool=spec.passthrough_pool,
             response_format=spec.response_format,
+            strip_meta=spec.strip_meta,
         )

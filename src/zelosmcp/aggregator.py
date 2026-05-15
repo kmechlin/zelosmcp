@@ -357,7 +357,7 @@ class Aggregator:
             return await measure_event(
                 recorder=event_recorder,
                 method="tools/list",
-                backend=None,
+                backend="aggregate",
                 dispatch=_dispatch,
                 compressed_provider=lambda: snapshot_count > 0,
                 meta_provider=lambda _result: {
@@ -385,6 +385,15 @@ class Aggregator:
                     _builtin_cfg.response_format
                     if _builtin_cfg is not None
                     else "raw"
+                )
+            )
+            _strip_meta = (
+                _spec.strip_meta
+                if _spec is not None
+                else (
+                    _builtin_cfg.strip_meta
+                    if _builtin_cfg is not None
+                    else True
                 )
             )
 
@@ -469,36 +478,80 @@ class Aggregator:
                     catalog = state.passthrough_catalog
                     self._log(f"call_tool (compressed passthrough): {qualified_name}")
 
+                    _pt_raw_tokens: int | None = None
+                    _pt_raw_bytes: int | None = None
+                    _pt_upstream_text: str | None = None
+
+                    _pt_orig_dispatch = session.call_tool
+
+                    async def _pt_capturing_dispatch(name, tool_input):
+                        nonlocal _pt_raw_tokens, _pt_raw_bytes, _pt_upstream_text
+                        r = await _pt_orig_dispatch(name, tool_input)
+                        if event_recorder is not None:
+                            try:
+                                raw_text = render_call_output_text(r)
+                            except Exception:
+                                raw_text = ""
+                            _pt_raw_tokens = event_recorder.count_payload(raw_text)
+                            _pt_raw_bytes = len(raw_text.encode("utf-8"))
+                            _pt_upstream_text = raw_text[:32 * 1024] if raw_text else None
+                        return r
+
                     async def _passthrough_dispatch():
                         try:
-                            return await handle_compressed_call(
+                            r = await handle_compressed_call(
                                 catalog=catalog,
                                 op=original,
                                 args=arguments,
-                                dispatch=session.call_tool,
+                                dispatch=_pt_capturing_dispatch,
                                 level=level,
                             )
                         except PassthroughChallengeError as exc:
-                            # Token expired mid-call. Surface for OAuth
-                            # refresh just like the open-session path.
                             signal_challenge(exc)
-                            from mcp.types import CallToolResult
-                            return CallToolResult(
+                            from mcp.types import CallToolResult as _CTR
+                            return _CTR(
                                 content=[],
                                 structuredContent=None,
                                 isError=True,
                                 meta=None,
                             )
+                        # Only apply response transform for invoke_tool.
+                        if original == "invoke_tool":
+                            from mcp.types import CallToolResult
+                            content = list(r.content)
+                            meta = getattr(r, "meta", None)
+                            meta_dict = dict(meta) if meta else None
+                            content, meta_dict = transform_response(
+                                content,
+                                response_format=_resp_fmt,
+                                strip_meta=_strip_meta,
+                                meta=meta_dict,
+                            )
+                            return CallToolResult(
+                                content=content,
+                                structuredContent=getattr(r, "structuredContent", None),
+                                isError=bool(r.isError),
+                                meta=meta_dict,
+                            )
+                        return r
 
+                    # For passthrough invoke_tool, enrich tool/qualified with inner name.
+                    _pt_inner = arguments.get("tool_name") if original == "invoke_tool" and isinstance(arguments, dict) else None
+                    _pt_tool = _pt_inner or original
+                    _pt_qualified = f"{backend}__{_pt_inner}" if _pt_inner else qualified_name
                     return await measure_call(
                         recorder=recorder,
                         event_recorder=event_recorder,
                         backend=backend,
-                        tool=original,
-                        qualified=qualified_name,
+                        tool=_pt_tool,
+                        qualified=_pt_qualified,
                         compressed=True,
                         arguments=arguments,
                         dispatch=_passthrough_dispatch,
+                        raw_output_tokens_provider=lambda: _pt_raw_tokens,
+                        raw_output_bytes_provider=lambda: _pt_raw_bytes,
+                        transform_type_provider=lambda: _resp_fmt,
+                        upstream_text_provider=lambda: _pt_upstream_text,
                     )
 
                 if is_session_wrapper:
@@ -507,21 +560,77 @@ class Aggregator:
                             f"Unknown or unavailable tool '{qualified_name}'"
                         )
                     self._log(f"call_tool (compressed): {qualified_name}")
+                    # For invoke_tool, enrich tool/qualified with inner name.
+                    _inner = arguments.get("tool_name") if original == "invoke_tool" and isinstance(arguments, dict) else None
+                    _resolved_tool = _inner or original
+                    _resolved_qualified = f"{backend}__{_inner}" if _inner else qualified_name
+
+                    # Capture raw upstream for event recording and apply
+                    # response transform (toon/compact_json) so the
+                    # returned_text reflects what the IDE/LLM actually sees.
+                    _sw_raw_tokens: int | None = None
+                    _sw_raw_bytes: int | None = None
+                    _sw_upstream_text: str | None = None
+
+                    _orig_dispatch = state.client_session.call_tool
+
+                    async def _capturing_dispatch(name, tool_input):
+                        nonlocal _sw_raw_tokens, _sw_raw_bytes, _sw_upstream_text
+                        r = await _orig_dispatch(name, tool_input)
+                        if event_recorder is not None:
+                            try:
+                                raw_text = render_call_output_text(r)
+                            except Exception:
+                                raw_text = ""
+                            _sw_raw_tokens = event_recorder.count_payload(raw_text)
+                            _sw_raw_bytes = len(raw_text.encode("utf-8"))
+                            _sw_upstream_text = raw_text[:32 * 1024] if raw_text else None
+                        return r
+
+                    async def _sw_dispatch():
+                        from mcp.types import CallToolResult
+                        r = await handle_compressed_call(
+                            catalog=self.compressed_catalog[backend],
+                            op=original,
+                            args=arguments,
+                            dispatch=_capturing_dispatch,
+                            level=level,
+                        )
+                        # Only apply response transform for invoke_tool
+                        # (actual backend dispatch). Other ops (search_tools,
+                        # get_tool_schema, list_tools) produce synthetic
+                        # content that shouldn't be re-transformed.
+                        if original == "invoke_tool":
+                            content = list(r.content)
+                            meta = getattr(r, "meta", None)
+                            meta_dict = dict(meta) if meta else None
+                            content, meta_dict = transform_response(
+                                content,
+                                response_format=_resp_fmt,
+                                strip_meta=_strip_meta,
+                                meta=meta_dict,
+                            )
+                            return CallToolResult(
+                                content=content,
+                                structuredContent=getattr(r, "structuredContent", None),
+                                isError=bool(r.isError),
+                                meta=meta_dict,
+                            )
+                        return r
+
                     return await measure_call(
                         recorder=recorder,
                         event_recorder=event_recorder,
                         backend=backend,
-                        tool=original,
-                        qualified=qualified_name,
+                        tool=_resolved_tool,
+                        qualified=_resolved_qualified,
                         compressed=True,
                         arguments=arguments,
-                        dispatch=lambda: handle_compressed_call(
-                            catalog=self.compressed_catalog[backend],
-                            op=original,
-                            args=arguments,
-                            dispatch=state.client_session.call_tool,
-                            level=level,
-                        ),
+                        dispatch=_sw_dispatch,
+                        raw_output_tokens_provider=lambda: _sw_raw_tokens,
+                        raw_output_bytes_provider=lambda: _sw_raw_bytes,
+                        transform_type_provider=lambda: _resp_fmt,
+                        upstream_text_provider=lambda: _sw_upstream_text,
                     )
             state = self.manager.servers.get(backend) if original else None
             if state is None or not state.running:
@@ -550,9 +659,10 @@ class Aggregator:
                 raw_output_tokens: int | None = None
                 raw_output_bytes: int | None = None
                 transform_type: str | None = None
+                upstream_text: str | None = None
 
                 async def _dispatch_passthrough() -> CallToolResult:
-                    nonlocal raw_output_tokens, raw_output_bytes, transform_type
+                    nonlocal raw_output_tokens, raw_output_bytes, transform_type, upstream_text
                     try:
                         r = await session.call_tool(original, arguments)
                     except PassthroughChallengeError as exc:
@@ -564,6 +674,8 @@ class Aggregator:
                             meta=None,
                         )
                     if event_recorder is not None:
+                        # Count tokens as text content — what the LLM
+                        # actually sees (Cursor charges for this).
                         try:
                             raw_output_text = render_call_output_text(r)
                         except Exception:
@@ -573,6 +685,7 @@ class Aggregator:
                         )
                         raw_output_bytes = len(raw_output_text.encode("utf-8"))
                         transform_type = _resp_fmt
+                        upstream_text = raw_output_text[:32 * 1024] if raw_output_text else None
                     content = list(r.content)
                     meta = getattr(r, "meta", None)
                     meta_dict = (
@@ -581,6 +694,7 @@ class Aggregator:
                     content, meta_dict = transform_response(
                         content,
                         response_format=_resp_fmt,
+                        strip_meta=_strip_meta,
                         meta=meta_dict,
                     )
                     return CallToolResult(
@@ -602,6 +716,7 @@ class Aggregator:
                     raw_output_tokens_provider=lambda: raw_output_tokens,
                     raw_output_bytes_provider=lambda: raw_output_bytes,
                     transform_type_provider=lambda: transform_type,
+                    upstream_text_provider=lambda: upstream_text,
                 )
 
             if state.client_session is None:
@@ -612,11 +727,14 @@ class Aggregator:
             raw_output_tokens: int | None = None
             raw_output_bytes: int | None = None
             transform_type: str | None = None
+            upstream_text: str | None = None
 
             async def _dispatch() -> CallToolResult:
-                nonlocal raw_output_tokens, raw_output_bytes, transform_type
+                nonlocal raw_output_tokens, raw_output_bytes, transform_type, upstream_text
                 r = await state.client_session.call_tool(original, arguments)
                 if event_recorder is not None:
+                    # Count tokens as text content — what the LLM
+                    # actually sees (Cursor charges for this).
                     try:
                         raw_output_text = render_call_output_text(r)
                     except Exception:
@@ -626,6 +744,7 @@ class Aggregator:
                     )
                     raw_output_bytes = len(raw_output_text.encode("utf-8"))
                     transform_type = _resp_fmt
+                    upstream_text = raw_output_text[:32 * 1024] if raw_output_text else None
                 content = list(r.content)
                 meta = getattr(r, "meta", None)
                 meta_dict = (
@@ -634,6 +753,7 @@ class Aggregator:
                 content, meta_dict = transform_response(
                     content,
                     response_format=_resp_fmt,
+                    strip_meta=_strip_meta,
                     meta=meta_dict,
                 )
                 return CallToolResult(
@@ -655,6 +775,7 @@ class Aggregator:
                 raw_output_tokens_provider=lambda: raw_output_tokens,
                 raw_output_bytes_provider=lambda: raw_output_bytes,
                 transform_type_provider=lambda: transform_type,
+                upstream_text_provider=lambda: upstream_text,
             )
 
         @server.list_prompts()
@@ -709,7 +830,7 @@ class Aggregator:
             return await measure_event(
                 recorder=event_recorder,
                 method="prompts/list",
-                backend=None,
+                backend="aggregate",
                 dispatch=_dispatch,
                 meta_provider=lambda _result: {
                     "backend_count": backend_count,
@@ -869,7 +990,7 @@ class Aggregator:
             return await measure_event(
                 recorder=event_recorder,
                 method="resources/list",
-                backend=None,
+                backend="aggregate",
                 dispatch=_dispatch,
                 meta_provider=lambda _result: {
                     "backend_count": backend_count,
@@ -935,7 +1056,7 @@ class Aggregator:
             return await measure_event(
                 recorder=event_recorder,
                 method="resources/templates",
-                backend=None,
+                backend="aggregate",
                 dispatch=_dispatch,
                 meta_provider=lambda _result: {
                     "backend_count": backend_count,
