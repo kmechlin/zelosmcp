@@ -1083,6 +1083,15 @@ wheels = [
 ]
 
 [[package]]
+name = "toon-token-optimizer"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/04/047a73f44ff93f925462c313ae1b105e3c6ecc38eb1e4da19ec589431f95/toon_token_optimizer-1.0.0.tar.gz", hash = "sha256:0d8823e3efda49cd9bb31cceaf44c68f0d67d19b48087bdc420b03ab86933a9d", size = 13987, upload-time = "2026-01-20T16:54:35.116Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/31/409ad31727c5f5171208c9e56a11d9300623bb4df4efa6a1a82b83627862/toon_token_optimizer-1.0.0-py3-none-any.whl", hash = "sha256:988bd65c6c5a83301f70c782cccbf394282bae76db0f1e24b557f7cf35cc17ad", size = 8979, upload-time = "2026-01-20T16:54:34.168Z" },
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1134,10 +1143,12 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "cryptography" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "markdown" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "starlette" },
+    { name = "toon-token-optimizer" },
     { name = "uvicorn" },
 ]
 
@@ -1151,11 +1162,13 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "cryptography", specifier = ">=41.0" },
     { name = "httpx", specifier = ">=0.25" },
+    { name = "jsonschema", specifier = ">=4.18" },
     { name = "markdown", specifier = ">=3.5" },
     { name = "mcp", specifier = ">=1.0" },
     { name = "pyyaml" },
     { name = "starlette" },
     { name = "tiktoken", marker = "extra == 'tokenizer'", specifier = ">=0.7" },
+    { name = "toon-token-optimizer", specifier = ">=1.0" },
     { name = "uvicorn" },
 ]
 provides-extras = ["tokenizer"]

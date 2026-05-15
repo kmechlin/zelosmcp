@@ -37,7 +37,11 @@ from zelosmcp.passthrough_pool import (
     signal_challenge,
 )
 from zelosmcp.response import transform_response
-from zelosmcp.savings import measure_call
+from zelosmcp.savings import (
+    measure_call,
+    measure_event,
+    render_call_output_text,
+)
 
 if TYPE_CHECKING:
     from zelosmcp.manager import ProxyManager
@@ -199,193 +203,175 @@ class Aggregator:
     def _register_handlers(self, server: Server) -> None:
         @server.list_tools()
         async def list_tools() -> list:
-            states = self._running_states()
-            self.compressed_catalog.clear()
-            tools: list = []
-            # Compression snapshots are recorded after the iteration so we
-            # never block the wire-format response on the savings DB. Each
-            # entry: (backend, level, raw_payload, compressed_payload).
-            snapshots: list[tuple[str, str, list, list]] = []
-            if states:
-                results = await asyncio.gather(
-                    *(s.client_session.list_tools() for s in states),
-                    return_exceptions=True,
-                )
-                for state, r in zip(states, results):
-                    if isinstance(r, BaseException):
-                        if not _is_method_not_found(r):
-                            self._log(f"{state.name} list_tools failed: {r}")
-                        continue
-                    spec = self.manager._specs.get(state.name)
-                    _bcfg = getattr(
-                        self.manager, "_builtin_config", None
+            event_recorder = getattr(self.manager, "events", None)
+            returned_count = 0
+            snapshot_count = 0
+            backend_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal backend_count, returned_count, snapshot_count
+                states = self._running_states()
+                passthrough_states = list(self._passthrough_states())
+                backend_count = len(states) + len(passthrough_states)
+                self.compressed_catalog.clear()
+                tools: list = []
+                snapshots: list[tuple[str, str, list, list]] = []
+                if states:
+                    results = await asyncio.gather(
+                        *(s.client_session.list_tools() for s in states),
+                        return_exceptions=True,
                     )
-                    compress = (
-                        spec.compress if spec is not None
-                        else (
-                            _bcfg.compress
-                            if _bcfg is not None
-                            else None
+                    for state, r in zip(states, results):
+                        if isinstance(r, BaseException):
+                            if not _is_method_not_found(r):
+                                self._log(f"{state.name} list_tools failed: {r}")
+                            continue
+                        spec = self.manager._specs.get(state.name)
+                        _bcfg = getattr(self.manager, "_builtin_config", None)
+                        compress = (
+                            spec.compress if spec is not None
+                            else (_bcfg.compress if _bcfg is not None else None)
                         )
-                    )
-                    backend_tools = list(getattr(r, "tools", []) or [])
-                    # Cache the full catalog whenever compression is configured
-                    # so docs/discovery surfaces (`zelosmcp__list_compressed_tools`,
-                    # cursor-rule generator) see the compressed view regardless
-                    # of scope.
-                    if compress is not None:
-                        self.compressed_catalog[state.name] = {
-                            t.name: t for t in backend_tools
-                        }
-                    applies_to_aggregator = (
-                        compress is not None
-                        and compress.scope in ("aggregator", "global")
-                        and compress.level != "low"
-                    )
-                    if compress is not None:
-                        raw_payload = [
-                            _tool_to_wire(_qualified_copy(t, state.name))
-                            for t in backend_tools
-                        ]
-                        compressed_payload = [
-                            _tool_to_wire(t)
-                            for t in compressed_tool_list(
+                        backend_tools = list(getattr(r, "tools", []) or [])
+                        if compress is not None:
+                            self.compressed_catalog[state.name] = {
+                                t.name: t for t in backend_tools
+                            }
+                        applies_to_aggregator = (
+                            compress is not None
+                            and compress.scope in ("aggregator", "global")
+                            and compress.level != "low"
+                        )
+                        if compress is not None:
+                            raw_payload = [
+                                _tool_to_wire(_qualified_copy(t, state.name))
+                                for t in backend_tools
+                            ]
+                            compressed_payload = [
+                                _tool_to_wire(t)
+                                for t in compressed_tool_list(
+                                    prefix=state.name,
+                                    tools=backend_tools,
+                                    level=compress.level,
+                                )
+                            ]
+                            snapshots.append(
+                                (
+                                    state.name,
+                                    compress.level,
+                                    raw_payload,
+                                    compressed_payload,
+                                )
+                            )
+                        if not applies_to_aggregator:
+                            for t in backend_tools:
+                                tools.append(_qualified_copy(t, state.name))
+                            continue
+                        tools.extend(
+                            compressed_tool_list(
                                 prefix=state.name,
                                 tools=backend_tools,
                                 level=compress.level,
                             )
-                        ]
-                        snapshots.append(
-                            (state.name, compress.level, raw_payload, compressed_payload)
                         )
-                    if not applies_to_aggregator:
-                        for t in backend_tools:
-                            tools.append(_qualified_copy(t, state.name))
+
+                user_key = hash_authorization(inbound_authorization.get())
+                for state in passthrough_states:
+                    spec = self.manager._specs.get(state.name)
+                    compress = spec.compress if spec is not None else None
+                    if compress is None:
                         continue
+
+                    auth_provider = self.manager.auth_registry.get_for_backend(
+                        state.name,
+                        spec.auth_provider if spec is not None else None,
+                    )
+                    if auth_provider is not None:
+                        try:
+                            ready = await auth_provider.is_ready(user_key)
+                        except Exception as exc:
+                            self._log(
+                                f"{state.name} auth provider "
+                                f"'{auth_provider.name}' is_ready failed: {exc}; "
+                                "treating as not-ready and gating wrappers"
+                            )
+                            ready = False
+                        if not ready:
+                            continue
+
+                    backend_tools: list = []
+                    auth_pending = False
+                    try:
+                        session = await self._passthrough_session(state)
+                        try:
+                            r = await session.list_tools()
+                            backend_tools = list(getattr(r, "tools", []) or [])
+                            state.passthrough_catalog = {
+                                t.name: t for t in backend_tools
+                            }
+                        except Exception as exc:
+                            if not _is_method_not_found(exc):
+                                self._log(f"{state.name} list_tools failed: {exc}")
+                            backend_tools = list(state.passthrough_catalog.values())
+                    except PassthroughChallengeError:
+                        if state.passthrough_catalog:
+                            backend_tools = list(state.passthrough_catalog.values())
+                        else:
+                            auth_pending = True
+                    except Exception as exc:
+                        self._log(
+                            f"{state.name} list_tools session failed: {exc}"
+                        )
+                        backend_tools = list(state.passthrough_catalog.values())
+
+                    if backend_tools:
+                        self.compressed_catalog[state.name] = {
+                            t.name: t for t in backend_tools
+                        }
+
                     tools.extend(
                         compressed_tool_list(
                             prefix=state.name,
                             tools=backend_tools,
                             level=compress.level,
+                            auth_pending=auth_pending,
                         )
                     )
 
-            # Passthrough fan-out: emit compressed wrappers for every
-            # passthrough backend with compression configured, regardless
-            # of inbound auth state. The first wrapper invocation drives
-            # the OAuth dance via the existing PassthroughChallengeError
-            # path; tools/list never blocks on auth. Catalog priority:
-            #   1. Live upstream session (if inbound auth is good) —
-            #      refresh and cache for everyone else.
-            #   2. ProxyState.passthrough_catalog (a previous user
-            #      already warmed it).
-            #   3. Empty + auth_pending=True — wrappers explain the
-            #      coming OAuth challenge.
-            user_key = hash_authorization(inbound_authorization.get())
-            for state in self._passthrough_states():
-                spec = self.manager._specs.get(state.name)
-                compress = spec.compress if spec is not None else None
-                if compress is None:
-                    # User explicitly disabled compression for this
-                    # passthrough backend (compress: null). Without
-                    # wrappers we can't expose anything pre-auth, so
-                    # skip — preserves the old "invisible until auth"
-                    # behaviour as an opt-out.
-                    continue
-
-                # Provider-gated visibility: when a backend is wired to an
-                # auth provider AND the current user hasn't authenticated
-                # to that provider yet, hide the wrappers from
-                # tools/list entirely. Cursor sees no entry for the
-                # backend until the user completes the device flow in
-                # the Connections page. Backends with no provider
-                # configured (legacy passthrough) are unchanged — no
-                # gating, current behaviour preserved.
-                auth_provider = self.manager.auth_registry.get_for_backend(
-                    state.name,
-                    spec.auth_provider if spec is not None else None,
-                )
-                if auth_provider is not None:
-                    try:
-                        ready = await auth_provider.is_ready(user_key)
-                    except Exception as exc:
-                        self._log(
-                            f"{state.name} auth provider "
-                            f"'{auth_provider.name}' is_ready failed: {exc}; "
-                            "treating as not-ready and gating wrappers"
-                        )
-                        ready = False
-                    if not ready:
-                        continue
-
-                backend_tools: list = []
-                auth_pending = False
-                try:
-                    session = await self._passthrough_session(state)
-                    try:
-                        r = await session.list_tools()
-                        backend_tools = list(getattr(r, "tools", []) or [])
-                        state.passthrough_catalog = {
-                            t.name: t for t in backend_tools
-                        }
-                    except Exception as exc:
-                        if not _is_method_not_found(exc):
-                            self._log(
-                                f"{state.name} list_tools failed: {exc}"
+                returned_count = len(tools)
+                snapshot_count = len(snapshots)
+                self._log(f"list_tools -> {returned_count} tools")
+                recorder = getattr(self.manager, "savings", None)
+                if recorder is not None and snapshots:
+                    for backend_name, level, raw_payload, comp_payload in snapshots:
+                        asyncio.create_task(
+                            recorder.record_compression(
+                                backend=backend_name,
+                                level=level,
+                                raw_payload=raw_payload,
+                                compressed_payload=comp_payload,
                             )
-                        # Live fetch failed — fall back to whatever was
-                        # cached so we still emit useful wrappers.
-                        backend_tools = list(state.passthrough_catalog.values())
-                except PassthroughChallengeError:
-                    # Inbound caller has no usable token. If a previous
-                    # caller already populated the catalog, reuse it so
-                    # the wrappers carry the real surface; otherwise
-                    # emit auth-pending wrappers so the agent at least
-                    # sees the entry-point and knows to invoke (which
-                    # triggers OAuth on the call_tool path).
-                    if state.passthrough_catalog:
-                        backend_tools = list(state.passthrough_catalog.values())
-                    else:
-                        auth_pending = True
-                except Exception as exc:
-                    self._log(
-                        f"{state.name} list_tools session failed: {exc}"
-                    )
-                    backend_tools = list(state.passthrough_catalog.values())
-
-                if backend_tools:
-                    self.compressed_catalog[state.name] = {
-                        t.name: t for t in backend_tools
-                    }
-
-                tools.extend(
-                    compressed_tool_list(
-                        prefix=state.name,
-                        tools=backend_tools,
-                        level=compress.level,
-                        auth_pending=auth_pending,
-                    )
-                )
-            self._log(f"list_tools -> {len(tools)} tools")
-            recorder = getattr(self.manager, "savings", None)
-            if recorder is not None and snapshots:
-                # Record snapshots in the background — don't block the
-                # MCP response on a SQLite write.
-                for backend_name, level, raw_payload, comp_payload in snapshots:
-                    asyncio.create_task(
-                        recorder.record_compression(
-                            backend=backend_name,
-                            level=level,
-                            raw_payload=raw_payload,
-                            compressed_payload=comp_payload,
                         )
-                    )
-            return tools
+                return tools
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="tools/list",
+                backend=None,
+                dispatch=_dispatch,
+                compressed_provider=lambda: snapshot_count > 0,
+                meta_provider=lambda _result: {
+                    "backend_count": backend_count,
+                    "returned_count": returned_count,
+                    "snapshot_count": snapshot_count,
+                },
+            )
 
         @server.call_tool(validate_input=False)
         async def call_tool(qualified_name: str, arguments: dict[str, Any]) -> list:
             backend, original = _split_qualified(qualified_name)
             recorder = getattr(self.manager, "savings", None)
+            event_recorder = getattr(self.manager, "events", None)
 
             # Resolve per-backend response format.
             _spec = self.manager._specs.get(backend) if backend else None
@@ -506,6 +492,7 @@ class Aggregator:
 
                     return await measure_call(
                         recorder=recorder,
+                        event_recorder=event_recorder,
                         backend=backend,
                         tool=original,
                         qualified=qualified_name,
@@ -522,6 +509,7 @@ class Aggregator:
                     self._log(f"call_tool (compressed): {qualified_name}")
                     return await measure_call(
                         recorder=recorder,
+                        event_recorder=event_recorder,
                         backend=backend,
                         tool=original,
                         qualified=qualified_name,
@@ -559,8 +547,12 @@ class Aggregator:
                     return _error_tool_result(
                         f"backend '{backend}' requires authentication"
                     )
+                raw_output_tokens: int | None = None
+                raw_output_bytes: int | None = None
+                transform_type: str | None = None
 
                 async def _dispatch_passthrough() -> CallToolResult:
+                    nonlocal raw_output_tokens, raw_output_bytes, transform_type
                     try:
                         r = await session.call_tool(original, arguments)
                     except PassthroughChallengeError as exc:
@@ -571,6 +563,16 @@ class Aggregator:
                             isError=True,
                             meta=None,
                         )
+                    if event_recorder is not None:
+                        try:
+                            raw_output_text = render_call_output_text(r)
+                        except Exception:
+                            raw_output_text = ""
+                        raw_output_tokens = event_recorder.count_payload(
+                            raw_output_text
+                        )
+                        raw_output_bytes = len(raw_output_text.encode("utf-8"))
+                        transform_type = _resp_fmt
                     content = list(r.content)
                     meta = getattr(r, "meta", None)
                     meta_dict = (
@@ -590,12 +592,16 @@ class Aggregator:
 
                 return await measure_call(
                     recorder=recorder,
+                    event_recorder=event_recorder,
                     backend=backend,
                     tool=original,
                     qualified=qualified_name,
                     compressed=False,
                     arguments=arguments,
                     dispatch=_dispatch_passthrough,
+                    raw_output_tokens_provider=lambda: raw_output_tokens,
+                    raw_output_bytes_provider=lambda: raw_output_bytes,
+                    transform_type_provider=lambda: transform_type,
                 )
 
             if state.client_session is None:
@@ -603,8 +609,23 @@ class Aggregator:
                     f"Unknown or unavailable tool '{qualified_name}'"
                 )
 
+            raw_output_tokens: int | None = None
+            raw_output_bytes: int | None = None
+            transform_type: str | None = None
+
             async def _dispatch() -> CallToolResult:
+                nonlocal raw_output_tokens, raw_output_bytes, transform_type
                 r = await state.client_session.call_tool(original, arguments)
+                if event_recorder is not None:
+                    try:
+                        raw_output_text = render_call_output_text(r)
+                    except Exception:
+                        raw_output_text = ""
+                    raw_output_tokens = event_recorder.count_payload(
+                        raw_output_text
+                    )
+                    raw_output_bytes = len(raw_output_text.encode("utf-8"))
+                    transform_type = _resp_fmt
                 content = list(r.content)
                 meta = getattr(r, "meta", None)
                 meta_dict = (
@@ -624,278 +645,386 @@ class Aggregator:
 
             return await measure_call(
                 recorder=recorder,
+                event_recorder=event_recorder,
                 backend=backend,
                 tool=original,
                 qualified=qualified_name,
                 compressed=False,
                 arguments=arguments,
                 dispatch=_dispatch,
+                raw_output_tokens_provider=lambda: raw_output_tokens,
+                raw_output_bytes_provider=lambda: raw_output_bytes,
+                transform_type_provider=lambda: transform_type,
             )
 
         @server.list_prompts()
         async def list_prompts() -> list:
-            states = self._running_states()
-            prompts: list = []
-            if states:
-                results = await asyncio.gather(
-                    *(s.client_session.list_prompts() for s in states),
-                    return_exceptions=True,
-                )
-                for state, r in zip(states, results):
-                    if isinstance(r, BaseException):
-                        if not _is_method_not_found(r):
-                            self._log(f"{state.name} list_prompts failed: {r}")
+            event_recorder = getattr(self.manager, "events", None)
+            prompt_count = 0
+            backend_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal backend_count, prompt_count
+                states = self._running_states()
+                passthrough_states = list(self._passthrough_states())
+                backend_count = len(states) + len(passthrough_states)
+                prompts: list = []
+                if states:
+                    results = await asyncio.gather(
+                        *(s.client_session.list_prompts() for s in states),
+                        return_exceptions=True,
+                    )
+                    for state, r in zip(states, results):
+                        if isinstance(r, BaseException):
+                            if not _is_method_not_found(r):
+                                self._log(f"{state.name} list_prompts failed: {r}")
+                            continue
+                        for p in getattr(r, "prompts", []) or []:
+                            prompts.append(_qualified_copy(p, state.name))
+
+                for state in passthrough_states:
+                    try:
+                        session = await self._passthrough_session(state)
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        self._log(
+                            f"{state.name} list_prompts session failed: {exc}"
+                        )
+                        continue
+                    try:
+                        r = await session.list_prompts()
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        if not _is_method_not_found(exc):
+                            self._log(f"{state.name} list_prompts failed: {exc}")
                         continue
                     for p in getattr(r, "prompts", []) or []:
                         prompts.append(_qualified_copy(p, state.name))
+                prompt_count = len(prompts)
+                self._log(f"list_prompts -> {prompt_count} prompts")
+                return prompts
 
-            # Passthrough fan-out — same skip-on-401 policy as list_tools.
-            for state in self._passthrough_states():
-                try:
-                    session = await self._passthrough_session(state)
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    self._log(f"{state.name} list_prompts session failed: {exc}")
-                    continue
-                try:
-                    r = await session.list_prompts()
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    if not _is_method_not_found(exc):
-                        self._log(f"{state.name} list_prompts failed: {exc}")
-                    continue
-                for p in getattr(r, "prompts", []) or []:
-                    prompts.append(_qualified_copy(p, state.name))
-            self._log(f"list_prompts -> {len(prompts)} prompts")
-            return prompts
+            return await measure_event(
+                recorder=event_recorder,
+                method="prompts/list",
+                backend=None,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {
+                    "backend_count": backend_count,
+                    "count": prompt_count,
+                },
+            )
 
         @server.get_prompt()
         async def get_prompt(qualified_name: str, arguments: dict[str, str] | None = None):
             backend, original = _split_qualified(qualified_name)
-            state = self.manager.servers.get(backend) if original else None
-            if state is None or not state.running:
-                from mcp.types import GetPromptResult, PromptMessage, TextContent
-                return GetPromptResult(
-                    description=f"Unknown or unavailable prompt '{qualified_name}'",
-                    messages=[
-                        PromptMessage(
-                            role="user",
-                            content=TextContent(
-                                type="text",
-                                text=f"Unknown or unavailable prompt '{qualified_name}'",
-                            ),
-                        )
-                    ],
-                )
-            self._log(f"get_prompt: {qualified_name}")
-            if getattr(state, "is_passthrough", False):
-                try:
-                    session = await self._passthrough_session(state)
-                except PassthroughChallengeError as exc:
-                    signal_challenge(exc)
+            event_recorder = getattr(self.manager, "events", None)
+
+            async def _dispatch():
+                state = self.manager.servers.get(backend) if original else None
+                if state is None or not state.running:
                     from mcp.types import GetPromptResult, PromptMessage, TextContent
+
                     return GetPromptResult(
-                        description=f"backend '{backend}' requires authentication",
+                        description=f"Unknown or unavailable prompt '{qualified_name}'",
                         messages=[
                             PromptMessage(
                                 role="user",
                                 content=TextContent(
                                     type="text",
-                                    text=f"backend '{backend}' requires authentication",
+                                    text=(
+                                        f"Unknown or unavailable prompt '{qualified_name}'"
+                                    ),
                                 ),
                             )
                         ],
                     )
-                try:
-                    return await session.get_prompt(original, arguments)
-                except PassthroughChallengeError as exc:
-                    signal_challenge(exc)
+                self._log(f"get_prompt: {qualified_name}")
+                if getattr(state, "is_passthrough", False):
+                    try:
+                        session = await self._passthrough_session(state)
+                    except PassthroughChallengeError as exc:
+                        signal_challenge(exc)
+                        from mcp.types import GetPromptResult, PromptMessage, TextContent
+
+                        return GetPromptResult(
+                            description=f"backend '{backend}' requires authentication",
+                            messages=[
+                                PromptMessage(
+                                    role="user",
+                                    content=TextContent(
+                                        type="text",
+                                        text=(
+                                            f"backend '{backend}' requires authentication"
+                                        ),
+                                    ),
+                                )
+                            ],
+                        )
+                    try:
+                        return await session.get_prompt(original, arguments)
+                    except PassthroughChallengeError as exc:
+                        signal_challenge(exc)
+                        from mcp.types import GetPromptResult, PromptMessage, TextContent
+
+                        return GetPromptResult(
+                            description=f"backend '{backend}' requires authentication",
+                            messages=[
+                                PromptMessage(
+                                    role="user",
+                                    content=TextContent(
+                                        type="text",
+                                        text=(
+                                            f"backend '{backend}' requires authentication"
+                                        ),
+                                    ),
+                                )
+                            ],
+                        )
+                if state.client_session is None:
                     from mcp.types import GetPromptResult, PromptMessage, TextContent
+
                     return GetPromptResult(
-                        description=f"backend '{backend}' requires authentication",
+                        description=f"Unknown or unavailable prompt '{qualified_name}'",
                         messages=[
                             PromptMessage(
                                 role="user",
                                 content=TextContent(
                                     type="text",
-                                    text=f"backend '{backend}' requires authentication",
+                                    text=(
+                                        f"Unknown or unavailable prompt '{qualified_name}'"
+                                    ),
                                 ),
                             )
                         ],
                     )
-            if state.client_session is None:
-                from mcp.types import GetPromptResult, PromptMessage, TextContent
-                return GetPromptResult(
-                    description=f"Unknown or unavailable prompt '{qualified_name}'",
-                    messages=[
-                        PromptMessage(
-                            role="user",
-                            content=TextContent(
-                                type="text",
-                                text=f"Unknown or unavailable prompt '{qualified_name}'",
-                            ),
-                        )
-                    ],
-                )
-            return await state.client_session.get_prompt(original, arguments)
+                return await state.client_session.get_prompt(original, arguments)
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="prompts/get",
+                backend=backend or None,
+                tool=original or None,
+                qualified=qualified_name or None,
+                input_payload=arguments,
+                dispatch=_dispatch,
+                meta_provider=lambda result: {
+                    "message_count": len(getattr(result, "messages", []) or []),
+                },
+            )
 
         @server.list_resources()
         async def list_resources() -> list:
-            states = self._running_states()
-            out: list = []
-            if states:
-                results = await asyncio.gather(
-                    *(s.client_session.list_resources() for s in states),
-                    return_exceptions=True,
-                )
-                for state, r in zip(states, results):
-                    if isinstance(r, BaseException):
-                        if not _is_method_not_found(r):
-                            self._log(f"{state.name} list_resources failed: {r}")
+            event_recorder = getattr(self.manager, "events", None)
+            resource_count = 0
+            backend_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal backend_count, resource_count
+                states = self._running_states()
+                passthrough_states = list(self._passthrough_states())
+                backend_count = len(states) + len(passthrough_states)
+                out: list = []
+                if states:
+                    results = await asyncio.gather(
+                        *(s.client_session.list_resources() for s in states),
+                        return_exceptions=True,
+                    )
+                    for state, r in zip(states, results):
+                        if isinstance(r, BaseException):
+                            if not _is_method_not_found(r):
+                                self._log(f"{state.name} list_resources failed: {r}")
+                            continue
+                        for res in getattr(r, "resources", []) or []:
+                            self._resource_origin[str(res.uri)] = state.name
+                            out.append(res)
+
+                for state in passthrough_states:
+                    try:
+                        session = await self._passthrough_session(state)
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        self._log(
+                            f"{state.name} list_resources session failed: {exc}"
+                        )
+                        continue
+                    try:
+                        r = await session.list_resources()
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        if not _is_method_not_found(exc):
+                            self._log(f"{state.name} list_resources failed: {exc}")
                         continue
                     for res in getattr(r, "resources", []) or []:
                         self._resource_origin[str(res.uri)] = state.name
                         out.append(res)
+                resource_count = len(out)
+                self._log(f"list_resources -> {resource_count} resources")
+                return out
 
-            for state in self._passthrough_states():
-                try:
-                    session = await self._passthrough_session(state)
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    self._log(f"{state.name} list_resources session failed: {exc}")
-                    continue
-                try:
-                    r = await session.list_resources()
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    if not _is_method_not_found(exc):
-                        self._log(f"{state.name} list_resources failed: {exc}")
-                    continue
-                for res in getattr(r, "resources", []) or []:
-                    self._resource_origin[str(res.uri)] = state.name
-                    out.append(res)
-            self._log(f"list_resources -> {len(out)} resources")
-            return out
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/list",
+                backend=None,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {
+                    "backend_count": backend_count,
+                    "count": resource_count,
+                },
+            )
 
         @server.list_resource_templates()
         async def list_resource_templates() -> list:
-            states = self._running_states()
-            out: list = []
-            if states:
-                results = await asyncio.gather(
-                    *(s.client_session.list_resource_templates() for s in states),
-                    return_exceptions=True,
-                )
-                for state, r in zip(states, results):
-                    if isinstance(r, BaseException):
-                        if not _is_method_not_found(r):
+            event_recorder = getattr(self.manager, "events", None)
+            template_count = 0
+            backend_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal backend_count, template_count
+                states = self._running_states()
+                passthrough_states = list(self._passthrough_states())
+                backend_count = len(states) + len(passthrough_states)
+                out: list = []
+                if states:
+                    results = await asyncio.gather(
+                        *(s.client_session.list_resource_templates() for s in states),
+                        return_exceptions=True,
+                    )
+                    for state, r in zip(states, results):
+                        if isinstance(r, BaseException):
+                            if not _is_method_not_found(r):
+                                self._log(
+                                    f"{state.name} list_resource_templates failed: {r}"
+                                )
+                            continue
+                        for tmpl in getattr(r, "resourceTemplates", []) or []:
+                            out.append(tmpl)
+
+                for state in passthrough_states:
+                    try:
+                        session = await self._passthrough_session(state)
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        self._log(
+                            f"{state.name} list_resource_templates session failed: {exc}"
+                        )
+                        continue
+                    try:
+                        r = await session.list_resource_templates()
+                    except PassthroughChallengeError:
+                        continue
+                    except Exception as exc:
+                        if not _is_method_not_found(exc):
                             self._log(
-                                f"{state.name} list_resource_templates failed: {r}"
+                                f"{state.name} list_resource_templates failed: {exc}"
                             )
                         continue
                     for tmpl in getattr(r, "resourceTemplates", []) or []:
                         out.append(tmpl)
+                template_count = len(out)
+                self._log(
+                    f"list_resource_templates -> {template_count} templates"
+                )
+                return out
 
-            for state in self._passthrough_states():
-                try:
-                    session = await self._passthrough_session(state)
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    self._log(
-                        f"{state.name} list_resource_templates session failed: {exc}"
-                    )
-                    continue
-                try:
-                    r = await session.list_resource_templates()
-                except PassthroughChallengeError:
-                    continue
-                except Exception as exc:
-                    if not _is_method_not_found(exc):
-                        self._log(
-                            f"{state.name} list_resource_templates failed: {exc}"
-                        )
-                    continue
-                for tmpl in getattr(r, "resourceTemplates", []) or []:
-                    out.append(tmpl)
-            self._log(f"list_resource_templates -> {len(out)} templates")
-            return out
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/templates",
+                backend=None,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {
+                    "backend_count": backend_count,
+                    "count": template_count,
+                },
+            )
 
         @server.read_resource()
         async def read_resource(uri):
             uri_str = str(uri)
-            already_tried: set[str] = set()
-            last_error: BaseException | None = None
+            event_recorder = getattr(self.manager, "events", None)
+            resolved_backend: str | None = None
+            fanout_used = False
 
-            async def _read_via(state) -> Any:
-                """Fetch a session-bound or passthrough session, depending
-                on the state, and call read_resource."""
-                if getattr(state, "is_passthrough", False):
-                    session = await self._passthrough_session(state)
-                    return await session.read_resource(uri)
-                return await state.client_session.read_resource(uri)
+            async def _dispatch() -> Any:
+                nonlocal fanout_used, resolved_backend
+                already_tried: set[str] = set()
+                last_error: BaseException | None = None
 
-            # Tracked owner first.
-            owner_name = self._resource_origin.get(uri_str)
-            if owner_name:
-                state = self.manager.servers.get(owner_name)
-                owner_running = state and state.running and (
-                    state.client_session is not None
-                    or getattr(state, "is_passthrough", False)
-                )
-                if owner_running:
+                async def _read_via(state) -> Any:
+                    if getattr(state, "is_passthrough", False):
+                        session = await self._passthrough_session(state)
+                        return await session.read_resource(uri)
+                    return await state.client_session.read_resource(uri)
+
+                owner_name = self._resource_origin.get(uri_str)
+                if owner_name:
+                    state = self.manager.servers.get(owner_name)
+                    owner_running = state and state.running and (
+                        state.client_session is not None
+                        or getattr(state, "is_passthrough", False)
+                    )
+                    if owner_running:
+                        try:
+                            self._log(f"read_resource: {uri_str} -> {owner_name}")
+                            r = await _read_via(state)
+                            resolved_backend = owner_name
+                            return _to_internal_contents(r.contents)
+                        except PassthroughChallengeError as exc:
+                            signal_challenge(exc)
+                            raise
+                        except Exception as exc:
+                            last_error = exc
+                            self._log(
+                                f"{owner_name} read_resource '{uri_str}' failed; "
+                                f"falling back: {exc}"
+                            )
+                            self._resource_origin.pop(uri_str, None)
+                            already_tried.add(owner_name)
+                    else:
+                        self._resource_origin.pop(uri_str, None)
+
+                candidates = list(self._running_states()) + list(self._passthrough_states())
+                for state in candidates:
+                    if state.name in already_tried:
+                        continue
                     try:
-                        self._log(f"read_resource: {uri_str} -> {owner_name}")
                         r = await _read_via(state)
-                        return _to_internal_contents(r.contents)
-                    except PassthroughChallengeError as exc:
-                        # Surface auth-required via the side channel
-                        # ContextVar; the middleware in app.py reads
-                        # it after handle_request returns and rewrites
-                        # to a 401 + WWW-Authenticate.
-                        signal_challenge(exc)
-                        raise
+                    except PassthroughChallengeError:
+                        last_error = RuntimeError(
+                            f"backend '{state.name}' requires authentication"
+                        )
+                        continue
                     except Exception as exc:
                         last_error = exc
-                        self._log(
-                            f"{owner_name} read_resource '{uri_str}' failed; "
-                            f"falling back: {exc}"
-                        )
-                        self._resource_origin.pop(uri_str, None)
-                        already_tried.add(owner_name)
-                else:
-                    # Cached owner is no longer available; drop and fall through.
-                    self._resource_origin.pop(uri_str, None)
+                        continue
+                    self._resource_origin[uri_str] = state.name
+                    resolved_backend = state.name
+                    fanout_used = True
+                    self._log(f"read_resource: {uri_str} -> {state.name} (fan-out)")
+                    return _to_internal_contents(r.contents)
 
-            # Fan out across remaining backends; first success wins and is cached.
-            candidates = list(self._running_states()) + list(self._passthrough_states())
-            for state in candidates:
-                if state.name in already_tried:
-                    continue
-                try:
-                    r = await _read_via(state)
-                except PassthroughChallengeError:
-                    # Don't raise from a fan-out attempt; auth might
-                    # only matter for one backend among many. Keep
-                    # trying, then fall back to the generic error.
-                    last_error = RuntimeError(
-                        f"backend '{state.name}' requires authentication"
-                    )
-                    continue
-                except Exception as exc:
-                    last_error = exc
-                    continue
-                self._resource_origin[uri_str] = state.name
-                self._log(f"read_resource: {uri_str} -> {state.name} (fan-out)")
-                return _to_internal_contents(r.contents)
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError(f"No backend available to serve '{uri_str}'")
 
-            if last_error is not None:
-                raise last_error
-            raise RuntimeError(f"No backend available to serve '{uri_str}'")
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/read",
+                backend=None,
+                qualified=uri_str,
+                input_payload={"uri": uri_str},
+                dispatch=_dispatch,
+                backend_provider=lambda: resolved_backend,
+                meta_provider=lambda _result: {
+                    "uri": uri_str,
+                    "fanout": fanout_used,
+                },
+            )
 
 
 def _is_method_not_found(exc: BaseException) -> bool:
