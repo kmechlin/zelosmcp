@@ -886,3 +886,69 @@ class TestMandatoryMerge:
         second = m._read_mandatory_servers()
         assert first is second  # cached object
         assert "required" in second
+
+    def test_missing_fields_filled_from_mandatory_on_name_collision(self, tmp_path):
+        """When the user includes a mandatory server name but omits fields
+        present in the mandatory entry (e.g. reverseProxy), those fields are
+        merged in from mandatory so infrastructure settings aren't silently
+        dropped.  This is the root cause of the pincher-dashboard breakage when
+        changing only the compression level."""
+        mandatory_path = self._write_mandatory(tmp_path, {
+            "mcpServers": {
+                "pincher": {
+                    "command": "pincher",
+                    "args": ["--data-dir", "/tmp/pincher", "--http", "127.0.0.1:8080"],
+                    "reverseProxy": {
+                        "mount": "/pincher",
+                        "upstream": "http://127.0.0.1:8080",
+                    },
+                    "compress": {"level": "medium"},
+                }
+            }
+        })
+        m = ProxyManager(mandatory_config_path=mandatory_path)
+        # User only overrides the compression level — no reverseProxy supplied.
+        merged = m._merge_mandatory({
+            "mcpServers": {
+                "pincher": {
+                    "command": "pincher",
+                    "args": ["--data-dir", "/tmp/pincher", "--http", "127.0.0.1:8080"],
+                    "compress": {"level": "high"},
+                }
+            }
+        })
+        pincher = merged["mcpServers"]["pincher"]
+        # User's compress value wins.
+        assert pincher["compress"] == {"level": "high"}
+        # Mandatory's reverseProxy is preserved even though user didn't include it.
+        assert pincher["reverseProxy"] == {
+            "mount": "/pincher",
+            "upstream": "http://127.0.0.1:8080",
+        }
+
+    def test_user_explicit_field_wins_over_mandatory_on_collision(self, tmp_path):
+        """Explicit user fields always win over mandatory fields of the same
+        name — the field-level merge doesn't silently revert user changes."""
+        mandatory_path = self._write_mandatory(tmp_path, {
+            "mcpServers": {
+                "pincher": {
+                    "command": "pincher",
+                    "reverseProxy": {"mount": "/pincher", "upstream": "http://127.0.0.1:8080"},
+                    "compress": {"level": "medium"},
+                }
+            }
+        })
+        m = ProxyManager(mandatory_config_path=mandatory_path)
+        merged = m._merge_mandatory({
+            "mcpServers": {
+                "pincher": {
+                    "command": "pincher",
+                    "reverseProxy": {"mount": "/custom", "upstream": "http://127.0.0.1:9090"},
+                    "compress": {"level": "max"},
+                }
+            }
+        })
+        pincher = merged["mcpServers"]["pincher"]
+        # User's reverseProxy wins on the entire key (top-level field merge).
+        assert pincher["reverseProxy"]["mount"] == "/custom"
+        assert pincher["compress"]["level"] == "max"
