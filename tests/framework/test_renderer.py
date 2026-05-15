@@ -36,12 +36,10 @@ class TestRendererFallback:
 
 
 class TestRendererWithAssets:
-    def _make_assets(self, backend: str, playbook: str) -> dict:
+    def _make_assets(self, backend: str) -> dict:
         return {
             backend: BackendRuleAssets(
                 backend=backend,
-                playbook_read_only=playbook,
-                playbook_read_write=playbook,
             ),
             # Global directives are keyed under "zelosmcp" (the builtin backend
             # name) — that's what load_backend_rule_assets / _pick look up.
@@ -54,18 +52,8 @@ class TestRendererWithAssets:
             ),
         }
 
-    def test_custom_playbook_used_when_assets_present(self):
-        assets = self._make_assets("pincher", "CUSTOM PINCHER PLAYBOOK RO")
-        out = render_comprehensive_rule(
-            _catalog("pincher", "filesystem"),
-            access="read-only",
-            tool_use="priority",
-            rule_assets=assets,
-        )
-        assert "CUSTOM PINCHER PLAYBOOK RO" in out
-
     def test_custom_directive_used_from_default_backend(self):
-        assets = self._make_assets("pincher", "PB")
+        assets = self._make_assets("pincher")
         out = render_comprehensive_rule(
             _catalog("pincher"),
             access="read-only",
@@ -209,12 +197,12 @@ class TestCompressedBackendRendering:
         assert "plain__do_thing" in out
 
     def test_compressed_rules_block_uses_store_body_when_available(self):
-        """When rule_assets supplies a compressed_rules_* section it
-        should override the hardcoded fallback constant."""
+        """When rule_assets supplies a compressed_rules section it
+        should override the YAML-loaded default."""
         assets = {
             "zelosmcp": BackendRuleAssets(
                 backend="zelosmcp",
-                compressed_rules_read_only="CUSTOM COMPRESSED RULES BLOCK\n",
+                compressed_rules="CUSTOM COMPRESSED RULES BLOCK\n",
             ),
         }
         out = render_comprehensive_rule(
@@ -225,49 +213,7 @@ class TestCompressedBackendRendering:
         )
         assert "CUSTOM COMPRESSED RULES BLOCK" in out
 
-    def test_compressed_mandatory_playbook_preferred_when_available(self):
-        """When both playbook_compressed_* and playbook_* are set,
-        the compressed variant is preferred for backends in
-        ``compressed_backends``."""
-        assets = {
-            "pincher": BackendRuleAssets(
-                backend="pincher",
-                playbook_read_only="UNCOMPRESSED PINCHER PB",
-                playbook_compressed_read_only="COMPRESSED PINCHER PB",
-            ),
-            "zelosmcp": BackendRuleAssets(backend="zelosmcp"),
-        }
-        out = render_comprehensive_rule(
-            _catalog("pincher", "filesystem"),
-            access="read-only",
-            tool_use="priority",
-            rule_assets=assets,
-            compressed_backends={"pincher": self._COMPRESS_MEDIUM},
-        )
-        assert "COMPRESSED PINCHER PB" in out
-        assert "UNCOMPRESSED PINCHER PB" not in out
-
-    def test_falls_back_to_playbook_when_compressed_variant_empty(self):
-        """When playbook_compressed_* is empty/missing but playbook_*
-        is set, the standard playbook is used as fallback."""
-        assets = {
-            "pincher": BackendRuleAssets(
-                backend="pincher",
-                playbook_read_only="FALLBACK PINCHER PB",
-                playbook_compressed_read_only="",
-            ),
-            "zelosmcp": BackendRuleAssets(backend="zelosmcp"),
-        }
-        out = render_comprehensive_rule(
-            _catalog("pincher", "filesystem"),
-            access="read-only",
-            tool_use="priority",
-            rule_assets=assets,
-            compressed_backends={"pincher": self._COMPRESS_MEDIUM},
-        )
-        assert "FALLBACK PINCHER PB" in out
-
-    def test_tool_instruction_attached_to_underlying_tool(self):
+    def test_compressed_block_absent_when_tool_use_available(self):
         """Per-tool instructions from the asset store should still appear
         in the underlying tools sub-list for compressed backends."""
         assets = {
@@ -292,29 +238,3 @@ class TestCompressedBackendRendering:
             compressed_backends={"pincher": self._COMPRESS_MEDIUM},
         )
         assert "Compressed backends" not in out
-
-
-class TestCompressedPlaybookFallbacks:
-    """``render_comprehensive_rule`` uses the hardcoded compressed-playbook
-    constants (not None) when rule_assets is absent."""
-
-    def test_pincher_compressed_ro_uses_invoke_tool_framing(self):
-        out = render_comprehensive_rule(
-            {"pincher": {"tools": [{"name": "architecture", "description": "arch"}]},
-             "filesystem": {"tools": []}},
-            access="read-only",
-            tool_use="priority",
-            compressed_backends={"pincher": {"level": "medium", "scope": "aggregator"}},
-        )
-        assert "invoke_tool" in out
-        # The compressed mandatory playbook should reference invoke_tool
-        assert 'tool_name="architecture"' in out or "pincher__invoke_tool" in out
-
-    def test_filesystem_compressed_rw_uses_invoke_tool_framing(self):
-        out = render_comprehensive_rule(
-            {"filesystem": {"tools": [{"name": "read_text_file", "description": "read"}]}},
-            access="read-write",
-            tool_use="priority",
-            compressed_backends={"filesystem": {"level": "medium", "scope": "aggregator"}},
-        )
-        assert "filesystem__invoke_tool" in out

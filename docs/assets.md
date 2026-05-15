@@ -1,8 +1,8 @@
 # Assets framework
 
-An **asset** is a named piece of content stored in zelosMCP's SQLite database that extends its behavior for a specific MCP backend. Assets can be Cursor rule playbooks, UI action buttons (extensions), Cursor Subagent definitions (agents), or Cursor hook entries. They are seeded from `configs/assets/*.yaml` at startup, persisted in `~/.zelosmcp/assets.sqlite`, and exposed for editing through the web UI and HTTP API.
+An **asset** is a named piece of content stored in zelosMCP's SQLite database that extends its behavior for a specific MCP backend. Assets can be Cursor rule playbooks, UI action buttons (extensions), agent definitions (agents), skill definitions (skills), or Cursor hook entries. They are seeded from `configs/assets/*.yaml` at startup, persisted in `~/.zelosmcp/assets.sqlite`, and exposed for editing through the web UI and HTTP API.
 
-The database-backed model means you can customise rule playbooks, add per-backend extension buttons, define Subagent skills, or register Cursor hooks — and those changes survive restarts. The bundled YAML files provide sensible defaults; your edits are never silently overwritten.
+The database-backed model means you can customise rule playbooks, add per-backend extension buttons, define agent personas, register domain-knowledge skills, or register Cursor hooks — and those changes survive restarts. The bundled YAML files provide sensible defaults; your edits are never silently overwritten.
 
 ## Data flow
 
@@ -16,8 +16,9 @@ flowchart LR
   rulerenderer["render_comprehensive_rule()\n(GET /api/cursor-rule)"]
   pushwriter["push_kind_for_all_running()\n(POST /api/assets/push/*)"]
   target1[".cursor/rules/zelosmcp.mdc\nor copilot-instructions.md"]
-  target2[".cursor/skills/<name>/SKILL.md"]
+  target2[".cursor/agents/<name>.md\n.github/agents/<name>.md"]
   target3[".cursor/hooks.json"]
+  target4[".cursor/skills/<slug>/SKILL.md\n.github/skills/<slug>/SKILL.md\n.vscode/skills/<slug>/SKILL.md"]
 
   yaml -->|"seed rows (source='seed')"| seeder
   seeder --> db
@@ -27,6 +28,7 @@ flowchart LR
   db --> pushwriter --> target1
   pushwriter --> target2
   pushwriter --> target3
+  pushwriter --> target4
 ```
 
 ## Kinds at a glance
@@ -35,8 +37,9 @@ flowchart LR
 |---|---|---|---|---|
 | `rule` | `rules:` | Rules | Yes | `.cursor/rules/zelosmcp.mdc` and/or `.github/copilot-instructions.md` |
 | `extension` | `extensions:` | Extensions | No (runs in UI) | — invokes an MCP tool or opens a link |
-| `agent` | `agents:` | Agents | Yes | `.cursor/skills/<name>/SKILL.md` |
+| `agent` | `agents:` | Agents | Yes | `.cursor/agents/<name>.md`, `.github/agents/<name>.md` |
 | `hook` | `hooks:` | Hooks | Yes (merge) | `.cursor/hooks.json` |
+| `skill` | `skills:` | Skills | Yes | `.cursor/skills/<slug>/SKILL.md`, `.github/skills/<slug>/SKILL.md`, `.vscode/skills/<slug>/SKILL.md` |
 
 Extensions are the only non-pushable kind — they render as UI buttons and trigger live MCP tool calls or open links rather than writing files.
 

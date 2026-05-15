@@ -652,6 +652,16 @@ async def remove_pushed_assets(
             for entry in os.listdir(skills_abs):
                 agent_names.add(entry)
 
+    # Also sweep agent directories.
+    for agents_dir_rel in (
+        ".cursor/agents",
+        ".github/agents",
+    ):
+        agents_abs = os.path.join(rw, agents_dir_rel)
+        if os.path.isdir(agents_abs):
+            for entry in os.listdir(agents_abs):
+                agent_names.add(entry.replace(".md", "").replace(".agent", ""))
+
     for agent_name in sorted(agent_names):
         # Cursor target
         slug = re.sub(r"[^a-z0-9]+", "-", agent_name.lower()).strip("-")[:64] or "skill"
@@ -669,6 +679,19 @@ async def remove_pushed_assets(
         # Clean up the skills/ directory itself if empty.
     for skills_dir_rel in (".cursor/skills", ".github/skills", ".vscode/skills"):
         _remove_dir_if_empty(os.path.join(rw, skills_dir_rel))
+
+    # Agent files in .cursor/agents/ and .github/agents/
+    for agent_name in sorted(agent_names):
+        slug = re.sub(r"[^a-z0-9]+", "-", agent_name.lower()).strip("-")[:64] or "agent"
+        for agent_file_rel in (
+            f".cursor/agents/{slug}.md",
+            f".github/agents/{slug}.agent.md",
+        ):
+            abs_path = os.path.join(rw, agent_file_rel)
+            if _remove_file(abs_path):
+                results.append(RemovedFile(path=abs_path, action="deleted"))
+    for agents_dir_rel in (".cursor/agents", ".github/agents"):
+        _remove_dir_if_empty(os.path.join(rw, agents_dir_rel))
 
     # ── 2. Merge files: strip zelosmcp entries ───────────────────────
 

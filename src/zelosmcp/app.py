@@ -2148,7 +2148,7 @@ def create_app(manager: ProxyManager | None = None):
             body = {}
         if not isinstance(body, dict):
             body = {}
-        requested_kinds: list[str] = body.get("kinds") or ["rule", "agent", "hook"]
+        requested_kinds: list[str] = body.get("kinds") or ["rule", "agent", "hook", "skill"]
 
         from zelosmcp.repos import discover_repos as _discover, seed_repo_prefs_async, to_rw_path
         from zelosmcp.framework.assetstore.prefs import get_prefs, ProjectPrefs

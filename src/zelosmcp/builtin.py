@@ -352,563 +352,69 @@ def _frontmatter(*, style: str, globs: str | None, access: str) -> str:
     )
 
 
-_DIRECTIVE_READ_ONLY = (
-    "## Access mode: READ-ONLY\n\n"
-    "**Do not call** any tool tagged `[mutates]`, `[destructive]`, or "
-    "`[?]`. They modify backend state, and this rule is currently "
-    "configured for safe inspection only. If a task requires mutation, "
-    "ask the user to regenerate the rule with `access=read-write` "
-    "(e.g. via the Cursor rule panel in the zelosMCP web UI at "
-    "`http://localhost:8000`).\n"
-)
-
-_DIRECTIVE_READ_WRITE = (
-    "## Access mode: READ-WRITE\n\n"
-    "Tools tagged `[mutates]` and `[destructive]` change backend state. "
-    "Confirm with the user before calling `[destructive]` tools "
-    "(irreversible). Tools tagged `[?]` have ambiguous mutability — "
-    "call only when context makes it clear they're inspection-only.\n"
-)
-
-
-_DIRECTIVE_TOOL_USE_PRIORITY = (
-    "## Tool-use priority\n\n"
-    "**Always prefer the MCP tools listed below over shell commands, "
-    "subprocess invocations, or local CLIs** when an MCP tool covers "
-    "the task. They return structured data, avoid subprocess cost, and "
-    "keep paths inside the sandboxed mounts. Reach for `bash` / "
-    "`python -c` / direct file reads only when no MCP tool fits, and "
-    "say so explicitly when you do.\n"
-)
-
-
-# Self-check gate: a 4-question pre-flight every code-related response
-# must run before reaching for native ``Shell`` / ``Read`` / ``Grep``
-# tools. Sits between the soft "tool-use priority" paragraph and the
-# per-backend mandatory playbooks so it's the first thing the agent
-# encounters in the priority section.
-_SELF_CHECK_GATE = (
-    "## Pre-flight check (run BEFORE every response)\n\n"
-    "Answer these four questions before issuing any tool call. The "
-    "first matching YES dictates your FIRST tool call:\n\n"
-    "1. **Code structure / symbols / behavior?** "
-    "(\"summarize / explain / understand / find / trace / impact / "
-    "blast radius\" of repo, module, function, class) → FIRST call "
-    "MUST be `pincher__*` (see Mandatory playbook → pincher).\n"
-    "2. **Files in the workspace?** "
-    "(\"read / edit / list / search / move / create\" a file or "
-    "directory) → FIRST call MUST be `filesystem__*` (see Mandatory "
-    "playbook → filesystem).\n"
-    "3. **Containers, kubernetes pods, networks, volumes?** → use "
-    "`docker__*` / `kubernetes__*`. Do NOT shell out for `docker ps`, "
-    "`kubectl get`, etc.\n"
-    "4. **None of the above?** You may use `Shell` / `Read` / `Grep`, "
-    "but only after stating which question you answered NO to and why "
-    "no MCP tool fits.\n"
-)
-
-
-# ── Mandatory backend playbook ──────────────────────────────────────────
+# ── YAML-based rule asset loading ──────────────────────────────────────
 #
-# When ``tool_use=priority`` and a backend listed in
-# ``configs/mandatory-zelosmcp.json`` is present in the catalog, the
-# generator emits a curated instruction block with the canonical
-# workflow for that backend. Content is filtered by ``access`` so a
-# read-only rule only mentions inspection tools and explicitly forbids
-# the mutating ones.
+# When the asset store is unavailable (tests, standalone runs), load
+# rule directives from the bundled YAML files so the rule generator
+# can still produce correct output without hardcoded string constants.
 
-_PINCHER_PLAYBOOK_RO = (
-    "### `pincher` (codebase intelligence)\n\n"
-    "**MANDATORY: For any of the following user intents, your FIRST "
-    "tool call MUST be a `pincher__*` tool — before any `Shell`, "
-    "`Read`, or `Grep`:**\n\n"
-    "| User intent (any phrasing) | Required tool |\n"
-    "|---|---|\n"
-    "| summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |\n"
-    "| summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |\n"
-    "| find a function / class / method / symbol named X | `pincher__search` |\n"
-    "| show me function X / how does X work | `pincher__context` |\n"
-    "| what calls X / what does X call / impact of changing X | `pincher__trace` |\n"
-    "| what does my git diff break / blast radius | `pincher__changes` |\n"
-    "| recall stored architectural decisions / conventions | `pincher__adr` action=`get` or `list` |\n\n"
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `pytest --collect-only`, `find`, `tree`, "
-    "`wc -l`, `ls -R`, `git ls-files`, or pipelines that count or "
-    "enumerate symbols.\n"
-    "- `Grep` to find a symbol by name (use `pincher__search`).\n"
-    "- `Read` on 3+ files in sequence to understand one function "
-    "(use `pincher__context`).\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\" Silent violations are not acceptable.\n\n"
-    "Pincher indexes the repo into a byte-offset symbol store, a "
-    "knowledge graph, and FTS5 full-text search — every retrieval is "
-    "structured and ~90% cheaper than reading whole files. Canonical "
-    "read-only workflow:\n\n"
-    "- **Orient first.** Call `pincher__architecture` on any "
-    "unfamiliar project to get language breakdown, entry points, "
-    "hotspot functions, and graph stats. Cheaper than reading files.\n"
-    "- **Scope to the active project.** Always pass "
-    "`project=<basename of git toplevel>` (e.g. `zelosmcp` for this "
-    "repo) when calling pincher tools — omitting it falls through to "
-    "an empty `default` index. If the per-repo project isn't indexed, "
-    "fall back to `project=user_data_ro` (the full-tree warm-index "
-    "covering every repo under `/user_data_ro`). Run `pincher__list` "
-    "once if you need to confirm available project names.\n"
-    "- **Find symbols by name.** Use `pincher__search` (FTS5 BM25, "
-    "supports wildcards `auth*`, phrases `\"process order\"`, "
-    "`kind=Function`/`language=Go` filters). Always start here when "
-    "you don't know the exact symbol ID.\n"
-    "- **Read source efficiently.** Prefer `pincher__context` over "
-    "`pincher__symbol` whenever you need a function plus its direct "
-    "callees in one call (~90% token savings vs reading files).\n"
-    "- **Batch lookups.** Use `pincher__symbols` (plural, max **100** "
-    "IDs per call) instead of calling `pincher__symbol` in a loop.\n"
-    "- **Impact analysis.** Use `pincher__trace` to find inbound or "
-    "outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth "
-    "3, LOW=depth 4+).\n"
-    "- **Pre-commit safety.** Run `pincher__changes` before committing "
-    "for blast-radius analysis (git diff → affected symbols → impacted "
-    "callers with risk labels).\n"
-    "- **Graph queries.** Use `pincher__query` with the Cypher subset "
-    "for relationship questions; call `pincher__schema` first to see "
-    "what node/edge kinds are indexed.\n"
-    "- **Read persistent knowledge.** `pincher__adr` action=`get`/"
-    "`list` retrieves architectural decisions, conventions, and "
-    "gotchas the team has stored across sessions.\n"
-    "- **Stable IDs.** Symbol IDs follow "
-    "`{file_path}::{qualified_name}#{kind}` "
-    "(e.g. `internal/db/db.go::db.Open#Function`).\n"
-    "- **Do NOT call** `pincher__index` / `pincher__fetch` / "
-    "`pincher__adr` with action=`set` or `delete` — they mutate state "
-    "and the rule is configured for read-only access.\n"
-)
+_yaml_cache: "dict[str, Any] | None" = None
 
-_PINCHER_PLAYBOOK_RW = (
-    "### `pincher` (codebase intelligence)\n\n"
-    "**MANDATORY: For any of the following user intents, your FIRST "
-    "tool call MUST be a `pincher__*` tool — before any `Shell`, "
-    "`Read`, or `Grep`:**\n\n"
-    "| User intent (any phrasing) | Required tool |\n"
-    "|---|---|\n"
-    "| summarize / explain / understand this repo, project, or codebase | `pincher__architecture` |\n"
-    "| summarize / explain the test suite, module, or package | `pincher__architecture` then `pincher__search` |\n"
-    "| find a function / class / method / symbol named X | `pincher__search` |\n"
-    "| show me function X / how does X work | `pincher__context` |\n"
-    "| what calls X / what does X call / impact of changing X | `pincher__trace` |\n"
-    "| what does my git diff break / blast radius | `pincher__changes` |\n"
-    "| store / recall architectural decisions, conventions, gotchas | `pincher__adr` |\n"
-    "| ingest external docs (URL → searchable Document) | `pincher__fetch` |\n\n"
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `pytest --collect-only`, `find`, `tree`, "
-    "`wc -l`, `ls -R`, `git ls-files`, or pipelines that count or "
-    "enumerate symbols.\n"
-    "- `Grep` to find a symbol by name (use `pincher__search`).\n"
-    "- `Read` on 3+ files in sequence to understand one function "
-    "(use `pincher__context`).\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\" Silent violations are not acceptable.\n\n"
-    "Pincher indexes the repo into a byte-offset symbol store, a "
-    "knowledge graph, and FTS5 full-text search — every retrieval is "
-    "structured and ~90% cheaper than reading whole files. Canonical "
-    "workflow:\n\n"
-    "- **Orient first.** Call `pincher__architecture` on any "
-    "unfamiliar project to get language breakdown, entry points, "
-    "hotspot functions, and graph stats. Cheaper than reading files.\n"
-    "- **Scope to the active project.** Always pass "
-    "`project=<basename of git toplevel>` (e.g. `zelosmcp` for this "
-    "repo) when calling pincher tools — omitting it falls through to "
-    "an empty `default` index. If the per-repo project isn't indexed, "
-    "fall back to `project=user_data_ro` (the full-tree warm-index "
-    "covering every repo under `/user_data_ro`). Run `pincher__list` "
-    "once if you need to confirm available project names.\n"
-    "- **Index before querying.** Run `pincher__index` once per "
-    "project before using any other tool (incremental: xxh3 hashes "
-    "skip unchanged files; pass `force=true` to re-parse everything).\n"
-    "- **Find symbols by name.** Use `pincher__search` (FTS5 BM25, "
-    "supports wildcards `auth*`, phrases `\"process order\"`, "
-    "`kind=Function`/`language=Go` filters). Always start here when "
-    "you don't know the exact symbol ID.\n"
-    "- **Read source efficiently.** Prefer `pincher__context` over "
-    "`pincher__symbol` whenever you need a function plus its direct "
-    "callees in one call (~90% token savings vs reading files).\n"
-    "- **Batch lookups.** Use `pincher__symbols` (plural, max **100** "
-    "IDs per call) instead of calling `pincher__symbol` in a loop.\n"
-    "- **Impact analysis.** Use `pincher__trace` to find inbound or "
-    "outbound call paths (CRITICAL=depth 1, HIGH=depth 2, MEDIUM=depth "
-    "3, LOW=depth 4+).\n"
-    "- **Pre-commit safety.** Run `pincher__changes` before committing "
-    "for blast-radius analysis (git diff → affected symbols → impacted "
-    "callers with risk labels).\n"
-    "- **Graph queries.** Use `pincher__query` with the Cypher subset "
-    "for relationship questions; call `pincher__schema` first to see "
-    "what node/edge kinds are indexed.\n"
-    "- **Persist project knowledge.** `pincher__adr` action=`set`/"
-    "`get`/`list`/`delete` survives across sessions — store "
-    "architectural decisions, conventions, gotchas. Ingest external "
-    "docs with `pincher__fetch` (URL → searchable Document) and "
-    "retrieve via `pincher__search` with `kind=Document`.\n"
-    "- **Stable IDs.** Symbol IDs follow "
-    "`{file_path}::{qualified_name}#{kind}` "
-    "(e.g. `internal/db/db.go::db.Open#Function`).\n"
-)
 
-_FILESYSTEM_PLAYBOOK_RO = (
-    "### `filesystem` (sandboxed file access)\n\n"
-    "**MANDATORY: For any of the following user intents, your FIRST "
-    "tool call MUST be a `filesystem__*` tool — before any `Shell`, "
-    "`Read`, or `Grep`:**\n\n"
-    "| User intent | Required tool |\n"
-    "|---|---|\n"
-    "| read this file / show me file X | `filesystem__read_text_file` |\n"
-    "| compare / diff / summarize multiple files | `filesystem__read_multiple_files` |\n"
-    "| list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |\n"
-    "| find files matching pattern X | `filesystem__search_files` |\n"
-    "| what's the size / mtime / permissions of X | `filesystem__get_file_info` |\n\n"
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
-    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
-    "- `Read` on a path under the workspace when "
-    "`filesystem__read_text_file` would work.\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "The `filesystem` backend is a sandboxed file server: every path "
-    "must live under one of the allowed directories returned by "
-    "`filesystem__list_allowed_directories`. Read-only workflow:\n\n"
-    "- **Read text.** Use `filesystem__read_text_file` (supports "
-    "`head`/`tail` for large files); use `filesystem__read_multiple_"
-    "files` to fetch several files in one round trip when comparing "
-    "or summarizing.\n"
-    "- **Browse structure.** `filesystem__list_directory` for a flat "
-    "listing, `filesystem__directory_tree` for a recursive JSON tree, "
-    "`filesystem__list_directory_with_sizes` when size matters.\n"
-    "- **Find files.** `filesystem__search_files` accepts glob "
-    "patterns relative to a starting directory (use `**/*.ext` for "
-    "recursive matches).\n"
-    "- **Inspect metadata.** `filesystem__get_file_info` returns "
-    "size / mtime / permissions without reading content.\n"
-    "- **Do NOT call** `filesystem__write_file`, `filesystem__edit_"
-    "file`, `filesystem__move_file`, or `filesystem__create_directory` "
-    "— they mutate state and the rule is configured for read-only "
-    "access.\n"
-)
+def _load_yaml_rule_assets() -> "dict[str, Any]":
+    """Load rule directives from ``configs/assets/*.yaml``.
 
-_FILESYSTEM_PLAYBOOK_RW = (
-    "### `filesystem` (sandboxed file access)\n\n"
-    "**MANDATORY: For any of the following user intents, your FIRST "
-    "tool call MUST be a `filesystem__*` tool — before any `Shell`, "
-    "`Read`, or `Grep`:**\n\n"
-    "| User intent | Required tool |\n"
-    "|---|---|\n"
-    "| read this file / show me file X | `filesystem__read_text_file` |\n"
-    "| compare / diff / summarize multiple files | `filesystem__read_multiple_files` |\n"
-    "| list files in / browse directory X | `filesystem__list_directory` or `filesystem__directory_tree` |\n"
-    "| find files matching pattern X | `filesystem__search_files` |\n"
-    "| edit / patch file X | `filesystem__edit_file` (preferred) or `filesystem__write_file` |\n"
-    "| create / move / rename file or directory | `filesystem__create_directory` / `filesystem__move_file` |\n"
-    "| what's the size / mtime / permissions of X | `filesystem__get_file_info` |\n\n"
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
-    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
-    "- `Read` on a path under the workspace when "
-    "`filesystem__read_text_file` would work.\n"
-    "- `sed`, `awk`, or `echo > file` for edits — use "
-    "`filesystem__edit_file`.\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "The `filesystem` backend is a sandboxed file server: every path "
-    "must live under one of the allowed directories returned by "
-    "`filesystem__list_allowed_directories`. Workflow:\n\n"
-    "- **Read text.** Use `filesystem__read_text_file` (supports "
-    "`head`/`tail` for large files); use `filesystem__read_multiple_"
-    "files` to fetch several files in one round trip when comparing "
-    "or summarizing.\n"
-    "- **Browse structure.** `filesystem__list_directory` for a flat "
-    "listing, `filesystem__directory_tree` for a recursive JSON tree, "
-    "`filesystem__list_directory_with_sizes` when size matters.\n"
-    "- **Find files.** `filesystem__search_files` accepts glob "
-    "patterns relative to a starting directory (use `**/*.ext` for "
-    "recursive matches).\n"
-    "- **Edit precisely.** Prefer `filesystem__edit_file` (line-based "
-    "edits, returns a git-style diff) over `filesystem__write_file` "
-    "(full overwrite) whenever you can — `write_file` is destructive "
-    "and silently replaces existing content.\n"
-    "- **Create / move.** `filesystem__create_directory` is "
-    "idempotent (safe to call on existing dirs); `filesystem__move_"
-    "file` fails if the destination exists, so it's safe for renames "
-    "and reorganizations.\n"
-    "- **Inspect metadata.** `filesystem__get_file_info` returns "
-    "size / mtime / permissions without reading content.\n"
-)
+    Returns a ``{backend: BackendRuleAssets}`` dict mirroring what
+    :func:`~zelosmcp.framework.assetstore.kinds.rule.load_all_rule_assets`
+    returns from the SQLite store.  Cached at module level.
+    """
+    global _yaml_cache
+    if _yaml_cache is not None:
+        return _yaml_cache
 
-# ── Compressed-backend helpers ─────────────────────────────────────────
-#
-# When a backend is wire-compressed (scope ∈ {aggregator, global},
-# level ≠ low) the aggregator at /mcp exposes only the wrapper trio
-# instead of the full tool surface. The rule generator must reflect
-# this reality so agents don't try to call tools that don't exist.
+    import pathlib
+    import yaml
+    from zelosmcp.framework.assetstore.kinds.rule import BackendRuleAssets
 
-_COMPRESSED_RULES_READ_ONLY = (
-    "## Compressed backends\n\n"
-    "One or more backends below expose their tools via a **compressed "
-    "wrapper trio** at `/mcp` instead of their full tool surface. The "
-    "actual callable tools for these backends are "
-    "`<backend>__get_tool_schema`, `<backend>__search_tools`, and "
-    "`<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).\n\n"
-    "**Do NOT call underlying tool names directly** (e.g. "
-    "`pincher__architecture`) — the aggregator rejects them with "
-    "\"unknown tool\". Use the wrapper pattern:\n\n"
-    "1. **Discover:** browse the compact catalog embedded in "
-    "`<backend>__get_tool_schema`'s description, or call "
-    "`<backend>__search_tools(query=\"...\", limit=5)` for targeted "
-    "search by name / description.\n"
-    "2. **Schema (optional):** "
-    "`<backend>__get_tool_schema(tool_name=\"...\")` returns the full "
-    "JSON schema for one underlying tool.\n"
-    "3. **Invoke:** "
-    "`<backend>__invoke_tool(tool_name=\"...\", tool_input={...})`. "
-    "Results are forwarded verbatim — identical to calling the tool "
-    "directly. In read-only mode, do NOT invoke tools tagged "
-    "`[mutates]`, `[destructive]`, or `[?]` via the wrapper.\n\n"
-    "Underlying tool names and per-tool descriptions are listed in each "
-    "compressed backend's section below under **Underlying tools**.\n"
-)
+    configs_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "configs" / "assets"
+    result: dict[str, Any] = {}
 
-_COMPRESSED_RULES_READ_WRITE = (
-    "## Compressed backends\n\n"
-    "One or more backends below expose their tools via a **compressed "
-    "wrapper trio** at `/mcp` instead of their full tool surface. The "
-    "actual callable tools for these backends are "
-    "`<backend>__get_tool_schema`, `<backend>__search_tools`, and "
-    "`<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).\n\n"
-    "**Do NOT call underlying tool names directly** (e.g. "
-    "`pincher__architecture`) — the aggregator rejects them with "
-    "\"unknown tool\". Use the wrapper pattern:\n\n"
-    "1. **Discover:** browse the compact catalog embedded in "
-    "`<backend>__get_tool_schema`'s description, or call "
-    "`<backend>__search_tools(query=\"...\", limit=5)` for targeted "
-    "search by name / description.\n"
-    "2. **Schema (optional):** "
-    "`<backend>__get_tool_schema(tool_name=\"...\")` returns the full "
-    "JSON schema for one underlying tool.\n"
-    "3. **Invoke:** "
-    "`<backend>__invoke_tool(tool_name=\"...\", tool_input={...})`. "
-    "Confirm with the user before invoking any underlying tool tagged "
-    "`[destructive]`.\n\n"
-    "Underlying tool names and per-tool descriptions are listed in each "
-    "compressed backend's section below under **Underlying tools**.\n"
-)
+    for yaml_path in sorted(configs_dir.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(yaml_path.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        backend = data.get("backend", yaml_path.stem)
+        rules = data.get("rules") or {}
+        sections = rules.get("sections") or {}
+        tool_instructions: dict[str, str] = {}
+        ti_raw = rules.get("tool_instructions") or {}
+        for tname, tdata in ti_raw.items():
+            if isinstance(tdata, dict):
+                tool_instructions[tname] = tdata.get("body", "")
+            elif isinstance(tdata, str):
+                tool_instructions[tname] = tdata
 
-_PINCHER_PLAYBOOK_COMPRESSED_RO = (
-    "### `pincher` (codebase intelligence) — compressed\n\n"
-    "**MANDATORY: pincher is wire-compressed. Your FIRST pincher call "
-    "MUST use `pincher__invoke_tool` — do NOT call "
-    "`pincher__architecture` etc. directly.**\n\n"
-    "| User intent (any phrasing) | How to call |\n"
-    "|---|---|\n"
-    "| summarize / explain / understand this repo | "
-    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |\n'
-    "| find a function / class / method / symbol | "
-    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |\n'
-    "| show me function X / how does X work | "
-    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |\n'
-    "| what calls X / impact of changing X | "
-    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |\n'
-    "| what does my git diff break / blast radius | "
-    '`pincher__invoke_tool(tool_name="changes", tool_input={})` |\n'
-    "| recall stored architectural decisions / conventions | "
-    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"list"})` |\n\n'
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, "
-    "`git ls-files` to count or enumerate symbols.\n"
-    "- `Grep` to find a symbol by name "
-    "(use `pincher__invoke_tool` → `search`).\n"
-    "- `Read` on 3+ files in sequence to understand one function "
-    "(use `pincher__invoke_tool` → `context`).\n"
-    "- **Calling `pincher__architecture` / `pincher__search` / etc. "
-    "directly** — they are not exposed at `/mcp` when pincher is "
-    "compressed. The aggregator will return \"unknown tool\".\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "Canonical compressed read-only workflow:\n\n"
-    "- **Orient first.** "
-    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` '
-    "— language breakdown, entry points, hotspot functions.\n"
-    "- **Scope to the active project.** Pass `project=<basename of git "
-    "toplevel>` in every `tool_input`. Fall back to "
-    "`project=user_data_ro` if the per-repo project isn't indexed. "
-    'Use `pincher__invoke_tool(tool_name="list", tool_input={})` to '
-    "confirm available project names.\n"
-    "- **Find symbols.** "
-    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` '
-    "(FTS5 BM25; wildcards `auth*`, phrases `\"process order\"`, "
-    "`kind=Function`/`language=Go` filters).\n"
-    "- **Read source.** "
-    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` '
-    "— symbol body + direct imports + callees in one shot.\n"
-    "- **Impact analysis.** "
-    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` '
-    "— CRITICAL=depth 1, HIGH=2, MEDIUM=3.\n"
-    "- **Blast radius.** "
-    '`pincher__invoke_tool(tool_name="changes", tool_input={})` '
-    "before committing.\n"
-    "- **Do NOT invoke** `tool_name=\"index\"`, `tool_name=\"fetch\"`, "
-    "or `tool_name=\"adr\"` with `action=set`/`delete` — they mutate "
-    "state and the rule is configured for read-only access.\n"
-)
+        def _s(key: str) -> str:
+            v = sections.get(key)
+            if isinstance(v, dict):
+                return v.get("body", "")
+            return v or ""
 
-_PINCHER_PLAYBOOK_COMPRESSED_RW = (
-    "### `pincher` (codebase intelligence) — compressed\n\n"
-    "**MANDATORY: pincher is wire-compressed. Your FIRST pincher call "
-    "MUST use `pincher__invoke_tool` — do NOT call "
-    "`pincher__architecture` etc. directly.**\n\n"
-    "| User intent (any phrasing) | How to call |\n"
-    "|---|---|\n"
-    "| summarize / explain / understand this repo | "
-    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` |\n'
-    "| find a function / class / method / symbol | "
-    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"...", "project":"<name>"})` |\n'
-    "| show me function X / how does X work | "
-    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` |\n'
-    "| what calls X / impact of changing X | "
-    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` |\n'
-    "| what does my git diff break / blast radius | "
-    '`pincher__invoke_tool(tool_name="changes", tool_input={})` |\n'
-    "| store / recall architectural decisions, conventions, gotchas | "
-    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", "key":"...", "value":"..."})` |\n'
-    "| ingest external docs (URL → searchable Document) | "
-    '`pincher__invoke_tool(tool_name="fetch", tool_input={"url":"...", "project":"<name>"})` |\n\n'
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, "
-    "`git ls-files` to count or enumerate symbols.\n"
-    "- `Grep` to find a symbol by name "
-    "(use `pincher__invoke_tool` → `search`).\n"
-    "- `Read` on 3+ files in sequence to understand one function "
-    "(use `pincher__invoke_tool` → `context`).\n"
-    "- **Calling `pincher__architecture` / `pincher__search` / etc. "
-    "directly** — they are not exposed at `/mcp` when pincher is "
-    "compressed. The aggregator will return \"unknown tool\".\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "Canonical compressed read-write workflow:\n\n"
-    "- **Orient first.** "
-    '`pincher__invoke_tool(tool_name="architecture", tool_input={"project":"<name>"})` '
-    "— language breakdown, entry points, hotspot functions.\n"
-    "- **Scope to the active project.** Pass `project=<basename of git "
-    "toplevel>` in every `tool_input`. Fall back to "
-    "`project=user_data_ro` if not indexed.\n"
-    "- **Index before querying.** "
-    '`pincher__invoke_tool(tool_name="index", tool_input={"path":"/user_data_ro/<repo>"})` '
-    "once per project (incremental by default).\n"
-    "- **Find symbols.** "
-    '`pincher__invoke_tool(tool_name="search", tool_input={"query":"..."})` '
-    "(FTS5 BM25; wildcards, phrases, `kind=Function`/`language=Go` filters).\n"
-    "- **Read source.** "
-    '`pincher__invoke_tool(tool_name="context", tool_input={"id":"..."})` '
-    "— symbol body + direct imports + callees in one shot.\n"
-    "- **Impact analysis.** "
-    '`pincher__invoke_tool(tool_name="trace", tool_input={"name":"..."})` '
-    "— CRITICAL=depth 1, HIGH=2, MEDIUM=3.\n"
-    "- **Blast radius.** "
-    '`pincher__invoke_tool(tool_name="changes", tool_input={})` '
-    "before committing.\n"
-    "- **Persist knowledge.** "
-    '`pincher__invoke_tool(tool_name="adr", tool_input={"action":"set", '
-    '"key":"...", "value":"..."})` — survives across sessions.\n'
-)
+        result[backend] = BackendRuleAssets(
+            backend=backend,
+            tool_instructions=tool_instructions,
+            directive_read_only=_s("directive_read_only"),
+            directive_read_write=_s("directive_read_write"),
+            directive_tool_use_priority=_s("directive_tool_use_priority"),
+            self_check_gate=_s("self_check_gate"),
+            compressed_rules=_s("compressed_rules"),
+        )
 
-_FILESYSTEM_PLAYBOOK_COMPRESSED_RO = (
-    "### `filesystem` (sandboxed file access) — compressed\n\n"
-    "**MANDATORY: filesystem is wire-compressed. Use "
-    "`filesystem__invoke_tool` to call filesystem tools — do NOT call "
-    "`filesystem__read_text_file` etc. directly.**\n\n"
-    "| User intent | How to call |\n"
-    "|---|---|\n"
-    "| read this file / show me file X | "
-    '`filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"...", "head":N})` |\n'
-    "| compare / diff / summarize multiple files | "
-    '`filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |\n'
-    "| list files in / browse directory X | "
-    '`filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` '
-    "or `tool_name=\"directory_tree\"` |\n"
-    "| find files matching pattern X | "
-    '`filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |\n'
-    "| what's the size / mtime / permissions of X | "
-    '`filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |\n\n'
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
-    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
-    "- `Read` on a workspace path when `filesystem__invoke_tool` → "
-    "`read_text_file` would work.\n"
-    "- **Calling `filesystem__read_text_file` / `filesystem__list_"
-    "directory` etc. directly** — they are not exposed at `/mcp` when "
-    "filesystem is compressed. The aggregator will return "
-    "\"unknown tool\".\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "Read-only workflow — do NOT invoke `write_file`, `edit_file`, "
-    "`move_file`, or `create_directory` via the wrapper:\n\n"
-    "- **Read text.** `tool_name=\"read_text_file\"` — use `head` or "
-    "`tail` for large files; `tool_name=\"read_multiple_files\"` for "
-    "several files in one round trip.\n"
-    "- **Browse.** `tool_name=\"list_directory\"` for a flat listing; "
-    "`tool_name=\"directory_tree\"` for a recursive JSON tree.\n"
-    "- **Find.** `tool_name=\"search_files\"` with "
-    "`\"pattern\":\"**/*.ext\"` — much faster than shell `find`.\n"
-    "- **Metadata.** `tool_name=\"get_file_info\"` — size, mtime, "
-    "permissions without reading content.\n"
-)
-
-_FILESYSTEM_PLAYBOOK_COMPRESSED_RW = (
-    "### `filesystem` (sandboxed file access) — compressed\n\n"
-    "**MANDATORY: filesystem is wire-compressed. Use "
-    "`filesystem__invoke_tool` to call filesystem tools — do NOT call "
-    "`filesystem__read_text_file` etc. directly.**\n\n"
-    "| User intent | How to call |\n"
-    "|---|---|\n"
-    "| read this file / show me file X | "
-    '`filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path":"..."})` |\n'
-    "| compare / diff / summarize multiple files | "
-    '`filesystem__invoke_tool(tool_name="read_multiple_files", tool_input={"paths":[...]})` |\n'
-    "| list files in / browse directory X | "
-    '`filesystem__invoke_tool(tool_name="list_directory", tool_input={"path":"..."})` '
-    "or `tool_name=\"directory_tree\"` |\n"
-    "| find files matching pattern X | "
-    '`filesystem__invoke_tool(tool_name="search_files", tool_input={"path":"...", "pattern":"**/*.ext"})` |\n'
-    "| edit / patch file X | "
-    '`filesystem__invoke_tool(tool_name="edit_file", tool_input={"path":"...", "edits":[...]})` |\n'
-    "| create / move / rename file or directory | "
-    '`filesystem__invoke_tool(tool_name="create_directory", ...)` / '
-    '`filesystem__invoke_tool(tool_name="move_file", ...)` |\n'
-    "| what's the size / mtime / permissions of X | "
-    '`filesystem__invoke_tool(tool_name="get_file_info", tool_input={"path":"..."})` |\n\n'
-    "**Forbidden fallbacks** (rule violation if used for the intents above):\n"
-    "- `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, "
-    "`tree`, `wc`, `du`, `stat` against workspace paths.\n"
-    "- `Read` on a workspace path when `filesystem__invoke_tool` → "
-    "`read_text_file` would work.\n"
-    "- `sed`, `awk`, or `echo > file` for edits — use "
-    "`filesystem__invoke_tool` → `edit_file`.\n"
-    "- **Calling `filesystem__read_text_file` / `filesystem__edit_file` "
-    "etc. directly** — they are not exposed at `/mcp` when filesystem "
-    "is compressed. The aggregator will return \"unknown tool\".\n"
-    "If you violate, say so explicitly: \"Violating zelosMCP rule "
-    "because <specific reason>.\"\n\n"
-    "Read-write workflow:\n\n"
-    "- **Read text.** `tool_name=\"read_text_file\"` — use `head` or "
-    "`tail` for large files; `tool_name=\"read_multiple_files\"` for "
-    "several files in one round trip.\n"
-    "- **Browse.** `tool_name=\"list_directory\"` (flat) or "
-    "`tool_name=\"directory_tree\"` (recursive JSON).\n"
-    "- **Find.** `tool_name=\"search_files\"` with "
-    "`\"pattern\":\"**/*.ext\"` — much faster than shell `find`.\n"
-    "- **Edit precisely.** Prefer `tool_name=\"edit_file\"` (returns a "
-    "git-style diff) over `tool_name=\"write_file\"` (full overwrite, "
-    "destructive).\n"
-    "- **Create / move.** `tool_name=\"create_directory\"` is "
-    "idempotent; `tool_name=\"move_file\"` fails if destination exists.\n"
-    "- **Metadata.** `tool_name=\"get_file_info\"` — size, mtime, "
-    "permissions without reading content.\n"
-)
+    _yaml_cache = result
+    return result
 
 
 def _compressed_wrapper_entries(
@@ -968,99 +474,6 @@ def _compressed_wrapper_entries(
 
 
 _DEFAULT_MANDATORY_NAMES: frozenset[str] = frozenset({"filesystem", "pincher"})
-
-
-def _render_mandatory_playbook(
-    catalog: dict[str, dict[str, Any]],
-    mandatory_names: set[str] | frozenset[str],
-    *,
-    access: str,
-    rule_assets: "dict[str, Any] | None" = None,
-    compressed_backends: "dict[str, dict[str, Any]] | None" = None,
-) -> str:
-    """Build the ``## Mandatory backend playbook`` section.
-
-    When ``rule_assets`` is supplied (a ``{backend: BackendRuleAssets}``
-    dict loaded from the asset store), the playbook body is taken from
-    the store row so user edits are respected.  Falls back to the
-    hardcoded string constants when the store is unavailable.
-
-    When ``compressed_backends`` lists a backend name, the compressed
-    playbook variant (``playbook_compressed_*``) is preferred over the
-    standard one so agents receive instructions matched to the actual
-    wire surface they see at ``/mcp``.
-
-    Only emits blocks for mandatory backends that are actually present
-    in ``catalog`` (so a rule generated when pincher is down doesn't
-    pretend it's available). Returns an empty string when no mandatory
-    backend is loaded — callers should skip the section header entirely
-    in that case.
-    """
-    _compressed = compressed_backends or {}
-
-    def _playbook_body(
-        backend: str,
-        fallback_ro: str,
-        fallback_rw: str,
-        fallback_compressed_ro: str = "",
-        fallback_compressed_rw: str = "",
-    ) -> str:
-        is_compressed = backend in _compressed
-        if rule_assets is not None:
-            assets = rule_assets.get(backend)
-            if assets is not None:
-                if is_compressed:
-                    body = (
-                        assets.playbook_compressed_read_only
-                        if access == "read-only"
-                        else assets.playbook_compressed_read_write
-                    )
-                    if body:
-                        return body
-                body = (
-                    assets.playbook_read_only
-                    if access == "read-only"
-                    else assets.playbook_read_write
-                )
-                if body:
-                    return body
-        if is_compressed and (fallback_compressed_ro or fallback_compressed_rw):
-            return (
-                fallback_compressed_ro if access == "read-only"
-                else fallback_compressed_rw
-            )
-        return fallback_ro if access == "read-only" else fallback_rw
-
-    blocks: list[str] = []
-    if "filesystem" in mandatory_names and "filesystem" in catalog:
-        blocks.append(
-            _playbook_body(
-                "filesystem",
-                _FILESYSTEM_PLAYBOOK_RO,
-                _FILESYSTEM_PLAYBOOK_RW,
-                _FILESYSTEM_PLAYBOOK_COMPRESSED_RO,
-                _FILESYSTEM_PLAYBOOK_COMPRESSED_RW,
-            )
-        )
-    if "pincher" in mandatory_names and "pincher" in catalog:
-        blocks.append(
-            _playbook_body(
-                "pincher",
-                _PINCHER_PLAYBOOK_RO,
-                _PINCHER_PLAYBOOK_RW,
-                _PINCHER_PLAYBOOK_COMPRESSED_RO,
-                _PINCHER_PLAYBOOK_COMPRESSED_RW,
-            )
-        )
-    if not blocks:
-        return ""
-    header = (
-        "## Mandatory backend playbook\n\n"
-        "These backends ship by default with zelosMCP and have a "
-        "canonical workflow. Follow the guidance below before falling "
-        "back to generic catalog usage.\n\n"
-    )
-    return header + "\n".join(blocks)
 
 
 def render_comprehensive_rule(
@@ -1143,7 +556,28 @@ def render_comprehensive_rule(
         fm = ""
     else:
         fm = _frontmatter(style=style, globs=globs, access=access)
-    directive = _DIRECTIVE_READ_ONLY if access == "read-only" else _DIRECTIVE_READ_WRITE
+    directive = ""  # Will be resolved by _pick below
+
+    # When rule_assets is available, pull directives from the store;
+    # otherwise fall through to YAML-loaded defaults.
+    _default_assets = rule_assets.get("zelosmcp") if rule_assets else None
+    _yaml_assets = _load_yaml_rule_assets()
+    _yaml_default = _yaml_assets.get("zelosmcp")
+
+    def _pick(section: str) -> str:
+        if _default_assets is not None:
+            store_body = getattr(_default_assets, section, "") or ""
+            if store_body:
+                return store_body
+        if _yaml_default is not None:
+            yaml_body = getattr(_yaml_default, section, "") or ""
+            if yaml_body:
+                return yaml_body
+        return ""
+
+    directive = _pick(
+        "directive_read_only" if access == "read-only" else "directive_read_write",
+    )
 
     # Skip the builtin in the rule — including it would tell the agent
     # how to call tools that re-generate the rule itself, which is noisy
@@ -1197,61 +631,23 @@ def render_comprehensive_rule(
         directive,
     ]
 
-    # When rule_assets is available, pull directives from the store;
-    # otherwise fall through to the hardcoded string constants.
-    _default_assets = rule_assets.get("zelosmcp") if rule_assets else None
-
-    def _pick(section: str, fallback: str) -> str:
-        if _default_assets is not None:
-            store_body = getattr(_default_assets, section, "") or ""
-            if store_body:
-                return store_body
-        return fallback
-
-    directive = _pick(
-        "directive_read_only" if access == "read-only" else "directive_read_write",
-        _DIRECTIVE_READ_ONLY if access == "read-only" else _DIRECTIVE_READ_WRITE,
-    )
-    # Replace the directive line we already appended above with the
-    # (possibly store-overridden) value.
-    lines[-1] = directive
-
     _compressed = compressed_backends or {}
 
     if tool_use == "priority":
         lines.append(
-            _pick("directive_tool_use_priority", _DIRECTIVE_TOOL_USE_PRIORITY)
+            _pick("directive_tool_use_priority")
         )
-        lines.append(_pick("self_check_gate", _SELF_CHECK_GATE))
+        lines.append(_pick("self_check_gate"))
 
         # Emit a single compressed-backends explanation block when any
         # user backend is wire-compressed. The block is pulled from the
         # global zelosmcp asset store row when available; otherwise the
-        # hardcoded fallback constant is used.
+        # YAML-loaded default is used.
         compressed_user_backends = {
             n: v for n, v in _compressed.items() if n in user_backends
         }
         if compressed_user_backends:
-            lines.append(
-                _pick(
-                    "compressed_rules_read_only"
-                    if access == "read-only"
-                    else "compressed_rules_read_write",
-                    _COMPRESSED_RULES_READ_ONLY
-                    if access == "read-only"
-                    else _COMPRESSED_RULES_READ_WRITE,
-                )
-            )
-
-        playbook = _render_mandatory_playbook(
-            user_backends,
-            effective_mandatory,
-            access=access,
-            rule_assets=rule_assets,
-            compressed_backends=_compressed,
-        )
-        if playbook:
-            lines.append(playbook)
+            lines.append(_pick("compressed_rules"))
 
     lines.extend(
         [

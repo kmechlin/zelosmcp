@@ -15,6 +15,8 @@ Read [cursor-integration.md](cursor-integration.md) first if you haven't; this p
 | Instructions file path | `.cursor/rules/*.mdc` | `.github/copilot-instructions.md` |
 | Instructions file format | Markdown with YAML frontmatter (`alwaysApply`, `globs`) | Plain markdown, no frontmatter |
 | Generator query param | `format=cursor-mdc` (default) | `format=copilot-instructions` |
+| Agent push path | `.cursor/agents/<name>.md` | `.github/agents/<name>.md` |
+| Skill push paths | `.cursor/skills/<slug>/SKILL.md` | `.github/skills/<slug>/SKILL.md` + `.vscode/skills/<slug>/SKILL.md` |
 
 Both IDEs talk to the same `http://localhost:8000/mcp` endpoint and consume the same tool catalog.
 

@@ -1807,6 +1807,11 @@ HTML_TEMPLATE = """\
             style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
             Hooks
           </button>
+          <button type="button" class="assets-tab" data-tab="skill"
+            onclick="switchBackendAssetsTab('skill')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Skills
+          </button>
           <button type="button" class="assets-tab" data-tab="all"
             onclick="switchBackendAssetsTab('all')"
             style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
@@ -1915,11 +1920,11 @@ HTML_TEMPLATE = """\
               <div class="repo-details-actions-label">Push assets</div>
               <div id="repo-push-running-hint" style="font-size:11px;color:var(--muted);"></div>
               <button type="button" class="btn btn-primary"
-                onclick="pushAllAssets()" title="Push rules + agents + hooks to selected IDE target">
+                onclick="pushAllAssets()" title="Push rules + agents + hooks + skills to selected IDE target">
                 Push all
               </button>
               <button type="button" class="btn btn-outline"
-                onclick="pushBothTargets()" title="Push rules + agents + hooks to both Cursor and VS Code">
+                onclick="pushBothTargets()" title="Push rules + agents + hooks + skills to both Cursor and VS Code">
                 Push to both
               </button>
               <button type="button" class="btn btn-outline"
@@ -1933,6 +1938,10 @@ HTML_TEMPLATE = """\
               <button type="button" class="btn btn-outline"
                 onclick="pushComprehensive('hook')" title="Merge hook file for selected IDE target">
                 Push hooks
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('skill')" title="Write skill SKILL.md files for selected IDE target">
+                Push skills
               </button>
               <button type="button" class="btn btn-outline" style="margin-top:8px;color:var(--danger,#c33);"
                 onclick="removeAllAssets()" title="Remove all zelosmcp-managed files from this repo">
@@ -3053,13 +3062,13 @@ HTML_TEMPLATE = """\
     if (!container) return;
     container.innerHTML = '<span class="docs-empty">Loading...</span>';
 
-    const kindLabels = { rule: "Rules", extension: "Extensions", agent: "Agents", hook: "Hooks", all: "All" };
+    const kindLabels = { rule: "Rules", extension: "Extensions", agent: "Agents", hook: "Hooks", skill: "Skills", all: "All" };
 
     try {
       let rows;
       if (kind === "all") {
         // Fetch all kinds in parallel and merge.
-        const kinds = ["rule", "extension", "agent", "hook"];
+        const kinds = ["rule", "extension", "agent", "hook", "skill"];
         const resps = await Promise.all(
           kinds.map((k) => fetch(`/api/assets?kind=${k}&backend=${encodeURIComponent(backend)}`))
         );
@@ -3703,6 +3712,7 @@ HTML_TEMPLATE = """\
     await pushComprehensive("rule");
     await pushComprehensive("agent");
     await pushComprehensive("hook");
+    await pushComprehensive("skill");
   }
 
   // Push all asset kinds to BOTH Cursor and VS Code targets.
@@ -3711,6 +3721,7 @@ HTML_TEMPLATE = """\
     await pushComprehensive("rule", both);
     await pushComprehensive("agent", both);
     await pushComprehensive("hook", both);
+    await pushComprehensive("skill", both);
   }
 
   // Remove all zelosmcp-managed assets from the current repo.
@@ -3721,7 +3732,8 @@ HTML_TEMPLATE = """\
       `Remove all zelosmcp-managed files from "${name}"?\\n\\n` +
       "This will delete:\\n" +
       "  \\u2022 Rule files (zelosmcp.mdc, copilot-instructions.md)\\n" +
-      "  \\u2022 Agent skill files\\n" +
+      "  \\u2022 Agent files\\n" +
+      "  \\u2022 Skill files\\n" +
       "  \\u2022 zelosmcp.json prefs manifests\\n" +
       "  \\u2022 zelosmcp entries from hooks and mcp.json\\n\\n" +
       "Non-zelosmcp files in .cursor/, .github/, .vscode/ will be preserved."
@@ -3773,7 +3785,7 @@ HTML_TEMPLATE = """\
       return;
     }
     const ok = window.confirm(
-      `Push rules + agents + hooks to ${count} repositor${count === 1 ? "y" : "ies"} with existing zelosmcp rules?\\n\\n` +
+      `Push rules + agents + hooks + skills to ${count} repositor${count === 1 ? "y" : "ies"} with existing zelosmcp rules?\\n\\n` +
       "This will overwrite the current contents of:\\n" +
       "  .cursor/rules/zelosmcp.mdc\\n" +
       "  .github/copilot-instructions.md\\n" +

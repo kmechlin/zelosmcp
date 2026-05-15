@@ -27,7 +27,7 @@ The pane header shows the backend name and a **Refresh** button. The action butt
 
 ## Tabs
 
-The assets pane has five tabs:
+The assets pane has six tabs:
 
 | Tab | What it shows | `+ Add` available? |
 |---|---|---|
@@ -35,6 +35,7 @@ The assets pane has five tabs:
 | **Extensions** | `extension` kind rows | Yes |
 | **Agents** | `agent` kind rows | Yes |
 | **Hooks** | `hook` kind rows | Yes |
+| **Skills** | `skill` kind rows | Yes |
 | **All** | All kinds for this backend | No |
 
 Clicking a tab switches the content area without a network round-trip (assets are loaded once per pane open and filtered client-side per tab).
@@ -115,15 +116,16 @@ The repo details pane (opened by clicking a row in the **Repositories** panel) i
 Push assets
 ──────────────────────────────────────────────────────────────
 Push includes: zelosmcp + pincher, filesystem
-[Push all]  [Push rules]  [Push agents]  [Push hooks]  [Preview rule]
+[Push all]  [Push rules]  [Push agents]  [Push hooks]  [Push skills]  [Preview rule]
 ```
 
 | Button | What it does |
 |---|---|
-| **Push all** | Runs Push rules + Push agents + Push hooks in sequence. |
+| **Push all** | Runs Push rules + Push agents + Push hooks + Push skills in sequence. |
 | **Push rules** | Calls `POST /api/assets/push/rule` — renders a comprehensive `.cursor/rules/zelosmcp.mdc` (or `copilot-instructions.md`) aggregating assets from `zelosmcp` + all running backends. |
-| **Push agents** | Calls `POST /api/assets/push/agent` — writes each agent's `SKILL.md` for every running backend. |
+| **Push agents** | Calls `POST /api/assets/push/agent` — writes each agent’s definition file for every running backend. |
 | **Push hooks** | Calls `POST /api/assets/push/hook` — merges each hook entry into `.cursor/hooks.json`, preserving non-zelosMCP entries. |
+| **Push skills** | Calls `POST /api/assets/push/skill` — writes each skill’s `SKILL.md` to `.cursor/skills/`, `.github/skills/`, and `.vscode/skills/` for every running backend. |
 | **Preview rule** | Fetches the rule body from `GET /api/cursor-rule?...` with the current format/access/tool_use settings and shows it in a code block below the buttons — no write. |
 
 **Running-backends hint** — the line above the push buttons lists which backends are included: always `zelosmcp` (global) plus every currently-running user backend. Backends that are stopped are excluded from the push.

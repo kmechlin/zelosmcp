@@ -1,6 +1,6 @@
 # Assets YAML format
 
-zelosMCP seeds its asset store from one YAML file per backend located under `configs/assets/`. Each file contains all four asset kinds (`rules`, `extensions`, `agents`, `hooks`) for that backend in a single unified document.
+zelosMCP seeds its asset store from one YAML file per backend located under `configs/assets/`. Each file contains all five asset kinds (`rules`, `extensions`, `agents`, `hooks`, `skills`) for that backend in a single unified document.
 
 For a quick orientation to assets in general, see [assets.md](assets.md). For per-kind field references, see [asset-kinds.md](asset-kinds.md).
 
@@ -13,6 +13,7 @@ rules: { ... }         # optional
 extensions: { ... }    # optional
 agents: { ... }        # optional
 hooks: { ... }         # optional
+skills: { ... }        # optional
 ```
 
 ### `backend`
@@ -89,6 +90,21 @@ hooks:
     event: pre_commit
     command: "ruff check ."
     targets: [cursor]
+```
+
+### `skills:`
+
+See [asset-kinds.md — Skill](asset-kinds.md#skill-skills). Short form:
+
+```yaml
+skills:
+  <skill_name>:
+    description: "One-line description"
+    paths:
+      - "**/*.py"
+    targets: [cursor, vscode]
+    body: |
+      # Skill markdown ...
 ```
 
 ## Schema validator

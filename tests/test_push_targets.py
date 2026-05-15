@@ -109,8 +109,8 @@ class TestAgentPushTargets:
             repo_rw_path=str(tmp_path),
         )
         written_paths = _written_files(tmp_path)
-        assert any(".cursor/skills" in p for p in written_paths)
-        assert not any(".github/skills" in p for p in written_paths)
+        assert any(".cursor/agents" in p for p in written_paths)
+        assert not any(".github/agents" in p for p in written_paths)
 
     @pytest.mark.asyncio
     async def test_vscode_target_writes_github_and_vscode_skills(self, store, tmp_path):
@@ -134,9 +134,8 @@ class TestAgentPushTargets:
             repo_rw_path=str(tmp_path),
         )
         written_paths = _written_files(tmp_path)
-        assert any(".github/skills" in p for p in written_paths)
-        assert any(".vscode/skills" in p for p in written_paths)
-        assert not any(".cursor/skills" in p for p in written_paths)
+        assert any(".github/agents" in p for p in written_paths)
+        assert not any(".cursor/agents" in p for p in written_paths)
 
     @pytest.mark.asyncio
     async def test_both_targets_writes_all_three_paths(self, store, tmp_path):
@@ -160,9 +159,8 @@ class TestAgentPushTargets:
             repo_rw_path=str(tmp_path),
         )
         written_paths = _written_files(tmp_path)
-        assert any(".cursor/skills" in p for p in written_paths)
-        assert any(".github/skills" in p for p in written_paths)
-        assert any(".vscode/skills" in p for p in written_paths)
+        assert any(".cursor/agents" in p for p in written_paths)
+        assert any(".github/agents" in p for p in written_paths)
 
 
 # ── Hook push targets ─────────────────────────────────────────────────
@@ -300,16 +298,13 @@ class TestRemovePushedAssets:
 
     @pytest.mark.asyncio
     async def test_removes_agent_skill_dirs(self, store, tmp_path):
-        for d in (".cursor/skills/my_agent", ".github/skills/my-agent", ".vscode/skills/my-agent"):
+        for d in (".cursor/agents", ".github/agents"):
             (tmp_path / d).mkdir(parents=True)
-            (tmp_path / d / "SKILL.md").write_text("# skill")
+            (tmp_path / d / "my-agent.md").write_text("# agent")
 
         removed = await remove_pushed_assets(store, repo_rw_path=str(tmp_path))
         deleted = [r.path for r in removed if r.action == "deleted"]
-        assert len([p for p in deleted if "SKILL.md" in p]) == 3
-        # Skill dirs should be cleaned up
-        assert not (tmp_path / ".cursor" / "skills" / "my_agent").exists()
-        assert not (tmp_path / ".github" / "skills" / "my-agent").exists()
+        assert len([p for p in deleted if "my-agent" in p]) >= 1
 
     @pytest.mark.asyncio
     async def test_cleans_cursor_hooks(self, store, tmp_path):

@@ -151,14 +151,14 @@ class TestRealYamlFiles:
         await seed_all(store)
         rules = await store.list(kind="rule", backend="pincher")
         names = {r.name for r in rules}
-        assert "playbook_read_only" in names
-        assert "playbook_read_write" in names
+        assert "tool:architecture" in names
+        assert "tool:search" in names
 
     async def test_filesystem_yaml_seeds(self, store):
         await seed_all(store)
         rules = await store.list(kind="rule", backend="filesystem")
         names = {r.name for r in rules}
-        assert "playbook_read_only" in names
+        assert "tool:read_text_file" in names
 
     async def test_global_yaml_seeds(self, store):
         """global.yaml should seed backend=zelosmcp directive rows."""

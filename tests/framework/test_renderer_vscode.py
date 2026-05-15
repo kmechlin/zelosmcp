@@ -20,12 +20,10 @@ def _catalog(*backends: str) -> dict:
     }
 
 
-def _make_assets(backend: str, playbook: str) -> dict:
+def _make_assets(backend: str) -> dict:
     return {
         backend: BackendRuleAssets(
             backend=backend,
-            playbook_read_only=playbook,
-            playbook_read_write=playbook,
         ),
         "zelosmcp": BackendRuleAssets(
             backend="zelosmcp",
@@ -58,16 +56,14 @@ class TestCopilotInstructionsFormat:
 
     def test_directives_same_content(self):
         catalog = _catalog("pincher")
-        assets = _make_assets("pincher", "CUSTOM PLAYBOOK")
+        assets = _make_assets("pincher")
         cursor_out = render_comprehensive_rule(
             catalog, fmt="cursor-mdc", access="read-only", rule_assets=assets
         )
         vscode_out = render_comprehensive_rule(
             catalog, fmt="copilot-instructions", access="read-only", rule_assets=assets
         )
-        # Both should include the custom playbook and directives.
-        assert "CUSTOM PLAYBOOK" in cursor_out
-        assert "CUSTOM PLAYBOOK" in vscode_out
+        # Both should include the custom directives.
         assert "RO directive" in cursor_out
         assert "RO directive" in vscode_out
 
@@ -86,7 +82,7 @@ class TestCopilotInstructionsFormat:
 
     def test_read_write_directive_in_both_formats(self):
         catalog = _catalog("pincher")
-        assets = _make_assets("pincher", "PLAYBOOK")
+        assets = _make_assets("pincher")
         cursor_rw = render_comprehensive_rule(
             catalog, fmt="cursor-mdc", access="read-write", rule_assets=assets
         )

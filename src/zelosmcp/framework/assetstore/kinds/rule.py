@@ -52,12 +52,7 @@ class BackendRuleAssets:
     """Resolved rule content for one MCP backend."""
 
     backend: str
-    playbook_read_only: str = ""
-    playbook_read_write: str = ""
-    playbook_compressed_read_only: str = ""
-    playbook_compressed_read_write: str = ""
-    compressed_rules_read_only: str = ""
-    compressed_rules_read_write: str = ""
+    compressed_rules: str = ""
     tool_instructions: dict[str, str] = field(default_factory=dict)
     directive_read_only: str = ""
     directive_read_write: str = ""
@@ -86,12 +81,7 @@ async def load_backend_rule_assets(
 
     return BackendRuleAssets(
         backend=backend,
-        playbook_read_only=by_name.get("playbook_read_only", ""),
-        playbook_read_write=by_name.get("playbook_read_write", ""),
-        playbook_compressed_read_only=by_name.get("playbook_compressed_read_only", ""),
-        playbook_compressed_read_write=by_name.get("playbook_compressed_read_write", ""),
-        compressed_rules_read_only=by_name.get("compressed_rules_read_only", ""),
-        compressed_rules_read_write=by_name.get("compressed_rules_read_write", ""),
+        compressed_rules=by_name.get("compressed_rules", ""),
         tool_instructions=tool_instructions,
         directive_read_only=by_name.get("directive_read_only", ""),
         directive_read_write=by_name.get("directive_read_write", ""),

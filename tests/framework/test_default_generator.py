@@ -30,7 +30,7 @@ def _tool(name: str, **annotations) -> dict:
 
 
 class TestGenerateDefaultRuleRows:
-    def test_returns_playbook_rows(self):
+    def test_returns_per_tool_rows(self):
         tools = [
             _tool("list_pods", readOnlyHint=True),
             _tool("delete_pod", destructiveHint=True),
@@ -38,28 +38,15 @@ class TestGenerateDefaultRuleRows:
         ]
         rows = generate_default_rule_rows("kubernetes", tools)
         names = {r.name for r in rows}
-        assert "playbook_read_only" in names
-        assert "playbook_read_write" in names
+        assert "tool:list_pods" in names
+        assert "tool:delete_pod" in names
+        assert "tool:create_pod" in names
 
-    def test_readonly_playbook_contains_table(self):
+    def test_no_playbook_rows_emitted(self):
         tools = [_tool("list_pods", readOnlyHint=True)]
         rows = generate_default_rule_rows("kubernetes", tools)
-        ro = next(r for r in rows if r.name == "playbook_read_only")
-        assert "| Tool |" in ro.body
-        assert "kubernetes__list_pods" in ro.body
-        assert "[readonly]" in ro.body
-
-    def test_destructive_in_readonly_no_call_list(self):
-        tools = [_tool("delete_pod", destructiveHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        ro = next(r for r in rows if r.name == "playbook_read_only")
-        assert "do **not** call" in ro.body
-
-    def test_read_write_playbook_mentions_confirm_destructive(self):
-        tools = [_tool("delete_pod", destructiveHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        rw = next(r for r in rows if r.name == "playbook_read_write")
-        assert "confirm" in rw.body.lower() or "[destructive]" in rw.body
+        names = {r.name for r in rows}
+        assert not any("playbook" in n for n in names)
 
     def test_per_tool_rows_emitted(self):
         tools = [_tool("list_pods", readOnlyHint=True), _tool("delete_pod")]
@@ -74,48 +61,9 @@ class TestGenerateDefaultRuleRows:
         tool_row = next(r for r in rows if r.name == "tool:list_pods")
         assert "list_pods tool" in tool_row.body
 
-    def test_empty_catalog_produces_playbooks_only(self):
+    def test_empty_catalog_produces_no_rows(self):
         rows = generate_default_rule_rows("ghost", [])
-        names = {r.name for r in rows}
-        assert "playbook_read_only" in names
-        assert "playbook_read_write" in names
-        assert not any(n.startswith("tool:") for n in names)
-
-    def test_compressed_playbook_rows_emitted(self):
-        tools = [_tool("list_pods", readOnlyHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        names = {r.name for r in rows}
-        assert "playbook_compressed_read_only" in names
-        assert "playbook_compressed_read_write" in names
-
-    def test_compressed_ro_uses_invoke_tool_framing(self):
-        tools = [_tool("list_pods", readOnlyHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        compressed_ro = next(r for r in rows if r.name == "playbook_compressed_read_only")
-        assert "invoke_tool" in compressed_ro.body.lower() or "kubernetes__invoke_tool" in compressed_ro.body
-        # Must NOT use `kubernetes__list_pods` as a direct call instruction
-        assert "kubernetes__list_pods" not in compressed_ro.body
-
-    def test_compressed_rw_mentions_destructive_confirm(self):
-        tools = [_tool("delete_pod", destructiveHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        compressed_rw = next(r for r in rows if r.name == "playbook_compressed_read_write")
-        assert "destructive" in compressed_rw.body.lower() or "confirm" in compressed_rw.body.lower()
-
-    def test_compressed_ro_no_mutating_invoke(self):
-        tools = [_tool("delete_pod", destructiveHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        compressed_ro = next(r for r in rows if r.name == "playbook_compressed_read_only")
-        assert "do **not** invoke" in compressed_ro.body.lower() or "not invoke" in compressed_ro.body.lower()
-
-    def test_all_four_playbook_rows_present(self):
-        tools = [_tool("list_pods", readOnlyHint=True), _tool("delete_pod", destructiveHint=True)]
-        rows = generate_default_rule_rows("kubernetes", tools)
-        names = {r.name for r in rows}
-        assert "playbook_read_only" in names
-        assert "playbook_read_write" in names
-        assert "playbook_compressed_read_only" in names
-        assert "playbook_compressed_read_write" in names
+        assert len(rows) == 0
 
 
 @pytest.mark.asyncio
@@ -166,23 +114,21 @@ def _fake_catalog_module(monkeypatch, tools_per_backend: dict):
 
 @pytest.mark.asyncio
 class TestRegenerateDefaultAssets:
-    async def test_overwrites_stale_auto_default_playbook(self, store, monkeypatch):
+    async def test_overwrites_stale_auto_default_tool_rows(self, store, monkeypatch):
         """The reported bug: provider connects → live catalog goes 0→N,
-        but the stored playbook is frozen at '0 tools' because
-        ensure_default_assets() short-circuits on existing rows. The
-        regenerate variant must overwrite the auto-default playbook."""
+        but the stored tool rows are frozen. The regenerate variant must
+        overwrite the auto-default tool rows."""
         from zelosmcp.framework.assetstore.defaults import (
             generate_default_rule_rows,
             regenerate_default_assets,
         )
 
-        # Stale state: backend has the 0-tool playbook from when its auth
-        # provider was unconnected at start-up.
+        # Stale state: no tool rows from empty catalog.
         for row in generate_default_rule_rows("github", [], seed_version=0):
             await store.upsert(row)
 
-        stale = await store.get("rule", "github", "playbook_read_only")
-        assert "advertises 0 tools" in stale.body
+        existing = await store.list(kind="rule", backend="github")
+        assert len(existing) == 0  # no tools → no rows
 
         # Auth provider just connected: live catalog now reports 2 tools.
         live_tools = [
@@ -192,12 +138,11 @@ class TestRegenerateDefaultAssets:
         _fake_catalog_module(monkeypatch, {"github": live_tools})
 
         n = await regenerate_default_assets(store, object(), "github")
-        assert n >= 2  # playbook_ro + playbook_rw at minimum
+        assert n >= 2  # tool:list_issues + tool:create_issue
 
-        refreshed = await store.get("rule", "github", "playbook_read_only")
-        assert "advertises 2 tools" in refreshed.body
-        assert "github__list_issues" in refreshed.body
-        assert "github__create_issue" in refreshed.body
+        refreshed = await store.get("rule", "github", "tool:list_issues")
+        assert refreshed is not None
+        assert "list_issues" in refreshed.body
 
     async def test_inserts_per_tool_rows_for_newly_visible_tools(
         self, store, monkeypatch
@@ -338,8 +283,8 @@ class TestRegenerateDefaultAssets:
 
     async def test_revoke_path_drops_tools_to_zero(self, store, monkeypatch):
         """Reverse direction: provider was connected (N tools), user
-        revokes, catalog becomes empty. The stored playbook should
-        update to reflect '0 tools'."""
+        revokes, catalog becomes empty. The stored tool rows should
+        be removed."""
         from zelosmcp.framework.assetstore.defaults import (
             generate_default_rule_rows,
             regenerate_default_assets,
@@ -349,12 +294,14 @@ class TestRegenerateDefaultAssets:
         for row in generate_default_rule_rows("github", live_tools, seed_version=0):
             await store.upsert(row)
 
-        connected = await store.get("rule", "github", "playbook_read_only")
-        assert "advertises 1 tool" in connected.body
+        connected = await store.get("rule", "github", "tool:list_issues")
+        assert connected is not None
 
         _fake_catalog_module(monkeypatch, {"github": []})
 
         await regenerate_default_assets(store, object(), "github")
 
-        revoked = await store.get("rule", "github", "playbook_read_only")
-        assert "advertises 0 tools" in revoked.body
+        # After revoke, no tool rows remain
+        remaining = await store.list(kind="rule", backend="github")
+        tool_rows = [r for r in remaining if r.name.startswith("tool:")]
+        assert len(tool_rows) == 0

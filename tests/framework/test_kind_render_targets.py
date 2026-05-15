@@ -57,27 +57,25 @@ class TestAgentRenderTargets:
         row = _agent_row(targets=["cursor"])
         files = agent_render(row, _CTX)
         paths = [f.rel_path for f in files]
-        assert ".cursor/skills/my_agent/SKILL.md" in paths
+        assert ".cursor/agents/my-agent.md" in paths
         assert all(".github" not in p and ".vscode" not in p for p in paths)
 
     def test_vscode_only(self):
         row = _agent_row(targets=["vscode"])
         files = agent_render(row, _CTX)
         paths = [f.rel_path for f in files]
-        assert ".cursor/skills/my_agent/SKILL.md" not in paths
+        assert ".cursor/agents/my-agent.md" not in paths
         slug = _slug("my_agent")
-        assert f".github/skills/{slug}/SKILL.md" in paths
-        assert f".vscode/skills/{slug}/SKILL.md" in paths
+        assert f".github/agents/{slug}.agent.md" in paths
 
     def test_both_targets(self):
         row = _agent_row(targets=["cursor", "vscode"])
         files = agent_render(row, _CTX)
         paths = [f.rel_path for f in files]
-        assert ".cursor/skills/my_agent/SKILL.md" in paths
+        assert ".cursor/agents/my-agent.md" in paths
         slug = _slug("my_agent")
-        assert f".github/skills/{slug}/SKILL.md" in paths
-        assert f".vscode/skills/{slug}/SKILL.md" in paths
-        assert len(paths) == 3
+        assert f".github/agents/{slug}.agent.md" in paths
+        assert len(paths) == 2
 
     def test_vscode_body_has_frontmatter(self):
         row = _agent_row(targets=["vscode"])
@@ -87,11 +85,11 @@ class TestAgentRenderTargets:
         assert "description:" in vscode_file.body
         assert "# Agent body" in vscode_file.body
 
-    def test_cursor_body_no_frontmatter(self):
+    def test_cursor_body_has_frontmatter(self):
         row = _agent_row(targets=["cursor"])
         files = agent_render(row, _CTX)
         cursor_file = files[0]
-        assert "---\nname:" not in cursor_file.body
+        assert "---\nname:" in cursor_file.body
         assert "# Agent body" in cursor_file.body
 
     def test_slug_normalises_name(self):
@@ -103,19 +101,19 @@ class TestAgentRenderTargets:
         row = _agent_row(targets=None)
         files = agent_render(row, _CTX)
         paths = [f.rel_path for f in files]
-        assert len(paths) == 3
+        assert len(paths) == 2
 
     def test_push_cursor_override_respected(self):
         meta = {
             "name": "custom",
             "description": "",
             "targets": ["cursor"],
-            "push": {"cursor": ".cursor/skills/override/SKILL.md"},
+            "push": {"cursor": ".cursor/agents/override.md"},
         }
         row = AssetRow(kind="agent", backend="t", name="custom", target="cursor",
                        body="body", meta=meta, source="seed", seed_version=1)
         files = agent_render(row, _CTX)
-        assert files[0].rel_path == ".cursor/skills/override/SKILL.md"
+        assert files[0].rel_path == ".cursor/agents/override.md"
 
 
 # ── Hook ───────────────────────────────────────────────────────────────
