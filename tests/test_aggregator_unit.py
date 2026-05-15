@@ -226,6 +226,25 @@ class TestListTools:
         result = await handler(None)
         assert result.root.tools == []
 
+    @pytest.mark.asyncio
+    async def test_records_tools_list_event(self):
+        m, _, _ = _make_manager_with_two_running_backends()
+        await m.start_savings(":memory:")
+        try:
+            agg = Aggregator(m)
+            server = _register_for_test(agg)
+            handler = _find_handler(server, "ListToolsRequest")
+
+            await handler(None)
+
+            assert m.events is not None
+            page = await m.events.query_events(method="tools/list")
+            assert page["total"] == 1
+            assert page["events"][0]["meta"]["returned_count"] == 4
+            assert page["events"][0]["meta"]["backend_count"] == 2
+        finally:
+            await m.stop_savings()
+
 
 # ── Tool routing ────────────────────────────────────────────────────────
 

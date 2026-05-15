@@ -228,6 +228,84 @@ HTML_TEMPLATE = """\
     overflow: auto;
     color: var(--black);
   }
+  .events-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .events-controls input,
+  .events-controls select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-size: 13px;
+    outline: none;
+  }
+  .events-controls input:focus,
+  .events-controls select:focus {
+    border-color: var(--accent);
+  }
+  .events-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--black);
+  }
+  .events-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .events-status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .events-status {
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .events-table tbody tr {
+    cursor: pointer;
+  }
+  .events-table-scroll {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .events-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .events-table th, .events-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+  }
+  /* Column widths: Time Backend Method Qualified Input Upstream Returned Saved Latency */
+  .events-table th:nth-child(1), .events-table td:nth-child(1) { width: 72px; }
+  .events-table th:nth-child(2), .events-table td:nth-child(2) { width: 80px; }
+  .events-table th:nth-child(3), .events-table td:nth-child(3) { width: 100px; }
+  .events-table th:nth-child(4), .events-table td:nth-child(4) { width: auto; word-break: break-all; white-space: normal; }
+  .events-table td:nth-child(4) code { word-break: break-all; white-space: normal; }
+  .events-table th:nth-child(5), .events-table td:nth-child(5) { width: 56px; }
+  .events-table th:nth-child(6), .events-table td:nth-child(6) { width: 64px; }
+  .events-table th:nth-child(7), .events-table td:nth-child(7) { width: 64px; }
+  .events-table th:nth-child(8), .events-table td:nth-child(8) { width: 56px; }
+  .events-table th:nth-child(9), .events-table td:nth-child(9) { width: 64px; }
+  .events-table tbody tr.is-selected {
+    background: var(--surface);
+  }
+  .events-table tbody tr.is-error td {
+    color: #9f2b2b;
+  }
 
   /* Below ~1240px the 220 + 480 columns leave the middle column too
      narrow (the activity log starts wrapping awkwardly). Collapse to a
@@ -1397,6 +1475,7 @@ HTML_TEMPLATE = """\
     <div class="nav-group">
       <div class="nav-group-label">Dashboards</div>
       <button type="button" class="nav-item" data-view="savings">Savings</button>
+      <button type="button" class="nav-item" data-view="events">Events</button>
       <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
     </div>
     <div class="nav-group">
@@ -1544,18 +1623,22 @@ HTML_TEMPLATE = """\
           <p class="intro" style="margin: 0 0 12px 0;">
             Aggregated savings across three sources: <strong>tool-list compression</strong>
             (raw vs. compressed-wrapper tokens served on every <code>tools/list</code>),
-            <strong>per-call accounting</strong> (input + output tokens of every
-            <code>tools/call</code>), and <strong>pincher self-reported BPE savings</strong>
-            (parsed from each pincher response's <code>_meta</code> envelope plus
-            periodic <code>pincher__stats</code> snapshots). Token counts use
-            <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
+            <strong>proxy transaction events</strong> (input tokens plus raw upstream
+            output tokens versus the transformed tokens returned to the IDE for
+            every routed MCP transaction), and <strong>pincher self-reported BPE
+            savings</strong> (parsed from each pincher response's <code>_meta</code>
+            envelope plus periodic <code>pincher__stats</code> snapshots). Token
+            counts use <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
             available; otherwise a <code>len/4</code> heuristic.
           </p>
 
           <div class="kpi-grid" id="savings-kpis">
             <div class="kpi"><div class="kpi-label">Tokens saved (compression)</div><div class="kpi-value" id="kpi-compression-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (proxy transforms)</div><div class="kpi-value" id="kpi-transform-saved">&mdash;</div></div>
             <div class="kpi"><div class="kpi-label">Tokens saved (pincher)</div><div class="kpi-value" id="kpi-pincher-saved">&mdash;</div></div>
-            <div class="kpi"><div class="kpi-label">Calls recorded</div><div class="kpi-value" id="kpi-calls">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Transactions recorded</div><div class="kpi-value" id="kpi-transactions">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Upstream output tokens</div><div class="kpi-value" id="kpi-upstream-output">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Returned output tokens</div><div class="kpi-value" id="kpi-returned-output">&mdash;</div></div>
             <div class="kpi"><div class="kpi-label">Cost avoided (pincher)</div><div class="kpi-value" id="kpi-cost">&mdash;</div></div>
           </div>
         </div>
@@ -1589,23 +1672,46 @@ HTML_TEMPLATE = """\
             <thead>
               <tr>
                 <th>Tool</th>
-                <th class="num">Calls</th>
-                <th class="num">Tokens</th>
+                <th class="num">Events</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
                 <th class="num">Avg latency</th>
               </tr>
             </thead>
             <tbody id="savings-top-tools-body">
-              <tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>
+              <tr><td colspan="7" class="empty-cell">No proxy events recorded yet.</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div class="section">
-        <div class="section-label">Per-backend activity</div>
+        <div class="section-label">Response transform breakdown</div>
+        <div class="card">
+          <table class="savings-table" id="savings-transform-table">
+            <thead>
+              <tr>
+                <th>Transform</th>
+                <th class="num">Events</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-transform-body">
+              <tr><td colspan="5" class="empty-cell">No transformed responses recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Per-backend transactions</div>
         <div class="card">
           <div id="savings-backend-bars" class="backend-bars">
-            <div class="empty-cell">No call events yet.</div>
+            <div class="empty-cell">No proxy events yet.</div>
           </div>
         </div>
       </div>
@@ -1614,6 +1720,77 @@ HTML_TEMPLATE = """\
         <div class="section-label">Pincher session stats</div>
         <div class="card">
           <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>ZELOSMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Proxy events view -->
+    <section class="view" data-view="events">
+      <div class="section">
+        <div class="section-label">
+          <span>Proxy events</span>
+          <span class="dashboard-meta" id="events-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="events-controls">
+            <input
+              id="events-backend-filter"
+              placeholder="Backend (exact, e.g. docker)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-method-filter"
+              placeholder="Method (exact, e.g. tools/call)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-tool-filter"
+              placeholder="Tool substring"
+              oninput="onEventsFilterChange()">
+            <div class="events-actions">
+              <label class="events-toggle">
+                <input type="checkbox" id="events-errors-only" onchange="onEventsFilterChange()">
+                Errors only
+              </label>
+              <button type="button" class="btn btn-outline btn-mini" onclick="loadEventHistory(0)">Refresh</button>
+            </div>
+          </div>
+          <div class="events-status-row">
+            <div class="events-status" id="events-status">Loading event history…</div>
+            <div class="events-actions">
+              <button type="button" class="btn btn-outline btn-mini" id="events-prev" onclick="changeEventsPage(-1)" disabled>Previous</button>
+              <button type="button" class="btn btn-outline btn-mini" id="events-next" onclick="changeEventsPage(1)" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Recent transactions</div>
+        <div class="card events-table-scroll">
+          <table class="savings-table events-table" id="events-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Backend</th>
+                <th>Method</th>
+                <th>Qualified</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+                <th class="num">Latency</th>
+              </tr>
+            </thead>
+            <tbody id="events-body">
+              <tr><td colspan="9" class="empty-cell">No proxy events yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Selected event</div>
+        <div class="card">
+          <pre id="events-detail" class="savings-pre">Select an event row to inspect its details.</pre>
         </div>
       </div>
     </section>
@@ -3997,6 +4174,10 @@ HTML_TEMPLATE = """\
       refreshSavings();
       ensureSavingsStream();
     }
+    if (name === "events") {
+      loadEventHistory(0);
+      ensureEventsStream();
+    }
     if (name === "docs") loadDocsIndex();
     if (name === "connections") loadConnections();
     if (name === "assets-rules") { currentAssetsBackendFilter = null; loadAssets("rule"); }
@@ -4580,6 +4761,13 @@ HTML_TEMPLATE = """\
   let savingsStream = null;
   let savingsPollTimer = null;
   let savingsFetchInflight = false;
+  let eventsStream = null;
+  let eventsPollTimer = null;
+  let eventsFetchInflight = false;
+  let eventsPageOffset = 0;
+  const eventsPageLimit = 25;
+  let currentEventsPage = null;
+  let currentEventSelectionId = null;
 
   function fmtNum(n) {
     if (n === null || n === undefined) return "—";
@@ -4659,21 +4847,29 @@ HTML_TEMPLATE = """\
       const enc = data.tokenizer && data.tokenizer.heuristic
         ? "heuristic" : (data.tokenizer.encoding || "tiktoken");
       const ts = new Date((data.generated_at || 0) * 1000);
-      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}`;
+      const retention = data.retention_hours ? ` • retention ${data.retention_hours}h` : "";
+      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}${retention}`;
     }
 
     const compressionSaved = data.compression_saved_tokens_total || 0;
+    const transformSaved = data.response_transform_saved_tokens_total || 0;
     const pincherSaved = (data.pincher && data.pincher.tokens_saved_total) || 0;
     const totals = (data.calls && data.calls.totals) || {};
     const cost = (data.pincher && data.pincher.cost_avoided_usd_total) || 0;
+    const transactions = totals.transactions || totals.events || totals.calls || 0;
+    const upstreamOutput = totals.raw_output_tokens || data.upstream_output_tokens_total || 0;
+    const returnedOutput = totals.output_tokens || data.returned_output_tokens_total || 0;
 
     const set = (id, v) => {
       const el = document.getElementById(id);
       if (el) el.textContent = v;
     };
     set("kpi-compression-saved", fmtNum(compressionSaved));
+    set("kpi-transform-saved", fmtNum(transformSaved));
     set("kpi-pincher-saved", fmtNum(pincherSaved));
-    set("kpi-calls", fmtNum(totals.calls || 0));
+    set("kpi-transactions", fmtNum(transactions));
+    set("kpi-upstream-output", fmtNum(upstreamOutput));
+    set("kpi-returned-output", fmtNum(returnedOutput));
     set("kpi-cost", fmtUsd(cost));
 
     // Compression table
@@ -4701,14 +4897,35 @@ HTML_TEMPLATE = """\
     if (topBody) {
       const rows = (data.calls && data.calls.top_tools) || [];
       if (!rows.length) {
-        topBody.innerHTML = '<tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>';
+        topBody.innerHTML = '<tr><td colspan="7" class="empty-cell">No proxy events recorded yet.</td></tr>';
       } else {
         topBody.innerHTML = rows.map((t) => `
           <tr>
             <td><code>${escapeHtml(t.qualified)}</code></td>
-            <td class="num">${fmtNum(t.calls)}</td>
-            <td class="num">${fmtNum(t.tokens)}</td>
-            <td class="num">${t.avg_latency_ms.toFixed(0)} ms</td>
+            <td class="num">${fmtNum(t.events || t.calls || 0)}</td>
+            <td class="num">${fmtNum(t.input_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.raw_output_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.output_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.transform_saved_tokens || 0)}</td>
+            <td class="num">${Number(t.avg_latency_ms || 0).toFixed(0)} ms</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    const transformBody = document.getElementById("savings-transform-body");
+    if (transformBody) {
+      const rows = data.response_transforms || [];
+      if (!rows.length) {
+        transformBody.innerHTML = '<tr><td colspan="5" class="empty-cell">No transformed responses recorded yet.</td></tr>';
+      } else {
+        transformBody.innerHTML = rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.transform_type || "raw")}</td>
+            <td class="num">${fmtNum(row.events || 0)}</td>
+            <td class="num">${fmtNum(row.raw_output_tokens || 0)}</td>
+            <td class="num">${fmtNum(row.output_tokens || 0)}</td>
+            <td class="num">${fmtNum(row.transform_saved_tokens || 0)}</td>
           </tr>
         `).join("");
       }
@@ -4719,16 +4936,17 @@ HTML_TEMPLATE = """\
     if (barsHost) {
       const rows = (data.calls && data.calls.per_backend) || [];
       if (!rows.length) {
-        barsHost.innerHTML = '<div class="empty-cell">No call events yet.</div>';
+        barsHost.innerHTML = '<div class="empty-cell">No proxy events yet.</div>';
       } else {
-        const max = Math.max(1, ...rows.map((r) => r.calls || 0));
+        const max = Math.max(1, ...rows.map((r) => r.events || r.calls || 0));
         barsHost.innerHTML = rows.map((b) => {
-          const pct = Math.round(((b.calls || 0) / max) * 100);
+          const count = b.events || b.calls || 0;
+          const pct = Math.round((count / max) * 100);
           return `
             <div class="backend-bar">
               <div class="backend-bar-name">${escapeHtml(b.backend)}</div>
               <div class="backend-bar-track"><div class="backend-bar-fill" style="width: ${pct}%"></div></div>
-              <div class="backend-bar-count">${fmtNum(b.calls)} calls</div>
+              <div class="backend-bar-count">${fmtNum(count)} events</div>
             </div>`;
         }).join("");
       }
@@ -4749,6 +4967,217 @@ HTML_TEMPLATE = """\
         }
         pre.textContent = body || JSON.stringify(stats, null, 2);
       }
+    }
+  }
+
+  function isEventsTabActive() {
+    const v = document.querySelector(".view[data-view=events]");
+    return v && v.classList.contains("active");
+  }
+
+  function currentEventFilters() {
+    return {
+      backend: (document.getElementById("events-backend-filter")?.value || "").trim(),
+      method: (document.getElementById("events-method-filter")?.value || "").trim(),
+      tool: (document.getElementById("events-tool-filter")?.value || "").trim(),
+      errors_only: !!document.getElementById("events-errors-only")?.checked,
+    };
+  }
+
+  function ensureEventsStream() {
+    if (eventsStream) return;
+    try {
+      eventsStream = new EventSource("/api/events/stream");
+    } catch (_) {
+      eventsStream = null;
+      return;
+    }
+    eventsStream.onmessage = () => {
+      if (isEventsTabActive()) loadEventHistory(eventsPageOffset);
+    };
+    eventsStream.onerror = () => {};
+    if (!eventsPollTimer) {
+      eventsPollTimer = setInterval(() => {
+        if (isEventsTabActive()) loadEventHistory(eventsPageOffset);
+      }, 5000);
+    }
+  }
+
+  function onEventsFilterChange() {
+    eventsPageOffset = 0;
+    if (isEventsTabActive()) loadEventHistory(0);
+  }
+
+  function changeEventsPage(direction) {
+    const nextOffset = Math.max(0, eventsPageOffset + (direction * eventsPageLimit));
+    if (nextOffset === eventsPageOffset && direction < 0) return;
+    loadEventHistory(nextOffset);
+  }
+
+  function renderEventDetails(event) {
+    const pre = document.getElementById("events-detail");
+    if (!pre) return;
+    if (!event) {
+      pre.textContent = "Select an event row to inspect its details.";
+      return;
+    }
+    const sections = [];
+    // Header
+    const upstream = event.raw_output_tokens || 0;
+    const returned = event.output_tokens || 0;
+    const saved = upstream - returned;
+    const savedStr = saved < 0 ? `(${Math.abs(saved)})` : String(saved);
+    sections.push(`── Event: ${event.event_id} ──`);
+    sections.push(`Time:      ${event.ts ? new Date(event.ts * 1000).toISOString() : '—'}`);
+    sections.push(`Backend:   ${event.backend || '—'}`);
+    sections.push(`Method:    ${event.method || '—'}`);
+    sections.push(`Tool:      ${event.tool || '—'}`);
+    sections.push(`Qualified: ${event.qualified || '—'}`);
+    sections.push(`Latency:   ${event.latency_ms || 0} ms`);
+    sections.push(`Input:     ${event.input_tokens || 0} tokens`);
+    sections.push(`Upstream:  ${upstream} tokens`);
+    sections.push(`Returned:  ${returned} tokens`);
+    sections.push(`Saved:     ${savedStr} tokens`);
+    if (event.transform_type) sections.push(`Transform: ${event.transform_type}`);
+    if (event.error) sections.push(`Error:     ${event.error_message || 'yes'}`);
+    sections.push('');
+
+    // Input message
+    sections.push('── Input Message ──');
+    if (event.input_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.input_text), null, 2)); }
+      catch(e) { sections.push(event.input_text); }
+    } else {
+      sections.push('(no input)');
+    }
+    sections.push('');
+
+    // Upstream message (raw from backend, before transforms)
+    sections.push('── Upstream Message (raw from backend) ──');
+    if (event.upstream_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.upstream_text), null, 2)); }
+      catch(e) { sections.push(event.upstream_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Returned message (after transforms, sent to IDE/LLM)
+    sections.push('── Returned Message (sent to IDE) ──');
+    if (event.returned_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.returned_text), null, 2)); }
+      catch(e) { sections.push(event.returned_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Meta
+    if (event.meta) {
+      sections.push('── Meta ──');
+      sections.push(JSON.stringify(event.meta, null, 2));
+    }
+    pre.textContent = sections.join('\\n');
+  }
+
+  function selectEvent(eventId) {
+    currentEventSelectionId = eventId;
+    const page = currentEventsPage || { events: [] };
+    const event = (page.events || []).find((row) => row.event_id === eventId) || null;
+    renderEventDetails(event);
+    document.querySelectorAll("#events-body tr[data-event-id]").forEach((row) => {
+      row.classList.toggle("is-selected", row.dataset.eventId === eventId);
+    });
+  }
+
+  function renderEventsPage(page) {
+    currentEventsPage = page;
+    const meta = document.getElementById("events-meta");
+    const status = document.getElementById("events-status");
+    const body = document.getElementById("events-body");
+    const prev = document.getElementById("events-prev");
+    const next = document.getElementById("events-next");
+    if (!body) return;
+
+    const rows = page.events || [];
+    const total = page.total || 0;
+    const start = total ? eventsPageOffset + 1 : 0;
+    const end = Math.min(total, eventsPageOffset + rows.length);
+    if (meta) {
+      const retention = page.retention_hours ? `retention ${page.retention_hours}h` : "retention —";
+      meta.textContent = `${retention} • ${fmtNum(total)} total`;
+    }
+    if (status) {
+      status.textContent = total
+        ? `Showing ${fmtNum(start)}–${fmtNum(end)} of ${fmtNum(total)} events`
+        : "No matching events.";
+    }
+    if (prev) prev.disabled = eventsPageOffset <= 0;
+    if (next) next.disabled = (eventsPageOffset + rows.length) >= total;
+
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="9" class="empty-cell">No matching proxy events.</td></tr>';
+      currentEventSelectionId = null;
+      renderEventDetails(null);
+      return;
+    }
+
+    body.innerHTML = rows.map((row) => {
+      const upstream = row.raw_output_tokens || 0;
+      const returned = row.output_tokens || 0;
+      const saved = upstream - returned;
+      const savedStr = saved < 0 ? `(${fmtNum(Math.abs(saved))})` : fmtNum(saved);
+      const ts = row.ts ? new Date(row.ts * 1000).toLocaleTimeString() : "—";
+      const qualified = row.qualified || row.tool || row.method || "—";
+      const rowClass = row.error ? "is-error" : "";
+      return `
+        <tr class="${rowClass}" data-event-id="${escapeHtml(row.event_id)}" onclick="selectEvent('${escapeHtml(row.event_id)}')">
+          <td>${escapeHtml(ts)}</td>
+          <td>${escapeHtml(row.backend || "—")}</td>
+          <td><code>${escapeHtml(row.method || "—")}</code></td>
+          <td><code>${escapeHtml(qualified)}</code></td>
+          <td class="num">${fmtNum(row.input_tokens || 0)}</td>
+          <td class="num">${fmtNum(upstream)}</td>
+          <td class="num">${fmtNum(returned)}</td>
+          <td class="num">${savedStr}</td>
+          <td class="num">${Number(row.latency_ms || 0).toFixed(0)} ms</td>
+        </tr>`;
+    }).join("");
+
+    const selectionStillVisible = rows.some((row) => row.event_id === currentEventSelectionId);
+    selectEvent(selectionStillVisible ? currentEventSelectionId : rows[0].event_id);
+  }
+
+  async function loadEventHistory(offset) {
+    if (eventsFetchInflight) return;
+    if (typeof offset === "number") eventsPageOffset = Math.max(0, offset);
+    eventsFetchInflight = true;
+    const status = document.getElementById("events-status");
+    if (status) status.textContent = "Loading event history…";
+    try {
+      const filters = currentEventFilters();
+      const params = new URLSearchParams({
+        limit: String(eventsPageLimit),
+        offset: String(eventsPageOffset),
+      });
+      if (filters.backend) params.set("backend", filters.backend);
+      if (filters.method) params.set("method", filters.method);
+      if (filters.tool) params.set("tool", filters.tool);
+      if (filters.errors_only) params.set("errors_only", "1");
+      const r = await fetch(`/api/events?${params.toString()}`);
+      if (r.status === 503) {
+        if (status) status.textContent = "event store not initialised";
+        return;
+      }
+      if (!r.ok) {
+        if (status) status.textContent = "error " + r.status;
+        return;
+      }
+      renderEventsPage(await r.json());
+    } catch (err) {
+      if (status) status.textContent = "error: " + err.message;
+    } finally {
+      eventsFetchInflight = false;
     }
   }
 

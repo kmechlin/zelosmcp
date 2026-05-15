@@ -108,9 +108,13 @@ class TestMakeWrappers:
         ]
         w = make_get_schema_wrapper(prefix="ws", tools=tools, level="medium")
         assert w.name == "ws__get_tool_schema"
-        # Both tool summaries must appear in the wrapper's description.
-        assert "create_thing: Create a thing" in w.description
-        assert "delete_thing: Remove a thing irreversibly" in w.description
+        # Both tool names must appear in the wrapper's description.
+        assert "create_thing" in w.description
+        assert "delete_thing" in w.description
+        # Catalog header with count must be present.
+        assert "Catalog (2 tools)" in w.description
+        # Descriptions should NOT be inlined (names only).
+        assert "Create a thing" not in w.description
         # The wrapper accepts a single `tool_name` arg.
         assert w.inputSchema["required"] == ["tool_name"]
 

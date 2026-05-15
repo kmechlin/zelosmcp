@@ -247,12 +247,15 @@ class BuiltinConfig:
     """
 
     response_format: str = "raw"
+    strip_meta: bool = True
     compress: CompressSpec | None = None
 
     def to_status(self) -> dict[str, Any]:
         info: dict[str, Any] = {}
         if self.response_format != "raw":
             info["response_format"] = self.response_format
+        if not self.strip_meta:
+            info["strip_meta"] = False
         if self.compress is not None:
             info["compress"] = self.compress.to_status()
         return info
@@ -307,6 +310,12 @@ class ServerSpec:
     # JSON; ``"raw"`` passes through unchanged. Env-var override:
     # ``ZELOSMCP_RESPONSE_FORMAT``.
     response_format: str = "toon"
+    # Strip ``_meta`` / ``meta`` keys from JSON response blocks before
+    # returning to the client. These metadata envelopes (common in
+    # pincher responses) consume 40-80% of small payloads with no LLM
+    # value. Defaults to ``True``; set ``False`` to preserve them.
+    # Env-var override: ``ZELOSMCP_STRIP_META``.
+    strip_meta: bool = True
     # Whether this backend should be started when the config loads.
     # ``True`` (the default) starts the backend immediately;
     # ``False`` installs (registers the spec, creates a ProxyState)
@@ -354,6 +363,8 @@ class ServerSpec:
             info["passthroughPool"] = self.passthrough_pool.to_status()
         if self.response_format != "toon":
             info["response_format"] = self.response_format
+        if not self.strip_meta:
+            info["strip_meta"] = False
         if not self.started:
             info["started"] = False
         return info
@@ -966,6 +977,20 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             f"{sorted(RESPONSE_FORMATS)}, got {response_format_raw!r}"
         )
 
+    # Strip _meta / meta from JSON response blocks.
+    strip_meta_raw = raw.get("strip_meta")
+    if strip_meta_raw is None:
+        strip_meta_env = os.environ.get("ZELOSMCP_STRIP_META")
+        strip_meta_raw = (
+            strip_meta_env.lower() not in ("0", "false", "no")
+            if strip_meta_env is not None
+            else True
+        )
+    if not isinstance(strip_meta_raw, bool):
+        raise ConfigError(
+            f"Server '{name}': 'strip_meta' must be a boolean"
+        )
+
     # Stdio: presence of `command` (matches Cursor's discrimination rule).
     if "command" in raw:
         if passthrough_raw:
@@ -1018,6 +1043,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             reverse_proxy=reverse_proxy,
             compress=compress,
             response_format=response_format_raw,
+            strip_meta=strip_meta_raw,
             started=started_raw,
         )
 
@@ -1099,6 +1125,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             auth_provider=auth_provider,
             auth_audience=auth_audience,
             response_format=response_format_raw,
+            strip_meta=strip_meta_raw,
             started=started_raw,
         )
 
@@ -1141,9 +1168,15 @@ def _check_mount_overlap(specs: list[ServerSpec]) -> None:
 def _parse_builtin_config(raw: Any) -> BuiltinConfig:
     """Parse the optional ``"builtin"`` top-level config key."""
     if raw is None:
+        _sm_env = os.environ.get("ZELOSMCP_STRIP_META")
         return BuiltinConfig(
             response_format=os.environ.get(
                 "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "raw"
+            ),
+            strip_meta=(
+                _sm_env.lower() not in ("0", "false", "no")
+                if _sm_env is not None
+                else True
             ),
         )
     if not isinstance(raw, dict):
@@ -1165,8 +1198,20 @@ def _parse_builtin_config(raw: Any) -> BuiltinConfig:
     if compress_raw is not None:
         compress = _parse_compress("builtin", compress_raw)
 
+    sm = raw.get("strip_meta")
+    if sm is None:
+        _sm_env = os.environ.get("ZELOSMCP_STRIP_META")
+        sm = (
+            _sm_env.lower() not in ("0", "false", "no")
+            if _sm_env is not None
+            else True
+        )
+    if not isinstance(sm, bool):
+        raise ConfigError("builtin.strip_meta must be a boolean")
+
     return BuiltinConfig(
         response_format=rf,
+        strip_meta=sm,
         compress=compress,
     )
 

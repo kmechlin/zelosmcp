@@ -22,7 +22,7 @@ from zelosmcp.compression import (
 )
 from zelosmcp.config import CompressSpec, PassthroughPoolSpec
 from zelosmcp.response import transform_response
-from zelosmcp.savings import measure_call
+from zelosmcp.savings import measure_call, measure_event, render_call_output_text
 
 logger = logging.getLogger("zelosmcp")
 
@@ -64,6 +64,7 @@ class ProxyState:
         # None for tests / standalone use, in which case measure_call
         # short-circuits to a plain await.
         self._recorder_provider: Callable[[], Any] | None = None
+        self._event_recorder_provider: Callable[[], Any] | None = None
         # OAuth-passthrough mode (transport=http only). When True, no
         # client_session or session_manager is created — /<name>/mcp is
         # routed through manager.proxy_mcp_request instead. Inbound
@@ -92,6 +93,15 @@ class ProxyState:
         # vary per user (only the data they return does), so global
         # caching is correct here.
         self.passthrough_catalog: dict[str, Tool] = {}
+
+    def set_recorders(
+        self,
+        *,
+        recorder_provider: Callable[[], Any] | None = None,
+        event_recorder_provider: Callable[[], Any] | None = None,
+    ) -> None:
+        self._recorder_provider = recorder_provider
+        self._event_recorder_provider = event_recorder_provider
 
     def _emit_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -128,6 +138,7 @@ class ProxyState:
         auth_bearer: str | None = None,
         passthrough_pool: PassthroughPoolSpec | None = None,
         response_format: str = "toon",
+        strip_meta: bool = True,
     ) -> None:
         if self.running:
             raise RuntimeError("Proxy is already running — stop it first")
@@ -136,6 +147,7 @@ class ProxyState:
         self._ready = asyncio.Event()
         self._startup_error = None
         self._response_format = response_format
+        self._strip_meta = strip_meta
         # Only retain compress for scope=global — that's the only case
         # where the per-backend /<name>/mcp endpoint should serve wrappers
         # instead of the raw surface. Aggregator-only and catalog-only
@@ -409,20 +421,49 @@ class ProxyState:
 
         @server.list_tools()
         async def list_tools() -> list:
-            r = await session.list_tools()
-            backend_tools = list(r.tools or [])
-            if compress is None:
-                self._emit_log(f"list_tools -> {len(backend_tools)} tools")
-                return backend_tools
-            # scope=global: refresh the catalog cache and substitute the
-            # wrapper tools. Empty prefix because /<name>/mcp consumers
-            # already know the backend by URL.
-            self._compressed_catalog = {t.name: t for t in backend_tools}
-            wrapped = compressed_tool_list(
-                prefix="", tools=backend_tools, level=compress.level
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
             )
-            self._emit_log(f"list_tools -> {len(wrapped)} tools (compressed)")
-            return wrapped
+            raw_count = 0
+            returned_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal raw_count, returned_count
+                r = await session.list_tools()
+                backend_tools = list(r.tools or [])
+                raw_count = len(backend_tools)
+                if compress is None:
+                    returned_count = len(backend_tools)
+                    self._emit_log(f"list_tools -> {returned_count} tools")
+                    return backend_tools
+                # scope=global: refresh the catalog cache and substitute the
+                # wrapper tools. Empty prefix because /<name>/mcp consumers
+                # already know the backend by URL.
+                self._compressed_catalog = {t.name: t for t in backend_tools}
+                wrapped = compressed_tool_list(
+                    prefix="", tools=backend_tools, level=compress.level
+                )
+                returned_count = len(wrapped)
+                self._emit_log(
+                    f"list_tools -> {returned_count} tools (compressed)"
+                )
+                return wrapped
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="tools/list",
+                backend=self.name,
+                compressed=compress is not None,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {
+                    "raw_count": raw_count,
+                    "returned_count": returned_count,
+                    "compression_level": (
+                        compress.level if compress is not None else None
+                    ),
+                },
+            )
 
         @server.call_tool(validate_input=False)
         async def call_tool(name: str, arguments: dict[str, Any]):
@@ -431,12 +472,17 @@ class ProxyState:
             recorder = (
                 self._recorder_provider() if self._recorder_provider else None
             )
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
+            )
             qualified = f"{self.name}__{name}"
 
             if compress is not None and name in wrapper_tool_names(compress.level):
                 self._emit_log(f"call_tool (compressed): {name}")
                 return await measure_call(
                     recorder=recorder,
+                    event_recorder=event_recorder,
                     backend=self.name,
                     tool=name,
                     qualified=qualified,
@@ -451,9 +497,27 @@ class ProxyState:
                     ),
                 )
             self._emit_log(f"call_tool: {name}")
+            raw_output_tokens: int | None = None
+            raw_output_bytes: int | None = None
+            transform_type: str | None = None
+            upstream_text: str | None = None
 
             async def _dispatch() -> CallToolResult:
+                nonlocal raw_output_tokens, raw_output_bytes, transform_type, upstream_text
                 r = await session.call_tool(name, arguments)
+                if event_recorder is not None:
+                    # Count tokens as text content — what the LLM
+                    # actually sees (Cursor charges for this).
+                    try:
+                        raw_output_text = render_call_output_text(r)
+                    except Exception:
+                        raw_output_text = ""
+                    raw_output_tokens = event_recorder.count_payload(
+                        raw_output_text
+                    )
+                    raw_output_bytes = len(raw_output_text.encode("utf-8"))
+                    transform_type = self._response_format
+                    upstream_text = raw_output_text[:32 * 1024] if raw_output_text else None
                 content = list(r.content)
                 meta = getattr(r, "meta", None)
                 meta_dict = (
@@ -462,6 +526,7 @@ class ProxyState:
                 content, meta_dict = transform_response(
                     content,
                     response_format=self._response_format,
+                    strip_meta=self._strip_meta,
                     meta=meta_dict,
                 )
                 return CallToolResult(
@@ -475,41 +540,146 @@ class ProxyState:
 
             return await measure_call(
                 recorder=recorder,
+                event_recorder=event_recorder,
                 backend=self.name,
                 tool=name,
                 qualified=qualified,
                 compressed=False,
                 arguments=arguments,
                 dispatch=_dispatch,
+                raw_output_tokens_provider=lambda: raw_output_tokens,
+                raw_output_bytes_provider=lambda: raw_output_bytes,
+                transform_type_provider=lambda: transform_type,
+                upstream_text_provider=lambda: upstream_text,
             )
 
         @server.list_resources()
         async def list_resources() -> list:
-            r = await session.list_resources()
-            self._emit_log(f"list_resources -> {len(r.resources)} resources")
-            return r.resources
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
+            )
+            resource_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal resource_count
+                r = await session.list_resources()
+                resources = list(r.resources or [])
+                resource_count = len(resources)
+                self._emit_log(
+                    f"list_resources -> {resource_count} resources"
+                )
+                return resources
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/list",
+                backend=self.name,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {"count": resource_count},
+            )
 
         @server.list_resource_templates()
         async def list_resource_templates() -> list:
-            r = await session.list_resource_templates()
-            self._emit_log(
-                f"list_resource_templates -> {len(r.resourceTemplates)} templates"
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
             )
-            return r.resourceTemplates
+            template_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal template_count
+                r = await session.list_resource_templates()
+                templates = list(r.resourceTemplates or [])
+                template_count = len(templates)
+                self._emit_log(
+                    f"list_resource_templates -> {template_count} templates"
+                )
+                return templates
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/templates",
+                backend=self.name,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {"count": template_count},
+            )
 
         @server.read_resource()
         async def read_resource(uri) -> list:
-            self._emit_log(f"read_resource: {uri}")
-            r = await session.read_resource(uri)
-            return r.contents
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
+            )
+            uri_str = str(uri)
+            contents_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal contents_count
+                self._emit_log(f"read_resource: {uri_str}")
+                r = await session.read_resource(uri)
+                contents = list(r.contents or [])
+                contents_count = len(contents)
+                return contents
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="resources/read",
+                backend=self.name,
+                qualified=uri_str,
+                input_payload={"uri": uri_str},
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {
+                    "count": contents_count,
+                    "uri": uri_str,
+                },
+            )
 
         @server.list_prompts()
         async def list_prompts() -> list:
-            r = await session.list_prompts()
-            self._emit_log(f"list_prompts -> {len(r.prompts)} prompts")
-            return r.prompts
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
+            )
+            prompt_count = 0
+
+            async def _dispatch() -> list:
+                nonlocal prompt_count
+                r = await session.list_prompts()
+                prompts = list(r.prompts or [])
+                prompt_count = len(prompts)
+                self._emit_log(f"list_prompts -> {prompt_count} prompts")
+                return prompts
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="prompts/list",
+                backend=self.name,
+                dispatch=_dispatch,
+                meta_provider=lambda _result: {"count": prompt_count},
+            )
 
         @server.get_prompt()
         async def get_prompt(name: str, arguments: dict[str, str] | None = None):
-            self._emit_log(f"get_prompt: {name}")
-            return await session.get_prompt(name, arguments)
+            event_recorder = (
+                self._event_recorder_provider()
+                if self._event_recorder_provider else None
+            )
+            qualified = f"{self.name}__{name}"
+
+            async def _dispatch():
+                self._emit_log(f"get_prompt: {name}")
+                return await session.get_prompt(name, arguments)
+
+            return await measure_event(
+                recorder=event_recorder,
+                method="prompts/get",
+                backend=self.name,
+                tool=name,
+                qualified=qualified,
+                input_payload=arguments,
+                dispatch=_dispatch,
+                meta_provider=lambda result: {
+                    "message_count": len(getattr(result, "messages", []) or []),
+                },
+            )

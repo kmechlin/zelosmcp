@@ -29,13 +29,14 @@ from zelosmcp.auth import (
 from zelosmcp.builtin import NAME as BUILTIN_NAME, BuiltinServer
 from zelosmcp.config import (
     AuthProviderSpec,
+    ConfigError,
     ServerSpec,
     parse_auth_providers,
     parse_config,
     validate_provider_references,
 )
 from zelosmcp.proxy import ProxyState
-from zelosmcp.savings import SavingsRecorder, TokenCounter
+from zelosmcp.savings import EventRecorder, SavingsRecorder, TokenCounter
 from zelosmcp.savings_db import SavingsStore, resolve_db_path
 
 
@@ -79,6 +80,30 @@ _FRAME_DENY_HEADERS: frozenset[str] = frozenset({
     "x-frame-options",
     "content-security-policy",
 })
+
+_EVENT_RETENTION_HOURS_DEFAULT = 168
+_EVENT_RETENTION_HOURS_MIN = 1
+_EVENT_RETENTION_HOURS_MAX = 8760
+_EVENT_PRUNE_INTERVAL_MINS_DEFAULT = 30
+_EVENT_PRUNE_INTERVAL_MINS_MIN = 1
+_EVENT_PRUNE_INTERVAL_MINS_MAX = 1440
+
+
+def _read_bounded_env_int(
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
 
 
 _log = logging.getLogger("zelosmcp.manager")
@@ -137,7 +162,9 @@ class ProxyManager:
         # or attach their own SavingsRecorder via ``manager.savings``.
         self._savings_store: SavingsStore | None = None
         self.savings: SavingsRecorder | None = None
+        self.events: EventRecorder | None = None
         self._pincher_poll_task: asyncio.Task | None = None
+        self._event_prune_task: asyncio.Task | None = None
         # How often to snapshot ``pincher__stats`` into the savings store.
         # Configurable via ``ZELOSMCP_PINCHER_POLL_SECS``; <=0 disables.
         try:
@@ -146,6 +173,18 @@ class ProxyManager:
             )
         except ValueError:
             self._pincher_poll_interval = 60.0
+        self._event_retention_hours = _read_bounded_env_int(
+            "ZELOSMCP_EVENT_RETENTION_HOURS",
+            default=_EVENT_RETENTION_HOURS_DEFAULT,
+            minimum=_EVENT_RETENTION_HOURS_MIN,
+            maximum=_EVENT_RETENTION_HOURS_MAX,
+        )
+        self._event_prune_interval_mins = _read_bounded_env_int(
+            "ZELOSMCP_EVENT_PRUNE_INTERVAL_MINS",
+            default=_EVENT_PRUNE_INTERVAL_MINS_DEFAULT,
+            minimum=_EVENT_PRUNE_INTERVAL_MINS_MIN,
+            maximum=_EVENT_PRUNE_INTERVAL_MINS_MAX,
+        )
         # Auth-provider plumbing. Registry holds constructed providers;
         # the spec dict is the source-of-truth for the GET config endpoint
         # (so the UI sees what was loaded, not the constructed provider).
@@ -165,6 +204,14 @@ class ProxyManager:
     @property
     def primary(self) -> str | None:
         return self._primary
+
+    @property
+    def event_retention_hours(self) -> int:
+        return self._event_retention_hours
+
+    @property
+    def event_prune_interval_mins(self) -> int:
+        return self._event_prune_interval_mins
 
     def primary_state(self) -> ProxyState | None:
         if self._primary is None:
@@ -199,6 +246,9 @@ class ProxyManager:
 
         merged = self._merge_mandatory(raw_config)
         specs, primary, builtin_cfg = parse_config(merged)
+        self._apply_event_settings(merged)
+        if self._savings_store is not None:
+            await self._restart_event_prune_task()
         # Cross-validate any auth.provider references against the
         # currently-loaded providers config. Empty providers dict +
         # zero references = no-op; non-empty references against an
@@ -225,7 +275,10 @@ class ProxyManager:
                 # belt-and-braces in case a future code path bypasses it.
                 continue
             state = ProxyState(name=spec.name)
-            state._recorder_provider = lambda: self.savings
+            state.set_recorders(
+                recorder_provider=lambda: self.savings,
+                event_recorder_provider=lambda: self.events,
+            )
             self.servers[spec.name] = state
             self._attach_log_pump(state)
             if not spec.started:
@@ -275,6 +328,92 @@ class ProxyManager:
             "primary": None,
             "servers": results,
         }
+
+    def _read_event_setting(
+        self,
+        raw_config: Any,
+        *,
+        key: str,
+        env_name: str,
+        default: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        if isinstance(raw_config, dict) and key in raw_config:
+            value = raw_config[key]
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ConfigError(
+                    f"'{key}' must be an integer between {minimum} and {maximum}"
+                )
+            if value < minimum or value > maximum:
+                raise ConfigError(
+                    f"'{key}' must be between {minimum} and {maximum}"
+                )
+            return value
+        return _read_bounded_env_int(
+            env_name,
+            default=default,
+            minimum=minimum,
+            maximum=maximum,
+        )
+
+    def _apply_event_settings(self, raw_config: Any) -> None:
+        self._event_retention_hours = self._read_event_setting(
+            raw_config,
+            key="event_retention_hours",
+            env_name="ZELOSMCP_EVENT_RETENTION_HOURS",
+            default=_EVENT_RETENTION_HOURS_DEFAULT,
+            minimum=_EVENT_RETENTION_HOURS_MIN,
+            maximum=_EVENT_RETENTION_HOURS_MAX,
+        )
+        self._event_prune_interval_mins = self._read_event_setting(
+            raw_config,
+            key="event_prune_interval_mins",
+            env_name="ZELOSMCP_EVENT_PRUNE_INTERVAL_MINS",
+            default=_EVENT_PRUNE_INTERVAL_MINS_DEFAULT,
+            minimum=_EVENT_PRUNE_INTERVAL_MINS_MIN,
+            maximum=_EVENT_PRUNE_INTERVAL_MINS_MAX,
+        )
+
+    async def _restart_event_prune_task(self) -> None:
+        task, self._event_prune_task = self._event_prune_task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if self._savings_store is None or self.events is None:
+            return
+        self._event_prune_task = asyncio.create_task(self._event_prune_loop())
+
+    async def _prune_events_once(self) -> int:
+        store = self._savings_store
+        if store is None:
+            return 0
+        cutoff_ts = time.time() - (self._event_retention_hours * 3600)
+        try:
+            deleted = await store.prune_before(cutoff_ts)
+        except Exception as exc:
+            _log.warning("events prune failed: %s", exc)
+            return 0
+        if deleted > 0:
+            self._broadcast_tagged(
+                "events",
+                f"Pruned {deleted} events older than {self._event_retention_hours}h",
+            )
+        return deleted
+
+    async def _event_prune_loop(self) -> None:
+        interval_secs = self._event_prune_interval_mins * 60
+        try:
+            while True:
+                await asyncio.sleep(interval_secs)
+                await self._prune_events_once()
+        except asyncio.CancelledError:
+            pass
 
     def _merge_mandatory(self, raw_config: Any) -> Any:
         """Merge the mandatory MCP set into ``raw_config``.
@@ -445,7 +584,10 @@ class ProxyManager:
         state = self.servers.get(name)
         if state is None:
             state = ProxyState(name=name)
-            state._recorder_provider = lambda: self.savings
+            state.set_recorders(
+                recorder_provider=lambda: self.savings,
+                event_recorder_provider=lambda: self.events,
+            )
             self.servers[name] = state
             self._attach_log_pump(state)
         if state.running:
@@ -560,6 +702,8 @@ class ProxyManager:
             pass
         self._savings_store = store
         self.savings = SavingsRecorder(store=store, counter=counter)
+        self.events = EventRecorder(store=store, counter=counter)
+        await self._restart_event_prune_task()
         if counter.using_heuristic:
             self._broadcast_tagged(
                 "savings",
@@ -572,16 +716,20 @@ class ProxyManager:
 
     async def stop_savings(self) -> None:
         task, self._pincher_poll_task = self._pincher_poll_task, None
-        if task is not None:
-            task.cancel()
+        prune_task, self._event_prune_task = self._event_prune_task, None
+        for active_task in (task, prune_task):
+            if active_task is None:
+                continue
+            active_task.cancel()
             try:
-                await task
+                await active_task
             except asyncio.CancelledError:
                 pass
             except Exception:
                 pass
         store, self._savings_store = self._savings_store, None
         self.savings = None
+        self.events = None
         if store is not None:
             await store.close()
 
@@ -1470,4 +1618,5 @@ class ProxyManager:
             auth_bearer=spec.auth_bearer,
             passthrough_pool=spec.passthrough_pool,
             response_format=spec.response_format,
+            strip_meta=spec.strip_meta,
         )
