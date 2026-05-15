@@ -736,7 +736,7 @@ def create_app(manager: ProxyManager | None = None):
           400:
             description: Bad request or non-pushable kind.
           503:
-            description: Asset store or filesystem backend not initialised.
+            description: Asset store not initialised.
         """
         if manager.assets is None:
             return _assets_unavailable()
@@ -756,24 +756,10 @@ def create_app(manager: ProxyManager | None = None):
         from zelosmcp.repos import to_rw_path
         repo_rw_path = to_rw_path(f"/user_data_ro/{repo_name}")
 
-        fs_state = manager.servers.get("filesystem")
-        if fs_state is None or not getattr(fs_state, "running", False):
-            return JSONResponse(
-                {"error": "filesystem backend is not running"},
-                status_code=503,
-            )
-        fs_session = getattr(fs_state, "client_session", None)
-        if fs_session is None:
-            return JSONResponse(
-                {"error": "filesystem backend has no client session"},
-                status_code=503,
-            )
-
         from zelosmcp.framework.assetstore.push import push_asset, NotPushable
         try:
             pushed = await push_asset(
                 manager.assets,
-                fs_session,
                 kind=kind,
                 backend=backend,
                 name=name,
@@ -834,7 +820,7 @@ def create_app(manager: ProxyManager | None = None):
           400:
             description: Bad request or non-pushable kind.
           503:
-            description: Asset store or filesystem backend not initialised.
+            description: Asset store not initialised.
         """
         if manager.assets is None:
             return _assets_unavailable()
@@ -864,17 +850,6 @@ def create_app(manager: ProxyManager | None = None):
         repo_ro_path = f"/user_data_ro/{repo_name}"
         repo_rw_path = to_rw_path(repo_ro_path)
 
-        fs_state = manager.servers.get("filesystem")
-        if fs_state is None or not getattr(fs_state, "running", False):
-            return JSONResponse(
-                {"error": "filesystem backend is not running"}, status_code=503
-            )
-        fs_session = getattr(fs_state, "client_session", None)
-        if fs_session is None:
-            return JSONResponse(
-                {"error": "filesystem backend has no client session"}, status_code=503
-            )
-
         from zelosmcp.framework.assetstore.push import (
             push_kind_for_all_running,
             NotPushable,
@@ -882,7 +857,6 @@ def create_app(manager: ProxyManager | None = None):
         try:
             pushed = await push_kind_for_all_running(
                 manager.assets,
-                fs_session,
                 manager,
                 kind=kind,
                 repo_rw_path=repo_rw_path,
@@ -1975,8 +1949,8 @@ def create_app(manager: ProxyManager | None = None):
         summary: Generate rule(s) and write them into a discovered repo.
         description: |
           Builds the rule body via the same code path as
-          ``GET /api/cursor-rule``, then forwards ``write_file`` calls to
-          the running ``filesystem`` MCP backend.
+          ``GET /api/cursor-rule``, then writes files directly to the
+          read-write mount.
 
           The ``targets`` array controls which IDE output files are written:
           - ``cursor``: ``.cursor/rules/zelosmcp.mdc`` (mdc with frontmatter)
@@ -1991,7 +1965,6 @@ def create_app(manager: ProxyManager | None = None):
         responses:
           200: { description: "Rules written. Returns ``{ok, files}``." }
           400: { description: Invalid path or unknown enum value. }
-          503: { description: filesystem backend not running. }
         """
         try:
             body = await request.json()
@@ -2032,13 +2005,6 @@ def create_app(manager: ProxyManager | None = None):
         )
         effective_targets = _resolve_targets(targets_list, fmt)
 
-        fs = manager.servers.get("filesystem")
-        if fs is None or not fs.running or fs.client_session is None:
-            return JSONResponse(
-                {"ok": False, "error": "filesystem backend not running"},
-                status_code=503,
-            )
-
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
         _push_compressed: dict[str, dict[str, Any]] = {}
         for _n, _s in manager._specs.items():
@@ -2071,10 +2037,9 @@ def create_app(manager: ProxyManager | None = None):
                 abs_path = os.path.join(to_rw_path(path), rel_path)
                 parent = os.path.dirname(abs_path)
                 try:
-                    await fs.client_session.call_tool("create_directory", {"path": parent})
-                    await fs.client_session.call_tool(
-                        "write_file", {"path": abs_path, "content": rule_body}
-                    )
+                    os.makedirs(parent, exist_ok=True)
+                    import pathlib as _pathlib
+                    _pathlib.Path(abs_path).write_text(rule_body, encoding="utf-8")
                     written_files.append({
                         "ok": True,
                         "path": abs_path,
@@ -2100,53 +2065,6 @@ def create_app(manager: ProxyManager | None = None):
             ),
             "files": written_files,
         })
-
-    async def api_repo_index(request: Request) -> JSONResponse:
-        """
-        summary: Index a discovered repository in pincher.
-        description: |
-          Forwards the request to ``pincher__index`` so the repo becomes
-          a queryable project. The path must live under the read-only
-          scan root; pincher does the actual filesystem work against its
-          own ``/user_data_ro`` mount.
-        tags: [introspection]
-        responses:
-          200: { description: Indexed. Returns pincher's structured response. }
-          400: { description: Path is not under /user_data_ro. }
-          503: { description: pincher backend not running. }
-        """
-        try:
-            body = await request.json()
-        except Exception as exc:
-            return JSONResponse({"ok": False, "error": f"invalid JSON: {exc}"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
-        path = body.get("path")
-        if not isinstance(path, str) or not is_under_scan_root(path):
-            return JSONResponse(
-                {"ok": False, "error": "path must be under /user_data_ro"},
-                status_code=400,
-            )
-        pi = manager.servers.get("pincher")
-        if pi is None or not pi.running or pi.client_session is None:
-            return JSONResponse(
-                {"ok": False, "error": "pincher backend not running"},
-                status_code=503,
-            )
-        try:
-            result = await pi.client_session.call_tool("index", {"path": path})
-        except Exception as exc:
-            return JSONResponse(
-                {"ok": False, "error": f"pincher index failed: {exc}"},
-                status_code=500,
-            )
-        return JSONResponse(
-            {
-                "ok": not bool(getattr(result, "isError", False)),
-                "path": path,
-                "result": _flatten_call_result(result),
-            }
-        )
 
     async def api_repo_prefs_get(request: Request) -> JSONResponse:
         """
@@ -2214,17 +2132,14 @@ def create_app(manager: ProxyManager | None = None):
           Iterates every discovered repo with ``has_rule=true``, loads its
           stored ``project_prefs``, and runs ``push_kind_for_all_running`` for
           each requested kind (default: rule, agent, hook).  Runs sequentially
-          to avoid overwhelming the filesystem backend.
+          to avoid overwhelming disk I/O.
         tags: [lifecycle]
         responses:
           200: { description: Per-repo push results. }
-          503: { description: Filesystem backend not running or asset store unavailable. }
+          503: { description: Asset store unavailable. }
         """
         if manager.assets is None:
             return JSONResponse({"error": "asset store not initialised"}, status_code=503)
-        fs = manager.servers.get("filesystem")
-        if fs is None or not getattr(fs, "running", False) or fs.client_session is None:
-            return JSONResponse({"error": "filesystem backend not running"}, status_code=503)
 
         # Parse optional body
         try:
@@ -2254,7 +2169,6 @@ def create_app(manager: ProxyManager | None = None):
                 try:
                     pushed = await push_kind_for_all_running(
                         manager.assets,
-                        fs.client_session,
                         manager,
                         kind=kind,
                         repo_rw_path=repo_rw,
@@ -2282,6 +2196,63 @@ def create_app(manager: ProxyManager | None = None):
             for kd in r["kinds"].values()
         )
         return JSONResponse({"ok": overall_ok, "repos": results})
+
+    async def api_assets_remove_all(request: Request) -> JSONResponse:
+        """
+        summary: Remove all zelosmcp-managed assets from a repo.
+        description: |
+          Deletes all files created by zelosmcp push operations and cleans
+          zelosmcp-owned entries from merge-mode files (hooks, mcp.json).
+          Preserves `.cursor/`, `.github/`, `.vscode/` directories and any
+          files not managed by zelosmcp.
+        tags: [lifecycle]
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo]
+                properties:
+                  repo: { type: string, description: "Repo name (basename of scan root)." }
+        responses:
+          200: { description: List of removed/cleaned files. }
+          400: { description: Bad request. }
+          503: { description: Asset store not initialised. }
+        """
+        if manager.assets is None:
+            return JSONResponse({"error": "asset store not initialised"}, status_code=503)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        if not isinstance(body, dict) or not body.get("repo"):
+            return JSONResponse(
+                {"error": "'repo' is required in request body"}, status_code=400
+            )
+
+        repo_name = body["repo"]
+        from zelosmcp.repos import to_rw_path
+        repo_rw_path = to_rw_path(f"/user_data_ro/{repo_name}")
+
+        from zelosmcp.framework.assetstore.push import remove_pushed_assets
+        try:
+            removed = await remove_pushed_assets(
+                manager.assets,
+                repo_rw_path=repo_rw_path,
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        return JSONResponse({
+            "ok": True,
+            "repo": repo_name,
+            "removed": [
+                {"path": r.path, "action": r.action, "error": r.error}
+                for r in removed
+            ],
+        })
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -2356,10 +2327,10 @@ def create_app(manager: ProxyManager | None = None):
             Route("/api/servers/{name}/stop", api_server_stop, methods=["POST"]),
             Route("/api/repos", api_repos_list),
             Route("/api/repos/write-rule", api_repo_write_rule, methods=["POST"]),
-            Route("/api/repos/index", api_repo_index, methods=["POST"]),
             Route("/api/repos/prefs", api_repo_prefs_get),
             Route("/api/repos/prefs", api_repo_prefs_put, methods=["PUT"]),
             Route("/api/repos/push-all-with-rules", api_repos_push_all_with_rules, methods=["POST"]),
+            Route("/api/assets/remove-all", api_assets_remove_all, methods=["POST"]),
             Route("/api/assets", api_assets_list),
             Route("/api/assets/kinds", api_assets_kinds),
             Route("/api/assets/summary", api_assets_summary),

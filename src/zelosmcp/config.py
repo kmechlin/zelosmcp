@@ -307,6 +307,14 @@ class ServerSpec:
     # JSON; ``"raw"`` passes through unchanged. Env-var override:
     # ``ZELOSMCP_RESPONSE_FORMAT``.
     response_format: str = "toon"
+    # Whether this backend should be started when the config loads.
+    # ``True`` (the default) starts the backend immediately;
+    # ``False`` installs (registers the spec, creates a ProxyState)
+    # but leaves it stopped — excluded from tools/list and generated
+    # rules. Assets can still be edited for stopped backends. The
+    # backend can be started later via the GUI or
+    # ``zelosmcp__start_server``.
+    started: bool = True
 
     def to_status(self) -> dict[str, Any]:
         """Compact JSON-serializable view used by status endpoints."""
@@ -346,6 +354,8 @@ class ServerSpec:
             info["passthroughPool"] = self.passthrough_pool.to_status()
         if self.response_format != "toon":
             info["response_format"] = self.response_format
+        if not self.started:
+            info["started"] = False
         return info
 
 
@@ -937,6 +947,13 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
     else:
         compress = _parse_compress(name, raw["compress"])
 
+    # Started flag: defaults to True (start on config load).
+    started_raw = raw.get("started", True)
+    if not isinstance(started_raw, bool):
+        raise ConfigError(
+            f"Server '{name}': 'started' must be a boolean"
+        )
+
     # Response format: per-backend override, env-var fallback, then default.
     response_format_raw = raw.get("response_format")
     if response_format_raw is None:
@@ -1001,6 +1018,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             reverse_proxy=reverse_proxy,
             compress=compress,
             response_format=response_format_raw,
+            started=started_raw,
         )
 
     # Remote transports: discriminated by `type`.
@@ -1081,6 +1099,7 @@ def _parse_server(name: str, raw: Any) -> ServerSpec:
             auth_provider=auth_provider,
             auth_audience=auth_audience,
             response_format=response_format_raw,
+            started=started_raw,
         )
 
     raise ConfigError(

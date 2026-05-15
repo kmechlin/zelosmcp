@@ -944,3 +944,62 @@ class TestBuiltinConfig:
             "builtin": {"response_format": "toon"},
         })
         assert bc.response_format == "toon"
+
+
+# ── Started flag ───────────────────────────────────────────────────
+
+
+class TestStartedFlag:
+    """Tests for the ``started`` config field on ServerSpec."""
+
+    def test_default_is_true(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert specs[0].started is True
+
+    def test_explicit_true(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo", "started": True}},
+        })
+        assert specs[0].started is True
+
+    def test_explicit_false(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo", "started": False}},
+        })
+        assert specs[0].started is False
+
+    def test_non_bool_rejected(self):
+        with pytest.raises(ConfigError, match="started"):
+            parse_config({
+                "mcpServers": {
+                    "x": {"command": "echo", "started": "yes"},
+                },
+            })
+
+    def test_http_backend_started_false(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "x": {
+                    "type": "streamable-http",
+                    "url": "http://localhost:8080",
+                    "started": False,
+                },
+            },
+        })
+        assert specs[0].started is False
+
+    def test_to_status_omits_when_true(self):
+        s = ServerSpec(
+            name="a", transport="stdio", command="echo",
+        )
+        assert "started" not in s.to_status()
+
+    def test_to_status_shows_when_false(self):
+        s = ServerSpec(
+            name="a", transport="stdio", command="echo",
+            started=False,
+        )
+        d = s.to_status()
+        assert d["started"] is False

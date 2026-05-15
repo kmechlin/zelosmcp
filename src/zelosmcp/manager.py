@@ -218,6 +218,7 @@ class ProxyManager:
 
         results: dict[str, Any] = {}
         coros = []
+        started_specs: list[ServerSpec] = []
         for spec in specs:
             if spec.name == BUILTIN_NAME:
                 # parse_config already rejects this via RESERVED_NAMES, but
@@ -227,10 +228,21 @@ class ProxyManager:
             state._recorder_provider = lambda: self.savings
             self.servers[spec.name] = state
             self._attach_log_pump(state)
+            if not spec.started:
+                self._broadcast_tagged(
+                    spec.name,
+                    "configured but not started "
+                    "(started: false)",
+                )
+                results[spec.name] = {
+                    "ok": True, "started": False,
+                }
+                continue
+            started_specs.append(spec)
             coros.append(self._start_one_spec(state, spec))
 
         outcomes = await asyncio.gather(*coros, return_exceptions=True)
-        for spec, outcome in zip(specs, outcomes):
+        for spec, outcome in zip(started_specs, outcomes):
             if isinstance(outcome, BaseException):
                 results[spec.name] = {"ok": False, "error": str(outcome)}
             else:

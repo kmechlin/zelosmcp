@@ -277,3 +277,14 @@ async def update_last_pushed(store: Any, path_ro: str, kind: str) -> None:
             (ts, ts, path_ro),
         )
         await db.commit()
+
+
+async def delete_prefs(store: Any, path_ro: str) -> None:
+    """Remove the prefs row for a repo."""
+    async with store._lock:
+        db = store._conn()
+        await db.execute(
+            "DELETE FROM project_prefs WHERE path_ro = ?",
+            (path_ro,),
+        )
+        await db.commit()

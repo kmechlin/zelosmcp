@@ -1,11 +1,11 @@
 """Push-to-project writer.
 
 :func:`push_asset` translates one or more :class:`~row.AssetRow` objects
-into files in the target repo via the ``filesystem`` MCP backend.
+into files in the target repo using direct filesystem I/O.
 The write strategy per file is determined by the kind's
 :attr:`~kinds.AssetKind.render_for_project` function:
 
-- ``mode='overwrite'`` — calls :func:`filesystem__write_file` directly.
+- ``mode='overwrite'`` — writes the file directly.
 - ``mode='merge'`` — reads the existing file first, delegates to the
   kind-specific merge helper (e.g. the hook JSON merger), then writes.
 
@@ -38,42 +38,24 @@ class NotPushable(ValueError):
     """Raised when a kind does not support push-to-project."""
 
 
-async def _fs_read(fs_session: Any, path: str) -> str:
-    """Best-effort read via the filesystem MCP.  Returns ``""`` on error."""
+def _local_read(path: str) -> str:
+    """Best-effort read from disk.  Returns ``""`` on error."""
+    import pathlib
     try:
-        result = await fs_session.call_tool("read_text_file", {"path": path})
-        texts = []
-        for item in getattr(result, "content", []) or []:
-            text = getattr(item, "text", None)
-            if isinstance(text, str):
-                texts.append(text)
-        return "\n".join(texts)
+        return pathlib.Path(path).read_text(encoding="utf-8")
     except Exception as exc:
         logger.debug("push: read %s failed (will treat as empty): %s", path, exc)
         return ""
 
 
-async def _fs_ensure_dir(fs_session: Any, path: str) -> None:
-    """Create the parent directory of *path* via the filesystem MCP.
-
-    ``filesystem__create_directory`` is idempotent (safe on existing dirs).
-    We call it before every write so that new directories such as
-    ``.github/``, ``.vscode/``, ``.github/skills/<slug>/`` etc. are
-    created automatically — ``write_file`` does not create missing parents.
-    """
+def _local_write(path: str, body: str) -> None:
+    """Ensure parent directory exists, then write *path* to disk."""
     import os
+    import pathlib
     parent = os.path.dirname(path)
     if parent:
-        try:
-            await fs_session.call_tool("create_directory", {"path": parent})
-        except Exception as exc:
-            logger.debug("push: create_directory %s failed: %s", parent, exc)
-
-
-async def _fs_write(fs_session: Any, path: str, body: str) -> None:
-    """Ensure the parent directory exists, then write *path* via the filesystem MCP."""
-    await _fs_ensure_dir(fs_session, path)
-    await fs_session.call_tool("write_file", {"path": path, "content": body})
+        os.makedirs(parent, exist_ok=True)
+    pathlib.Path(path).write_text(body, encoding="utf-8")
 
 
 def _safe_abs_path(repo_rw_path: str, rel_path: str) -> str:
@@ -90,7 +72,6 @@ def _safe_abs_path(repo_rw_path: str, rel_path: str) -> str:
 
 async def push_asset(
     store: Any,
-    fs_session: Any,
     *,
     kind: str,
     backend: str,
@@ -103,9 +84,6 @@ async def push_asset(
     ----------
     store:
         Open :class:`~sqlite.SQLiteAssetStore`.
-    fs_session:
-        An MCP :class:`mcp.client.session.ClientSession` connected to the
-        ``filesystem`` backend.
     kind:
         Asset kind id (``"rule"``, ``"agent"``, ``"hook"``).
     backend:
@@ -172,12 +150,12 @@ async def push_asset(
 
             try:
                 if pf.mode == "merge":
-                    existing = await _fs_read(fs_session, abs_path)
+                    existing = _local_read(abs_path)
                     merged_body = _merge_file(kind, pf, existing)
                 else:
                     merged_body = pf.body
 
-                await _fs_write(fs_session, abs_path, merged_body)
+                _local_write(abs_path, merged_body)
                 pushed.append(PushedFile(path=abs_path, mode=pf.mode, ok=True))
             except Exception as exc:
                 logger.warning("push: write %s failed: %s", abs_path, exc)
@@ -216,7 +194,6 @@ def _merge_file(kind: str, pf: "Any", existing: str) -> str:
 
 async def push_kind_for_all_running(
     store: Any,
-    fs_session: Any,
     manager: Any,
     *,
     kind: str,
@@ -234,7 +211,7 @@ async def push_kind_for_all_running(
 
     Parameters
     ----------
-    store, fs_session, manager:
+    store, manager:
         Standard push dependencies.
     kind:
         ``"rule"``, ``"agent"``, or ``"hook"``.  Extensions are not pushed.
@@ -276,7 +253,6 @@ async def push_kind_for_all_running(
         effective_targets = _resolve_targets(targets, fmt)
         pushed = await _push_comprehensive_rule(
             store=store,
-            fs_session=fs_session,
             manager=manager,
             repo_rw_path=repo_rw_path,
             access=access,
@@ -290,7 +266,6 @@ async def push_kind_for_all_running(
         for backend in backends_to_push:
             p = await push_asset(
                 store,
-                fs_session,
                 kind=kind,
                 backend=backend,
                 name="*",
@@ -303,7 +278,6 @@ async def push_kind_for_all_running(
     if store is not None and any(p.ok for p in pushed):
         await _post_push_update_prefs(
             store=store,
-            fs_session=fs_session,
             kind=kind,
             repo_rw_path=repo_rw_path,
             repo_ro_path=repo_ro_path,
@@ -319,7 +293,6 @@ async def push_kind_for_all_running(
 
 async def _post_push_update_prefs(
     store: Any,
-    fs_session: Any,
     *,
     kind: str,
     repo_rw_path: str,
@@ -383,7 +356,7 @@ async def _post_push_update_prefs(
     ):
         try:
             abs_path = _safe_abs_path(repo_rw_path, rel)
-            await _fs_write(fs_session, abs_path, json_body)
+            _local_write(abs_path, json_body)
         except Exception as exc:
             logger.debug("prefs: failed to write %s: %s", rel, exc)
 
@@ -394,9 +367,9 @@ async def _post_push_update_prefs(
         try:
             mcp_body = _build_vscode_mcp_json()
             abs_path = _safe_abs_path(repo_rw_path, ".vscode/mcp.json")
-            existing = await _fs_read(fs_session, abs_path)
+            existing = _local_read(abs_path)
             merged = _merge_vscode_mcp_json(existing, mcp_body)
-            await _fs_write(fs_session, abs_path, merged)
+            _local_write(abs_path, merged)
         except Exception as exc:
             logger.debug("vscode mcp.json write failed: %s", exc)
 
@@ -476,6 +449,263 @@ def _merge_vscode_mcp_json(existing_text: str, new_body: str) -> str:
     return json.dumps(data, indent=2) + "\n"
 
 
+# ── Remove pushed assets ──────────────────────────────────────────────
+
+
+@dataclass
+class RemovedFile:
+    """Record of one file or entry removed by the cleanup."""
+
+    path: str
+    action: str  # "deleted" | "cleaned" | "skipped"
+    error: str = ""
+
+
+def _remove_file(path: str) -> bool:
+    """Delete *path* if it exists.  Returns True when removed."""
+    import pathlib
+    p = pathlib.Path(path)
+    if p.is_file():
+        p.unlink()
+        return True
+    return False
+
+
+def _remove_dir_if_empty(path: str) -> None:
+    """Remove *path* if it is an empty directory."""
+    import pathlib
+    p = pathlib.Path(path)
+    if p.is_dir():
+        try:
+            p.rmdir()  # only succeeds if empty
+        except OSError:
+            pass
+
+
+def _clean_cursor_hooks(path: str) -> str:
+    """Remove zelosmcp-owned entries from ``.cursor/hooks.json``.
+
+    Returns ``"cleaned"`` if the file was rewritten, ``"deleted"`` if the
+    file ended up empty and was removed, or ``"skipped"`` if it did not
+    exist.
+    """
+    import pathlib
+
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return "skipped"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, TypeError):
+        return "skipped"
+
+    hooks = data.get("hooks")
+    if not isinstance(hooks, list):
+        return "skipped"
+
+    cleaned = [h for h in hooks if h.get("_owner") != "zelosmcp"]
+    if cleaned:
+        data["hooks"] = cleaned
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return "cleaned"
+    else:
+        # No hooks left — remove the file.
+        p.unlink()
+        return "deleted"
+
+
+def _clean_vscode_hooks(path: str) -> str:
+    """Remove zelosmcp-owned entries from VS Code hooks files.
+
+    Returns ``"cleaned"``, ``"deleted"``, or ``"skipped"``.
+    """
+    import pathlib
+
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return "skipped"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, TypeError):
+        return "skipped"
+
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return "skipped"
+
+    any_remaining = False
+    for event, entries in list(hooks.items()):
+        if isinstance(entries, list):
+            cleaned = [h for h in entries if h.get("_owner") != "zelosmcp"]
+            if cleaned:
+                hooks[event] = cleaned
+                any_remaining = True
+            else:
+                del hooks[event]
+
+    if any_remaining:
+        data["hooks"] = hooks
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return "cleaned"
+    else:
+        p.unlink()
+        return "deleted"
+
+
+def _clean_vscode_mcp_json(path: str) -> str:
+    """Remove the ``zelosmcp-aggregate`` entry from ``.vscode/mcp.json``.
+
+    Returns ``"cleaned"``, ``"deleted"``, or ``"skipped"``.
+    """
+    import pathlib
+
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return "skipped"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, TypeError):
+        return "skipped"
+
+    servers = data.get("servers")
+    if not isinstance(servers, dict):
+        return "skipped"
+
+    if _AGGREGATOR_ENTRY_NAME not in servers:
+        return "skipped"
+
+    del servers[_AGGREGATOR_ENTRY_NAME]
+
+    if servers:
+        data["servers"] = servers
+        p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return "cleaned"
+    else:
+        # No servers left — remove the file.
+        p.unlink()
+        return "deleted"
+
+
+async def remove_pushed_assets(
+    store: Any,
+    *,
+    repo_rw_path: str,
+) -> list[RemovedFile]:
+    """Remove all zelosmcp-managed files from a repo.
+
+    Deletes overwrite-mode files created by :func:`push_asset` and
+    :func:`push_kind_for_all_running`, cleans zelosmcp-owned entries from
+    merge-mode files (hooks, mcp.json), and removes the ``zelosmcp.json``
+    prefs manifests.
+
+    Parent directories (``.cursor/``, ``.github/``, ``.vscode/``) are
+    preserved — only zelosmcp-specific files inside them are removed.
+    Empty subdirectories (e.g. ``.cursor/skills/my_agent/``) are cleaned
+    up after their files are removed.
+    """
+    import os
+
+    results: list[RemovedFile] = []
+    rw = repo_rw_path.rstrip("/")
+
+    # ── 1. Overwrite files: delete outright ──────────────────────────
+
+    # Rule files
+    for rel in (
+        ".cursor/rules/zelosmcp.mdc",
+        ".github/copilot-instructions.md",
+        ".vscode/copilot-instructions.md",
+    ):
+        abs_path = os.path.join(rw, rel)
+        if _remove_file(abs_path):
+            results.append(RemovedFile(path=abs_path, action="deleted"))
+
+    # zelosmcp.json prefs manifests
+    for rel in (
+        ".cursor/zelosmcp.json",
+        ".github/zelosmcp.json",
+        ".vscode/zelosmcp.json",
+    ):
+        abs_path = os.path.join(rw, rel)
+        if _remove_file(abs_path):
+            results.append(RemovedFile(path=abs_path, action="deleted"))
+
+    # Agent skill directories — enumerate from the store to find names,
+    # then also do a filesystem sweep to catch any leftover dirs.
+    agent_names: set[str] = set()
+    if store is not None:
+        try:
+            rows = await store.list(kind="agent")
+            agent_names = {r.name for r in rows}
+        except Exception as exc:
+            logger.debug("remove: failed to list agents: %s", exc)
+
+    # Filesystem sweep of skills directories for any names not in the store.
+    import re
+    for skills_dir_rel in (
+        ".cursor/skills",
+        ".github/skills",
+        ".vscode/skills",
+    ):
+        skills_abs = os.path.join(rw, skills_dir_rel)
+        if os.path.isdir(skills_abs):
+            for entry in os.listdir(skills_abs):
+                agent_names.add(entry)
+
+    for agent_name in sorted(agent_names):
+        # Cursor target
+        slug = re.sub(r"[^a-z0-9]+", "-", agent_name.lower()).strip("-")[:64] or "skill"
+        for skills_rel, name_to_use in (
+            (".cursor/skills", agent_name),
+            (".github/skills", slug),
+            (".vscode/skills", slug),
+        ):
+            skill_file = os.path.join(rw, skills_rel, name_to_use, "SKILL.md")
+            if _remove_file(skill_file):
+                results.append(RemovedFile(path=skill_file, action="deleted"))
+            # Clean up the now-empty agent directory.
+            _remove_dir_if_empty(os.path.join(rw, skills_rel, name_to_use))
+
+        # Clean up the skills/ directory itself if empty.
+    for skills_dir_rel in (".cursor/skills", ".github/skills", ".vscode/skills"):
+        _remove_dir_if_empty(os.path.join(rw, skills_dir_rel))
+
+    # ── 2. Merge files: strip zelosmcp entries ───────────────────────
+
+    # Cursor hooks
+    cursor_hooks = os.path.join(rw, ".cursor/hooks.json")
+    action = _clean_cursor_hooks(cursor_hooks)
+    if action != "skipped":
+        results.append(RemovedFile(path=cursor_hooks, action=action))
+
+    # VS Code hooks
+    for rel in (".vscode/hooks.json", ".github/hooks/zelosmcp.json"):
+        abs_path = os.path.join(rw, rel)
+        action = _clean_vscode_hooks(abs_path)
+        if action != "skipped":
+            results.append(RemovedFile(path=abs_path, action=action))
+    # Clean up .github/hooks/ if empty.
+    _remove_dir_if_empty(os.path.join(rw, ".github/hooks"))
+
+    # .vscode/mcp.json — remove zelosmcp-aggregate entry.
+    mcp_json = os.path.join(rw, ".vscode/mcp.json")
+    action = _clean_vscode_mcp_json(mcp_json)
+    if action != "skipped":
+        results.append(RemovedFile(path=mcp_json, action=action))
+
+    # ── 3. Clear prefs DB row ────────────────────────────────────────
+
+    if store is not None:
+        try:
+            from zelosmcp.framework.assetstore.prefs import delete_prefs
+            ro_path = repo_rw_path.replace("/user_data_rw/", "/user_data_ro/", 1)
+            await delete_prefs(store, ro_path)
+        except Exception as exc:
+            logger.debug("remove: failed to delete prefs: %s", exc)
+
+    return results
+
+
 def _resolve_targets(
     targets: list[str] | None,
     fmt: str,
@@ -497,7 +727,6 @@ def _resolve_targets(
 
 async def _push_comprehensive_rule(
     store: Any,
-    fs_session: Any,
     manager: Any,
     *,
     repo_rw_path: str,
@@ -563,7 +792,7 @@ async def _push_comprehensive_rule(
     for pf in project_files:
         try:
             abs_path = _safe_abs_path(repo_rw_path, pf.rel_path)
-            await _fs_write(fs_session, abs_path, pf.body)
+            _local_write(abs_path, pf.body)
             pushed.append(PushedFile(path=abs_path, mode="overwrite", ok=True))
         except Exception as exc:
             pushed.append(PushedFile(

@@ -28,6 +28,7 @@
         "-y",
         "kubernetes-mcp-server@latest"
       ],
+      "started": false,
       "compress": {
         "level": "medium"
       }
@@ -45,8 +46,21 @@
       "type": "streamable-http",
       "url": "https://api.githubcopilot.com/mcp/",
       "passthrough": true,
+      "started": false,
       "auth": {
         "provider": "github_oauth_app"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/user_data_rw"
+      ],
+      "started": false,
+      "compress": {
+        "level": "medium"
       }
     }
   }

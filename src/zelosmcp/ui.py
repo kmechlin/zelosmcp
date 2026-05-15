@@ -1934,6 +1934,10 @@ HTML_TEMPLATE = """\
                 onclick="pushComprehensive('hook')" title="Merge hook file for selected IDE target">
                 Push hooks
               </button>
+              <button type="button" class="btn btn-outline" style="margin-top:8px;color:var(--danger,#c33);"
+                onclick="removeAllAssets()" title="Remove all zelosmcp-managed files from this repo">
+                Remove all
+              </button>
 
               <!-- Execute extensions — populated dynamically -->
               <div id="repo-asset-actions"></div>
@@ -3413,13 +3417,19 @@ HTML_TEMPLATE = """\
         : "no zelosmcp.mdc yet";
       row.appendChild(rulePill);
 
-      const piPill = document.createElement("span");
-      piPill.className = "repo-pill" + (repo.pincher_indexed ? " on" : "");
-      piPill.textContent = "pincher";
-      piPill.title = repo.pincher_indexed
-        ? "indexed in pincher"
-        : "not yet indexed";
-      row.appendChild(piPill);
+      // Only show pincher pill when the pincher backend is running.
+      const pinchRunning = (currentStatus.servers || []).some(
+        (s) => s.name === "pincher" && s.running
+      );
+      if (pinchRunning) {
+        const piPill = document.createElement("span");
+        piPill.className = "repo-pill" + (repo.pincher_indexed ? " on" : "");
+        piPill.textContent = "pincher";
+        piPill.title = repo.pincher_indexed
+          ? "indexed in pincher"
+          : "not yet indexed";
+        row.appendChild(piPill);
+      }
 
       list.appendChild(row);
     }
@@ -3444,7 +3454,12 @@ HTML_TEMPLATE = """\
     if (meta) {
       const bits = [];
       bits.push(repo.has_rule ? "rule present" : "no rule");
-      bits.push(repo.pincher_indexed ? "indexed" : "not indexed");
+      const pinchRunning = (currentStatus.servers || []).some(
+        (s) => s.name === "pincher" && s.running
+      );
+      if (pinchRunning) {
+        bits.push(repo.pincher_indexed ? "indexed" : "not indexed");
+      }
       meta.textContent = bits.join(" • ");
     }
     if (paths) {
@@ -3601,13 +3616,12 @@ HTML_TEMPLATE = """\
     }
   }
 
-  // Legacy helper kept for backward compat; new path uses extensions.
+  // Index helper — delegates to the pincher extension invoke endpoint.
   async function indexRepo() {
     if (!currentDetailsRepo) return;
     const status = document.getElementById("repo-rule-status");
     if (status) { status.className = "rule-write-status"; status.textContent = "Indexing..."; }
     try {
-      // Try the extension-based invoke first; fall back to legacy route.
       const ctx = { repo: {
         ro_path: currentDetailsRepo.path_ro,
         rw_path: currentDetailsRepo.path_rw,
@@ -3618,19 +3632,8 @@ HTML_TEMPLATE = """\
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ctx }),
       });
-      if (r.status === 503) {
-        // Fall back to legacy route
-        const r2 = await fetch("/api/repos/index", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: currentDetailsRepo.path_ro }),
-        });
-        const d2 = await r2.json();
-        if (!r2.ok || !d2.ok) throw new Error(d2.error || ("HTTP " + r2.status));
-      } else {
-        const data = await r.json();
-        if (!data.ok) throw new Error(data.error || data.message);
-      }
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || data.message);
       if (status) {
         status.className = "rule-write-status ok";
         status.textContent = "Indexed in pincher.";
@@ -3708,6 +3711,56 @@ HTML_TEMPLATE = """\
     await pushComprehensive("rule", both);
     await pushComprehensive("agent", both);
     await pushComprehensive("hook", both);
+  }
+
+  // Remove all zelosmcp-managed assets from the current repo.
+  async function removeAllAssets() {
+    if (!currentDetailsRepo) return;
+    const name = currentDetailsRepo.name;
+    const ok = window.confirm(
+      `Remove all zelosmcp-managed files from "${name}"?\\n\\n` +
+      "This will delete:\\n" +
+      "  \\u2022 Rule files (zelosmcp.mdc, copilot-instructions.md)\\n" +
+      "  \\u2022 Agent skill files\\n" +
+      "  \\u2022 zelosmcp.json prefs manifests\\n" +
+      "  \\u2022 zelosmcp entries from hooks and mcp.json\\n\\n" +
+      "Non-zelosmcp files in .cursor/, .github/, .vscode/ will be preserved."
+    );
+    if (!ok) return;
+    const status = document.getElementById("repo-rule-status");
+    if (status) { status.className = "rule-write-status"; status.textContent = "Removing…"; }
+    try {
+      const r = await fetch("/api/assets/remove-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: name }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        const items = (data.removed || []);
+        const deleted = items.filter((f) => f.action === "deleted").length;
+        const cleaned = items.filter((f) => f.action === "cleaned").length;
+        const parts = [];
+        if (deleted) parts.push(`${deleted} file${deleted !== 1 ? "s" : ""} deleted`);
+        if (cleaned) parts.push(`${cleaned} file${cleaned !== 1 ? "s" : ""} cleaned`);
+        if (status) {
+          status.className = "rule-write-status ok";
+          status.textContent = parts.length ? `Removed: ${parts.join(", ")}` : "Nothing to remove.";
+        }
+        currentDetailsRepo.has_rule = false;
+        const idx = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+        if (idx >= 0) currentRepos[idx] = { ...currentRepos[idx], has_rule: false };
+        renderReposList();
+        renderRepoDetailsMetaOnly();
+      } else {
+        if (status) {
+          status.className = "rule-write-status err";
+          status.textContent = "Remove failed: " + (data.error || "unknown error");
+        }
+      }
+    } catch (err) {
+      if (status) { status.className = "rule-write-status err"; status.textContent = "Remove error: " + err.message; }
+    }
   }
 
   // ── Bulk push to all repos with rules ────────────────────────────────
@@ -3893,7 +3946,13 @@ HTML_TEMPLATE = """\
     if (!meta) return;
     const bits = [];
     bits.push(currentDetailsRepo.has_rule ? "rule present" : "no rule");
-    bits.push(currentDetailsRepo.pincher_indexed ? "indexed" : "not indexed");
+    // Only show pincher status when pincher backend is running.
+    const pinchRunning = (currentStatus.servers || []).some(
+      (s) => s.name === "pincher" && s.running
+    );
+    if (pinchRunning) {
+      bits.push(currentDetailsRepo.pincher_indexed ? "indexed" : "not indexed");
+    }
     meta.textContent = bits.join(" • ");
   }
 

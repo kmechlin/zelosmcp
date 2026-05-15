@@ -145,6 +145,32 @@ class TestPerServer:
             await m.stop_all()
 
     @pytest.mark.asyncio
+    async def test_started_false_skips_startup(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager(mandatory_config_path="")
+            result = await m.start_all({
+                "mcpServers": {
+                    "running": {"command": "echo"},
+                    "stopped": {
+                        "command": "echo",
+                        "started": False,
+                    },
+                },
+            })
+            # "stopped" is registered but not running.
+            assert result["servers"]["running"]["ok"] is True
+            assert result["servers"]["stopped"]["ok"] is True
+            assert result["servers"]["stopped"]["started"] is False
+            assert m.get("running").running is True
+            assert m.get("stopped").running is False
+            # Spec is still available (for assets etc.).
+            assert m.get_spec("stopped") is not None
+            # Can be started later.
+            await m.start_one("stopped")
+            assert m.get("stopped").running is True
+            await m.stop_all()
+
+    @pytest.mark.asyncio
     async def test_unknown_name_raises(self):
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(KeyError):

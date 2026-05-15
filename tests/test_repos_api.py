@@ -376,9 +376,8 @@ class TestApiReposList:
 
 class TestApiRepoWriteRule:
     @pytest.mark.asyncio
-    async def test_writes_rule_via_filesystem_backend(self, repo_tree):
+    async def test_writes_rule_to_disk(self, repo_tree):
         app, manager = _make_app(repo_tree)
-        fs_call = _stub_running_backend("filesystem", manager)
         repo_a = str(repo_tree.ro / "repo_a")
         body = {"path": repo_a, "format": "cursor-mdc"}
         async with _client(app) as c:
@@ -391,20 +390,15 @@ class TestApiRepoWriteRule:
         )
         assert data["path"] == expected_target
         assert data["bytes"] > 0
-
-        # Two calls: create_directory then write_file.
-        calls = fs_call.await_args_list
-        assert [c.args[0] for c in calls] == ["create_directory", "write_file"]
-        create_args = calls[0].args[1]
-        write_args = calls[1].args[1]
-        assert create_args["path"] == os.path.dirname(expected_target)
-        assert write_args["path"] == expected_target
-        assert "zelosMCP" in write_args["content"]  # rule body sanity check
+        # Verify the file was actually written to disk.
+        import pathlib
+        written = pathlib.Path(expected_target)
+        assert written.exists()
+        assert "zelosMCP" in written.read_text(encoding="utf-8")
 
     @pytest.mark.asyncio
     async def test_copilot_format_writes_to_github_dir(self, repo_tree):
         app, manager = _make_app(repo_tree)
-        fs_call = _stub_running_backend("filesystem", manager)
         repo_a = str(repo_tree.ro / "repo_a")
         async with _client(app) as c:
             r = await c.post(
@@ -412,15 +406,16 @@ class TestApiRepoWriteRule:
                 json={"path": repo_a, "format": "copilot-instructions"},
             )
         assert r.status_code == 200, r.text
-        target = fs_call.await_args_list[1].args[1]["path"]
-        assert target == str(
+        expected_target = str(
             repo_tree.rw / "repo_a" / ".github" / "copilot-instructions.md"
         )
+        import pathlib
+        written = pathlib.Path(expected_target)
+        assert written.exists()
 
     @pytest.mark.asyncio
     async def test_path_outside_scan_root_rejected(self, repo_tree, tmp_path):
         app, manager = _make_app(repo_tree)
-        _stub_running_backend("filesystem", manager)
         async with _client(app) as c:
             r = await c.post(
                 "/api/repos/write-rule",
@@ -432,7 +427,6 @@ class TestApiRepoWriteRule:
     @pytest.mark.asyncio
     async def test_unknown_access_rejected(self, repo_tree):
         app, manager = _make_app(repo_tree)
-        _stub_running_backend("filesystem", manager)
         repo_a = str(repo_tree.ro / "repo_a")
         async with _client(app) as c:
             r = await c.post(
@@ -441,68 +435,3 @@ class TestApiRepoWriteRule:
             )
         assert r.status_code == 400
         assert "access" in r.json()["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_filesystem_not_running_returns_503(self, repo_tree):
-        app, _ = _make_app(repo_tree)
-        repo_a = str(repo_tree.ro / "repo_a")
-        async with _client(app) as c:
-            r = await c.post("/api/repos/write-rule", json={"path": repo_a})
-        assert r.status_code == 503
-        assert "filesystem" in r.json()["error"]
-
-    @pytest.mark.asyncio
-    async def test_filesystem_failure_surfaces_500(self, repo_tree):
-        app, manager = _make_app(repo_tree)
-
-        async def boom(*_a, **_kw):
-            raise RuntimeError("disk full")
-
-        _stub_running_backend(
-            "filesystem", manager, call_tool_side_effect=boom
-        )
-        repo_a = str(repo_tree.ro / "repo_a")
-        async with _client(app) as c:
-            r = await c.post("/api/repos/write-rule", json={"path": repo_a})
-        assert r.status_code == 500
-        assert "disk full" in r.json()["error"]
-
-
-class TestApiRepoIndex:
-    @pytest.mark.asyncio
-    async def test_forwards_to_pincher_index(self, repo_tree):
-        app, manager = _make_app(repo_tree)
-        index_payload = {"project": "repo_a", "files": 12}
-        result = _FakeResult(structuredContent=index_payload)
-        pi_call = _stub_running_backend(
-            "pincher", manager, call_tool_side_effect=lambda *a, **kw: result
-        )
-        repo_a = str(repo_tree.ro / "repo_a")
-        async with _client(app) as c:
-            r = await c.post("/api/repos/index", json={"path": repo_a})
-        assert r.status_code == 200, r.text
-        data = r.json()
-        assert data["ok"] is True
-        assert data["path"] == repo_a
-        assert data["result"] == index_payload
-        # Confirm the pincher tool name + args.
-        call = pi_call.await_args_list[0]
-        assert call.args[0] == "index"
-        assert call.args[1] == {"path": repo_a}
-
-    @pytest.mark.asyncio
-    async def test_path_outside_scan_root_rejected(self, repo_tree):
-        app, manager = _make_app(repo_tree)
-        _stub_running_backend("pincher", manager)
-        async with _client(app) as c:
-            r = await c.post("/api/repos/index", json={"path": "/etc"})
-        assert r.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_pincher_not_running_returns_503(self, repo_tree):
-        app, _ = _make_app(repo_tree)
-        repo_a = str(repo_tree.ro / "repo_a")
-        async with _client(app) as c:
-            r = await c.post("/api/repos/index", json={"path": repo_a})
-        assert r.status_code == 503
-        assert "pincher" in r.json()["error"]
