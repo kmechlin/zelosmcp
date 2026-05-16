@@ -24,4 +24,5 @@ KNOWN_LLMS_TXT: dict[str, str] = {
     "firecrawl": "https://docs.firecrawl.dev/llms.txt",
     "stripe": "https://docs.stripe.com/llms.txt",
     "langsmith": "https://docs.smith.langchain.com/llms.txt",
+    "docker": "https://docs.docker.com/llms.txt",
 }
