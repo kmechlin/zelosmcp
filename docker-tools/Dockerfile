@@ -69,7 +69,8 @@ FROM extra-os AS zelosmcp
       rm -rf /var/lib/apt/lists/*
 
   # uv / uvx / pipx (for uvx-launched MCP backends)
-  RUN pip install --no-cache-dir uv pipx && pipx ensurepath
+  RUN pip install --no-cache-dir uv pipx && pipx ensurepath \
+   && pipx install mcpdoc
   ENV PATH="/root/.local/bin:${PATH}"
 
   # Pre-built pincher binary (codebase intelligence MCP). Reachable on

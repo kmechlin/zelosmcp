@@ -53,7 +53,8 @@ RUN set -eux; \
 
 # Python tooling commonly invoked by MCP server configs
 RUN pip install --no-cache-dir uv pipx \
- && pipx ensurepath
+ && pipx ensurepath \
+ && pipx install mcpdoc
 ENV PATH="/root/.local/bin:${PATH}"
 
 # Pre-built pincher binary (codebase intelligence MCP). Reachable on PATH

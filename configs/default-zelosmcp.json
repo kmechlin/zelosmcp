@@ -62,6 +62,24 @@
       "compress": {
         "level": "medium"
       }
+    },
+    "mcpdoc": {
+      "command": "uvx",
+      "args": [
+        "--from", "mcpdoc", "mcpdoc",
+        "--urls",
+        "MCP:https://modelcontextprotocol.io/llms.txt",
+        "Anthropic:https://docs.anthropic.com/llms.txt",
+        "Docker:https://docs.docker.com/llms.txt",
+        "--transport", "stdio"
+      ],
+      "env": {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+      },
+      "started": false,
+      "compress": {
+        "level": "low"
+      }
     }
   }
 }
