@@ -85,6 +85,7 @@ Concrete in-cluster manifests are not yet published — the goal of this README 
 | Built-in MCP at `/zelosmcp/mcp` + `/catalog` page | [docs/built-in-mcp.md](docs/built-in-mcp.md) |
 | HTTP API reference (`/api/*` and the MCP routes) | [docs/http-api.md](docs/http-api.md) |
 | Assets framework (rules, extensions, agents, hooks) | [docs/assets.md](docs/assets.md) |
+| Compression benchmark (static token counts + live prompt runs) | [docs/benchmarks.md](docs/benchmarks.md) |
 
 Plus the interactive Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs) and ReDoc at [http://localhost:8000/redoc](http://localhost:8000/redoc).
 
