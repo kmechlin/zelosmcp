@@ -148,6 +148,11 @@ Five tables drive the dashboard today (see `zelosmcp/savings_db.py`):
 - **Events tab** — filtered event history and per-row detail view over
   the retained `proxy_events` stream.
 
+## See also
+
+- [docs/compression.md](compression.md) — how the compression levels work and the wrapper-tool pattern.
+- [docs/benchmarks.md](benchmarks.md) — measuring the agent-side token cost across compression levels using live prompt runs and the Cursor usage API (complements the proxy-side view the dashboard provides).
+
 ## Caveats
 
 - Per-call token counts measure the *proxy → backend* round-trip, not
