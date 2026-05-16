@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from zelosmcp.proxy import ProxyState
+from zelosmcp.savings import EventRecorder
+from zelosmcp.savings_db import SavingsStore
 from tests.conftest import (
     fake_stdio_client,
     fake_sse_client,
@@ -362,6 +364,34 @@ class TestHandlersDirect:
         if handler:
             result = await handler(None)
             mock_session.list_tools.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_list_tools_handler_records_event(self):
+        store = SavingsStore(":memory:")
+        await store.open()
+        try:
+            mock_session = make_mock_session()
+            p = ProxyState(name="docker")
+            p.client_session = mock_session
+            recorder = EventRecorder(store=store)
+            p.set_recorders(event_recorder_provider=lambda: recorder)
+
+            from mcp.server.lowlevel.server import Server
+            from mcp.types import ListToolsRequest
+
+            server = Server("test-tools-events")
+            p._register_handlers(server)
+            handler = server.request_handlers.get(ListToolsRequest)
+            assert handler is not None
+
+            await handler(None)
+
+            page = await store.query_events(method="tools/list")
+            assert page["total"] == 1
+            assert page["events"][0]["backend"] == "docker"
+            assert page["events"][0]["meta"]["returned_count"] == 2
+        finally:
+            await store.close()
 
     @pytest.mark.asyncio
     async def test_call_tool_handler(self):

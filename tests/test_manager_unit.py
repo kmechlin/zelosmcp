@@ -82,6 +82,19 @@ class TestStartAll:
             m.unsubscribe_logs(q)
 
     @pytest.mark.asyncio
+    async def test_applies_event_settings_from_config(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager(mandatory_config_path="")
+            await m.start_all({
+                "event_retention_hours": 24,
+                "event_prune_interval_mins": 5,
+                "mcpServers": {"alpha": {"command": "echo"}},
+            })
+            assert m.event_retention_hours == 24
+            assert m.event_prune_interval_mins == 5
+            await m.stop_all()
+
+    @pytest.mark.asyncio
     async def test_replaces_existing_servers(self):
         with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
             m = ProxyManager(mandatory_config_path="")
@@ -145,6 +158,32 @@ class TestPerServer:
             await m.stop_all()
 
     @pytest.mark.asyncio
+    async def test_started_false_skips_startup(self):
+        with _patches()[0], _patches()[1], _patches()[2], _patches()[3], _patches()[4]:
+            m = ProxyManager(mandatory_config_path="")
+            result = await m.start_all({
+                "mcpServers": {
+                    "running": {"command": "echo"},
+                    "stopped": {
+                        "command": "echo",
+                        "started": False,
+                    },
+                },
+            })
+            # "stopped" is registered but not running.
+            assert result["servers"]["running"]["ok"] is True
+            assert result["servers"]["stopped"]["ok"] is True
+            assert result["servers"]["stopped"]["started"] is False
+            assert m.get("running").running is True
+            assert m.get("stopped").running is False
+            # Spec is still available (for assets etc.).
+            assert m.get_spec("stopped") is not None
+            # Can be started later.
+            await m.start_one("stopped")
+            assert m.get("stopped").running is True
+            await m.stop_all()
+
+    @pytest.mark.asyncio
     async def test_unknown_name_raises(self):
         m = ProxyManager(mandatory_config_path="")
         with pytest.raises(KeyError):
@@ -160,6 +199,40 @@ class TestPerServer:
             with pytest.raises(RuntimeError, match="already running"):
                 await m.start_one("alpha")
             await m.stop_all()
+
+
+class TestEventPruning:
+    @pytest.mark.asyncio
+    async def test_prune_events_once_deletes_old_rows_and_logs(self, monkeypatch):
+        m = ProxyManager(mandatory_config_path="")
+        monkeypatch.setattr("zelosmcp.manager.time.time", lambda: 1000.0)
+        await m.start_savings(":memory:")
+        assert m.events is not None
+        await m.events.record_event(
+            event_id="old-event",
+            method="tools/call",
+            backend="docker",
+            tool="list_containers",
+            qualified="docker__list_containers",
+            compressed=False,
+            input_payload={"all": True},
+            output_payload={"count": 1},
+        )
+        q = m.subscribe_logs()
+        m._event_retention_hours = 1
+        monkeypatch.setattr("zelosmcp.manager.time.time", lambda: 8200.0)
+
+        deleted = await m._prune_events_once()
+
+        assert deleted == 1
+        seen = []
+        try:
+            while True:
+                seen.append(q.get_nowait())
+        except asyncio.QueueEmpty:
+            pass
+        assert any("Pruned 1 events older than 1h" in line for line in seen)
+        await m.stop_savings()
 
 
 class TestStatus:

@@ -228,6 +228,84 @@ HTML_TEMPLATE = """\
     overflow: auto;
     color: var(--black);
   }
+  .events-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .events-controls input,
+  .events-controls select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-size: 13px;
+    outline: none;
+  }
+  .events-controls input:focus,
+  .events-controls select:focus {
+    border-color: var(--accent);
+  }
+  .events-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--black);
+  }
+  .events-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .events-status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .events-status {
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .events-table tbody tr {
+    cursor: pointer;
+  }
+  .events-table-scroll {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .events-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .events-table th, .events-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+  }
+  /* Column widths: Time Backend Method Qualified Input Upstream Returned Saved Latency */
+  .events-table th:nth-child(1), .events-table td:nth-child(1) { width: 72px; }
+  .events-table th:nth-child(2), .events-table td:nth-child(2) { width: 80px; }
+  .events-table th:nth-child(3), .events-table td:nth-child(3) { width: 100px; }
+  .events-table th:nth-child(4), .events-table td:nth-child(4) { width: auto; word-break: break-all; white-space: normal; }
+  .events-table td:nth-child(4) code { word-break: break-all; white-space: normal; }
+  .events-table th:nth-child(5), .events-table td:nth-child(5) { width: 56px; }
+  .events-table th:nth-child(6), .events-table td:nth-child(6) { width: 64px; }
+  .events-table th:nth-child(7), .events-table td:nth-child(7) { width: 64px; }
+  .events-table th:nth-child(8), .events-table td:nth-child(8) { width: 56px; }
+  .events-table th:nth-child(9), .events-table td:nth-child(9) { width: 64px; }
+  .events-table tbody tr.is-selected {
+    background: var(--surface);
+  }
+  .events-table tbody tr.is-error td {
+    color: #9f2b2b;
+  }
 
   /* Below ~1240px the 220 + 480 columns leave the middle column too
      narrow (the activity log starts wrapping awkwardly). Collapse to a
@@ -341,7 +419,7 @@ HTML_TEMPLATE = """\
     line-height: 1;
   }
 
-  /* Inline `Access: [select]` control next to the Cursor rule section label. */
+  /* Inline `Access: [select]` control next to the rule section label. */
   .rule-access-control {
     margin-left: auto;
     display: inline-flex;
@@ -367,6 +445,32 @@ HTML_TEMPLATE = """\
     outline: none;
     border-color: var(--black);
   }
+
+  /* ── Rule IDE tabs (Cursor / VS Code) ── */
+  .rule-ide-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .rule-ide-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-family: var(--font);
+    color: var(--mid);
+    cursor: pointer;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .rule-ide-tab.active {
+    color: var(--black);
+    border-bottom-color: var(--black);
+    font-weight: 600;
+  }
+  .rule-ide-tab:hover:not(.active) { color: var(--black); }
 
   /* ── Card ── */
   .card {
@@ -616,6 +720,9 @@ HTML_TEMPLATE = """\
   }
 
   /* ── Server list ── */
+  /* No height cap so the inline catalog (expanded server details) can grow
+     freely when the user clicks a row. Repos panel above is independently
+     scrollable. */
   .server-list {
     display: flex;
     flex-direction: column;
@@ -806,7 +913,8 @@ HTML_TEMPLATE = """\
     font-size: 12px;
     margin-left: 4px;
   }
-  .repos-refresh-btn {
+  .repos-refresh-btn,
+  .repos-bulk-push-btn {
     padding: 4px 10px;
     font-size: 12px;
     line-height: 1;
@@ -814,8 +922,14 @@ HTML_TEMPLATE = """\
     border: 1px solid var(--border);
     border-radius: 999px;
     cursor: pointer;
+    white-space: nowrap;
   }
-  .repos-refresh-btn:hover { background: var(--surface); }
+  .repos-refresh-btn:hover,
+  .repos-bulk-push-btn:hover { background: var(--surface); }
+  .repos-bulk-push-btn {
+    color: var(--black);
+    font-weight: 600;
+  }
   .repos-filter {
     width: 100%;
     padding: 6px 10px;
@@ -826,11 +940,22 @@ HTML_TEMPLATE = """\
     margin-bottom: 8px;
     background: var(--white);
   }
+  .repos-bucket-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--mid);
+    padding: 4px 4px 2px;
+    margin-top: 4px;
+  }
+  /* Capped at ~10 repo rows visible; scrolls beyond that. Each .repo-row is
+     ~28px including the 4px gap, so 10 rows fit in ~290px. */
   .repos-list {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 360px;
+    max-height: 290px;
     overflow-y: auto;
   }
   .repo-row {
@@ -928,6 +1053,31 @@ HTML_TEMPLATE = """\
     border-bottom-color: var(--black) !important;
   }
   .assets-tab:hover:not(.active) { color: var(--black); }
+
+  /* ── Repo details two-column grid ── */
+  .repo-details-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 280px);
+    gap: 24px;
+    align-items: start;
+  }
+  .repo-details-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .repo-details-actions .btn { width: 100%; text-align: left; }
+  .repo-details-actions-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  @media (max-width: 1240px) {
+    .repo-details-grid { grid-template-columns: 1fr; }
+  }
   .rule-write-actions {
     display: flex;
     gap: 8px;
@@ -969,6 +1119,21 @@ HTML_TEMPLATE = """\
   .pill.state-running { background: var(--success); color: var(--white); }
   .pill.state-error { background: var(--error); color: var(--white); }
   .pill.state-stopped { background: var(--border); color: var(--mid); }
+  /* Auth provider pills — show whether the backend is wired to an auth
+     provider and whether the current user has connected it. Connected =
+     green, disconnected = warning yellow, missing config = error red. */
+  .pill.auth-connected {
+    background: var(--success);
+    color: var(--white);
+  }
+  .pill.auth-disconnected {
+    background: #f3a300;
+    color: var(--white);
+  }
+  .pill.auth-missing {
+    background: var(--error);
+    color: var(--white);
+  }
 
   /* ── Log Viewer ── */
   .log-viewer {
@@ -1305,11 +1470,12 @@ HTML_TEMPLATE = """\
     </div>
     <div class="nav-group">
       <div class="nav-group-label">Rules generation</div>
-      <button type="button" class="nav-item" data-view="rules">Cursor rule (.mdc)</button>
+      <button type="button" class="nav-item" data-view="rules">Rules</button>
     </div>
     <div class="nav-group">
       <div class="nav-group-label">Dashboards</div>
       <button type="button" class="nav-item" data-view="savings">Savings</button>
+      <button type="button" class="nav-item" data-view="events">Events</button>
       <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
     </div>
     <div class="nav-group">
@@ -1324,6 +1490,7 @@ HTML_TEMPLATE = """\
       <div class="nav-group-label">Help</div>
       <button type="button" class="nav-item" data-view="docs">Documentation</button>
     </div>
+
   </aside>
 
   <!-- Middle content (only one .view is .active at a time) -->
@@ -1405,7 +1572,7 @@ HTML_TEMPLATE = """\
     <section class="view" data-view="rules">
       <div class="section">
         <div class="section-label">
-          <span>Cursor rule (.mdc)</span>
+          <span>Rules</span>
           <span class="rule-access-control">
             <label for="rule-tool-use">Tool use:</label>
             <select id="rule-tool-use" onchange="onRuleToolUseChange()">
@@ -1420,6 +1587,12 @@ HTML_TEMPLATE = """\
           </span>
         </div>
         <div class="card">
+          <div class="rule-ide-tabs">
+            <button type="button" class="rule-ide-tab active" data-fmt="cursor-mdc"
+              onclick="onGlobalRuleTabClick(this)">Cursor (.mdc)</button>
+            <button type="button" class="rule-ide-tab" data-fmt="copilot-instructions"
+              onclick="onGlobalRuleTabClick(this)">VS Code (copilot-instructions.md)</button>
+          </div>
           <p class="intro" style="margin: 0 0 12px 0;">
             Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
             and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
@@ -1427,8 +1600,9 @@ HTML_TEMPLATE = """\
             includes a curated playbook for the mandatory backends; <em>Available</em> emits a neutral catalog with no prioritization.
             <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
             inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
-            to make changes through the MCPs. Save the body below as <code>.cursor/rules/zelosmcp.mdc</code> in any
-            workspace (or <code>~/.cursor/rules/</code> for global).
+            to make changes through the MCPs.
+            <span id="rule-tab-hint-cursor">Save as <code>.cursor/rules/zelosmcp.mdc</code> in any workspace (or <code>~/.cursor/rules/</code> for global).</span>
+            <span id="rule-tab-hint-vscode" style="display:none">Save as <code>.github/copilot-instructions.md</code> (picked up by VS Code Copilot) and/or <code>.vscode/copilot-instructions.md</code>.</span>
           </p>
           <div class="snippet">
             <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
@@ -1449,18 +1623,22 @@ HTML_TEMPLATE = """\
           <p class="intro" style="margin: 0 0 12px 0;">
             Aggregated savings across three sources: <strong>tool-list compression</strong>
             (raw vs. compressed-wrapper tokens served on every <code>tools/list</code>),
-            <strong>per-call accounting</strong> (input + output tokens of every
-            <code>tools/call</code>), and <strong>pincher self-reported BPE savings</strong>
-            (parsed from each pincher response's <code>_meta</code> envelope plus
-            periodic <code>pincher__stats</code> snapshots). Token counts use
-            <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
+            <strong>proxy transaction events</strong> (input tokens plus raw upstream
+            output tokens versus the transformed tokens returned to the IDE for
+            every routed MCP transaction), and <strong>pincher self-reported BPE
+            savings</strong> (parsed from each pincher response's <code>_meta</code>
+            envelope plus periodic <code>pincher__stats</code> snapshots). Token
+            counts use <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
             available; otherwise a <code>len/4</code> heuristic.
           </p>
 
           <div class="kpi-grid" id="savings-kpis">
             <div class="kpi"><div class="kpi-label">Tokens saved (compression)</div><div class="kpi-value" id="kpi-compression-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (proxy transforms)</div><div class="kpi-value" id="kpi-transform-saved">&mdash;</div></div>
             <div class="kpi"><div class="kpi-label">Tokens saved (pincher)</div><div class="kpi-value" id="kpi-pincher-saved">&mdash;</div></div>
-            <div class="kpi"><div class="kpi-label">Calls recorded</div><div class="kpi-value" id="kpi-calls">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Transactions recorded</div><div class="kpi-value" id="kpi-transactions">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Upstream output tokens</div><div class="kpi-value" id="kpi-upstream-output">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Returned output tokens</div><div class="kpi-value" id="kpi-returned-output">&mdash;</div></div>
             <div class="kpi"><div class="kpi-label">Cost avoided (pincher)</div><div class="kpi-value" id="kpi-cost">&mdash;</div></div>
           </div>
         </div>
@@ -1494,23 +1672,46 @@ HTML_TEMPLATE = """\
             <thead>
               <tr>
                 <th>Tool</th>
-                <th class="num">Calls</th>
-                <th class="num">Tokens</th>
+                <th class="num">Events</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
                 <th class="num">Avg latency</th>
               </tr>
             </thead>
             <tbody id="savings-top-tools-body">
-              <tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>
+              <tr><td colspan="7" class="empty-cell">No proxy events recorded yet.</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div class="section">
-        <div class="section-label">Per-backend activity</div>
+        <div class="section-label">Response transform breakdown</div>
+        <div class="card">
+          <table class="savings-table" id="savings-transform-table">
+            <thead>
+              <tr>
+                <th>Transform</th>
+                <th class="num">Events</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-transform-body">
+              <tr><td colspan="5" class="empty-cell">No transformed responses recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Per-backend transactions</div>
         <div class="card">
           <div id="savings-backend-bars" class="backend-bars">
-            <div class="empty-cell">No call events yet.</div>
+            <div class="empty-cell">No proxy events yet.</div>
           </div>
         </div>
       </div>
@@ -1519,6 +1720,77 @@ HTML_TEMPLATE = """\
         <div class="section-label">Pincher session stats</div>
         <div class="card">
           <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>ZELOSMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Proxy events view -->
+    <section class="view" data-view="events">
+      <div class="section">
+        <div class="section-label">
+          <span>Proxy events</span>
+          <span class="dashboard-meta" id="events-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="events-controls">
+            <input
+              id="events-backend-filter"
+              placeholder="Backend (exact, e.g. docker)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-method-filter"
+              placeholder="Method (exact, e.g. tools/call)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-tool-filter"
+              placeholder="Tool substring"
+              oninput="onEventsFilterChange()">
+            <div class="events-actions">
+              <label class="events-toggle">
+                <input type="checkbox" id="events-errors-only" onchange="onEventsFilterChange()">
+                Errors only
+              </label>
+              <button type="button" class="btn btn-outline btn-mini" onclick="loadEventHistory(0)">Refresh</button>
+            </div>
+          </div>
+          <div class="events-status-row">
+            <div class="events-status" id="events-status">Loading event history…</div>
+            <div class="events-actions">
+              <button type="button" class="btn btn-outline btn-mini" id="events-prev" onclick="changeEventsPage(-1)" disabled>Previous</button>
+              <button type="button" class="btn btn-outline btn-mini" id="events-next" onclick="changeEventsPage(1)" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Recent transactions</div>
+        <div class="card events-table-scroll">
+          <table class="savings-table events-table" id="events-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Backend</th>
+                <th>Method</th>
+                <th>Qualified</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+                <th class="num">Latency</th>
+              </tr>
+            </thead>
+            <tbody id="events-body">
+              <tr><td colspan="9" class="empty-cell">No proxy events yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Selected event</div>
+        <div class="card">
+          <pre id="events-detail" class="savings-pre">Select an event row to inspect its details.</pre>
         </div>
       </div>
     </section>
@@ -1712,6 +1984,11 @@ HTML_TEMPLATE = """\
             style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
             Hooks
           </button>
+          <button type="button" class="assets-tab" data-tab="skill"
+            onclick="switchBackendAssetsTab('skill')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Skills
+          </button>
           <button type="button" class="assets-tab" data-tab="all"
             onclick="switchBackendAssetsTab('all')"
             style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
@@ -1774,69 +2051,91 @@ HTML_TEMPLATE = """\
         <div class="card">
           <p class="repo-paths" id="repo-details-paths">&mdash;</p>
 
-          <!-- Rule format controls -->
-          <div class="rule-write-form">
-            <label for="repo-rule-format">Format</label>
-            <select id="repo-rule-format">
-              <option value="cursor-mdc" selected>cursor-mdc (.cursor/rules/zelosmcp.mdc)</option>
-              <option value="copilot-instructions">copilot-instructions (.github/copilot-instructions.md)</option>
-            </select>
-            <label for="repo-rule-tool-use">Tool use</label>
-            <select id="repo-rule-tool-use">
-              <option value="priority" selected>Priority (encourage MCP tools)</option>
-              <option value="available">Available (neutral catalog)</option>
-            </select>
-            <label for="repo-rule-access">Access</label>
-            <select id="repo-rule-access">
-              <option value="read-only" selected>Read-only (safe)</option>
-              <option value="read-write">Read-write (allows mutation)</option>
-            </select>
-            <label for="repo-rule-style">Style</label>
-            <select id="repo-rule-style" onchange="onRepoStyleChange()">
-              <option value="always-apply" selected>Always apply</option>
-              <option value="scoped">Scoped (uses globs)</option>
-            </select>
-            <label for="repo-rule-globs">Globs</label>
-            <input type="text" id="repo-rule-globs" placeholder="**/*.py" disabled>
-          </div>
+          <!-- Two-column grid: controls (left) + action buttons (right) -->
+          <div class="repo-details-grid">
 
-          <!-- Push assets section -->
-          <div style="margin-top:12px;">
-            <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
-                        color:var(--muted);margin-bottom:6px;">Push assets</div>
-            <div id="repo-push-running-hint"
-              style="font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <!-- Left: IDE tabs + dropdowns + path hint -->
+            <div class="repo-details-controls">
+              <!-- IDE target tab strip -->
+              <div class="rule-ide-tabs" style="margin-bottom:12px;">
+                <button type="button" class="rule-ide-tab active" data-ide="cursor"
+                  onclick="onRepoIdeTabClick(this)">Cursor</button>
+                <button type="button" class="rule-ide-tab" data-ide="vscode"
+                  onclick="onRepoIdeTabClick(this)">VS Code</button>
+              </div>
+
+              <!-- Rule format controls (controls that depend on the selected IDE tab) -->
+              <div class="rule-write-form">
+                <label for="repo-rule-tool-use">Tool use</label>
+                <select id="repo-rule-tool-use" onchange="onRepoControlChange()">
+                  <option value="priority" selected>Priority (encourage MCP tools)</option>
+                  <option value="available">Available (neutral catalog)</option>
+                </select>
+                <label for="repo-rule-access">Access</label>
+                <select id="repo-rule-access" onchange="onRepoControlChange()">
+                  <option value="read-only" selected>Read-only (safe)</option>
+                  <option value="read-write">Read-write (allows mutation)</option>
+                </select>
+                <!-- Style / globs only relevant for Cursor (.mdc frontmatter) -->
+                <span id="repo-cursor-only-controls" style="display:contents;">
+                  <label for="repo-rule-style">Style</label>
+                  <select id="repo-rule-style" onchange="onRepoStyleChange()">
+                    <option value="always-apply" selected>Always apply</option>
+                    <option value="scoped">Scoped (uses globs)</option>
+                  </select>
+                  <label for="repo-rule-globs">Globs</label>
+                  <input type="text" id="repo-rule-globs" placeholder="**/*.py" disabled
+                         oninput="onRepoGlobsInput()">
+                </span>
+              </div>
+              <!-- Output path hint -->
+              <p id="repo-rule-path-hint" style="font-size:12px;color:var(--mid);margin:6px 0 0 0;"></p>
+            </div>
+
+            <!-- Right: push buttons + execute extensions -->
+            <div class="repo-details-actions">
+              <div class="repo-details-actions-label">Push assets</div>
+              <div id="repo-push-running-hint" style="font-size:11px;color:var(--muted);"></div>
               <button type="button" class="btn btn-primary"
-                onclick="pushAllAssets()" title="Push rules + agents + hooks in one click">
+                onclick="pushAllAssets()" title="Push rules + agents + hooks + skills to selected IDE target">
                 Push all
               </button>
               <button type="button" class="btn btn-outline"
-                onclick="pushComprehensive('rule')" title="Write .cursor/rules/zelosmcp.mdc">
+                onclick="pushBothTargets()" title="Push rules + agents + hooks + skills to both Cursor and VS Code">
+                Push to both
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('rule')" title="Write rule file for selected IDE target">
                 Push rules
               </button>
               <button type="button" class="btn btn-outline"
-                onclick="pushComprehensive('agent')" title="Write .cursor/skills/*/SKILL.md">
+                onclick="pushComprehensive('agent')" title="Write SKILL.md for selected IDE target">
                 Push agents
               </button>
               <button type="button" class="btn btn-outline"
-                onclick="pushComprehensive('hook')" title="Merge .cursor/hooks.json">
+                onclick="pushComprehensive('hook')" title="Merge hook file for selected IDE target">
                 Push hooks
               </button>
               <button type="button" class="btn btn-outline"
-                onclick="previewRepoRule()" title="Preview the rule body">
-                Preview rule
+                onclick="pushComprehensive('skill')" title="Write skill SKILL.md files for selected IDE target">
+                Push skills
               </button>
-            </div>
-          </div>
+              <button type="button" class="btn btn-outline" style="margin-top:8px;color:var(--danger,#c33);"
+                onclick="removeAllAssets()" title="Remove all zelosmcp-managed files from this repo">
+                Remove all
+              </button>
 
-          <!-- Execute extensions section — populated dynamically -->
-          <div id="repo-asset-actions" style="margin-top:12px;"></div>
+              <!-- Execute extensions — populated dynamically -->
+              <div id="repo-asset-actions"></div>
+            </div>
+
+          </div><!-- /.repo-details-grid -->
 
           <div class="rule-write-status" id="repo-rule-status"></div>
 
           <div class="snippet" style="margin-top: 12px;">
-            <pre id="repo-rule-preview">Click <strong>Preview rule</strong> to render the rule body.</pre>
+            <button class="snippet-copy" onclick="copyRepoRulePreview()">Copy</button>
+            <pre id="repo-rule-preview">Loading preview…</pre>
           </div>
         </div>
       </div>
@@ -1871,19 +2170,7 @@ HTML_TEMPLATE = """\
       START
     </button>
 
-    <div class="section" id="servers-section" style="margin: 0;">
-      <div class="servers-header">
-        <div class="section-label" style="margin: 0;">Servers</div>
-        <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
-      </div>
-      <div class="card">
-        <p class="intro" style="margin: 0 0 12px 0; font-size: 13px;">
-          Click any row to inspect that backend's tools, prompts, and resources inline.
-        </p>
-        <div class="server-list" id="server-list"></div>
-      </div>
-    </div>
-
+    <!-- Repositories panel: discovered git repos under /user_data_ro -->
     <div class="section" id="repos-section" style="margin: 0;">
       <div class="repos-header">
         <button type="button"
@@ -1900,6 +2187,10 @@ HTML_TEMPLATE = """\
                 id="repos-refresh-btn"
                 title="Rescan /user_data_ro"
                 onclick="refreshRepos()">&#x21bb;</button>
+        <button type="button" class="repos-bulk-push-btn"
+                id="repos-bulk-push-btn"
+                title="Push rules + agents + hooks to every repo that already has zelosmcp rules"
+                onclick="confirmBulkPush()">&#x2912; All</button>
       </div>
       <div class="card" id="repos-collapse" hidden>
         <p class="intro" style="margin: 0 0 8px 0; font-size: 12px;">
@@ -1915,8 +2206,23 @@ HTML_TEMPLATE = """\
         <div class="repos-list" id="repos-list">
           <div class="repos-empty">Loading...</div>
         </div>
+        <div id="bulk-push-results" style="display:none;margin-top:8px;"></div>
       </div>
     </div>
+
+    <div class="section" id="servers-section" style="margin: 0;">
+      <div class="servers-header">
+        <div class="section-label" style="margin: 0;">Servers</div>
+        <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
+      </div>
+      <div class="card">
+        <p class="intro" style="margin: 0 0 12px 0; font-size: 13px;">
+          Click any row to inspect that backend's tools, prompts, and resources inline.
+        </p>
+        <div class="server-list" id="server-list"></div>
+      </div>
+    </div>
+
   </aside>
 
 </div>
@@ -1975,6 +2281,12 @@ HTML_TEMPLATE = """\
   let running = false;
   let loading = false;
   let currentStatus = { servers: [], primary: null, running: false };
+  // Per-provider auth status keyed by provider name; populated from
+  // /api/auth/providers. Used to colour the auth-provider pill in the
+  // server list. Refreshed alongside the status poll so pills react when
+  // the user connects via the Connections view.
+  let currentAuthProviders = {};  // { providerName: {ready, identity, type, ...} }
+  let lastAuthProvidersSig = null;
   // Inline-catalog state. Survives refreshStatus polls so a row the
   // user expanded earlier stays open when status updates re-render.
   // Resets on page reload (no localStorage by design).
@@ -2118,6 +2430,45 @@ HTML_TEMPLATE = """\
       }
       row.appendChild(state);
 
+      // Auth-provider indicator. Shown for any backend whose spec.auth
+      // references a provider, regardless of passthrough mode. Colour
+      // reflects whether the current user has connected the provider:
+      //   - green  (auth-connected)    : provider exists and ready=true
+      //   - yellow (auth-disconnected) : provider exists but not connected
+      //   - red    (auth-missing)      : spec references an unknown provider
+      const authProviderName =
+        (s.spec && s.spec.auth && s.spec.auth.provider) || s.auth_provider;
+      if (authProviderName) {
+        const auth = document.createElement("span");
+        const provider = currentAuthProviders[authProviderName];
+        if (provider == null) {
+          auth.className = "pill auth-missing";
+          auth.textContent = `auth: ${authProviderName} \\u2718`;
+          auth.title =
+            `Backend references provider '${authProviderName}' but the ` +
+            `provider is not configured. Check configs/auth-providers.json.`;
+        } else if (provider.ready) {
+          auth.className = "pill auth-connected";
+          const who = provider.identity && provider.identity.username
+            ? ` (${provider.identity.username})` : "";
+          auth.textContent = `auth: ${authProviderName} \\u2713`;
+          auth.title = `Connected to ${authProviderName}${who}. ` +
+            `Open the Connections view to disconnect or refresh.`;
+        } else {
+          auth.className = "pill auth-disconnected";
+          auth.textContent = `auth: ${authProviderName} \\u26A0`;
+          auth.title = `Provider '${authProviderName}' is configured but ` +
+            `not connected. Open the Connections view to authenticate.`;
+        }
+        // Click → jump to Connections view so the user can act on it.
+        auth.style.cursor = "pointer";
+        auth.onclick = (ev) => {
+          ev.stopPropagation();
+          setView("connections");
+        };
+        row.appendChild(auth);
+      }
+
       // OAuth-passthrough indicator. Shown for any backend running in
       // passthrough mode so the operator knows requests forward to the
       // upstream issuer rather than terminating in zelosmcp. The
@@ -2249,6 +2600,20 @@ HTML_TEMPLATE = """\
       const data = await r.json();
       currentStatus = data;
       running = !!data.running;
+      // Fetch auth providers in parallel — we want the pill to colour
+      // correctly on the very first render (not just after a poll cycle).
+      // Skip the network call when the status reports zero auth-using
+      // backends to avoid noise on simple deployments.
+      const providerNames = new Set();
+      for (const s of data.servers || []) {
+        const p = (s.spec && s.spec.auth && s.spec.auth.provider) || s.auth_provider;
+        if (p) providerNames.add(p);
+      }
+      if (providerNames.size > 0) {
+        await refreshAuthProviders();
+      } else {
+        currentAuthProviders = {};
+      }
       renderServers(data);
       mcpSnippet.textContent = buildSnippet(data);
       mcpSnippetAggregate.textContent = buildAggregateSnippet(data);
@@ -2259,6 +2624,26 @@ HTML_TEMPLATE = """\
       updateUI();
     } catch (err) {
       addLog("ERROR: " + err.message);
+    }
+  }
+
+  // Fetches /api/auth/providers and updates currentAuthProviders. Cheap to
+  // call repeatedly — no work happens when the response signature is
+  // unchanged so the pill doesn't flicker on every status poll.
+  async function refreshAuthProviders() {
+    try {
+      const r = await fetch("/api/auth/providers");
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = Array.isArray(body.providers) ? body.providers : [];
+      const sig = list.map((p) => `${p.name}:${p.ready ? 1 : 0}`).join(",");
+      if (sig === lastAuthProvidersSig) return;
+      lastAuthProvidersSig = sig;
+      const map = {};
+      for (const p of list) map[p.name] = p;
+      currentAuthProviders = map;
+    } catch (_) {
+      // Silently ignore — pill falls back to disconnected on missing data.
     }
   }
 
@@ -2319,22 +2704,142 @@ HTML_TEMPLATE = """\
     return Object.keys(out.mcpServers).length ? out : null;
   }
 
-  // Refetch the generated Cursor rule from /api/cursor-rule whenever the
+  // ── IDE tab state ────────────────────────────────────────────────────
+
+  // The currently-selected IDE tab in the global Rules view.
+  let globalRuleFmt = "cursor-mdc";
+
+  // Returns the fmt query value for the currently-selected global tab.
+  function globalRuleFormat() { return globalRuleFmt; }
+
+  // Called when the user clicks a tab in the global Rules view.
+  function onGlobalRuleTabClick(btn) {
+    document.querySelectorAll(".rule-ide-tab[data-fmt]").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    globalRuleFmt = btn.dataset.fmt || "cursor-mdc";
+    // Toggle hint text.
+    const hintCursor = document.getElementById("rule-tab-hint-cursor");
+    const hintVscode = document.getElementById("rule-tab-hint-vscode");
+    if (hintCursor) hintCursor.style.display = globalRuleFmt === "cursor-mdc" ? "" : "none";
+    if (hintVscode) hintVscode.style.display = globalRuleFmt === "copilot-instructions" ? "" : "none";
+    lastRuleSig = null;
+    cursorRule.textContent = "Loading...";
+    refreshCursorRule(currentStatus);
+  }
+
+  // The currently-selected IDE tab in the repo-details panel.
+  let repoIdeTarget = "cursor";
+
+  // Called when the user clicks a tab in the repo-details panel.
+  function onRepoIdeTabClick(btn) {
+    document.querySelectorAll(".rule-ide-tab[data-ide]").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    repoIdeTarget = btn.dataset.ide || "cursor";
+    _updateRepoIdeDependentUI();
+    // Always refresh the preview and persist the choice.
+    triggerPreviewRefresh();
+    _persistRepoPrefs();
+  }
+
+  // Called by onchange on the tool-use and access dropdowns.
+  function onRepoControlChange() {
+    triggerPreviewRefresh();
+    _persistRepoPrefs();
+  }
+
+  // Debounce token for globs oninput.
+  let _globsDebounce = null;
+
+  // Called by oninput on the globs text field.
+  function onRepoGlobsInput() {
+    onRepoStyleChange(); // keep globs enabled/disabled state consistent
+    if (_globsDebounce) clearTimeout(_globsDebounce);
+    _globsDebounce = setTimeout(() => {
+      triggerPreviewRefresh();
+      _persistRepoPrefs();
+    }, 300);
+  }
+
+  // Trigger a preview refresh. No-ops when no project is open.
+  function triggerPreviewRefresh() {
+    if (!currentDetailsRepo) return;
+    previewRepoRule();
+  }
+
+  // Persist the current dropdown values to the server via PUT /api/repos/prefs.
+  // Debounced so rapid changes don't flood the server.
+  let _prefsDebounce = null;
+  function _persistRepoPrefs() {
+    if (!currentDetailsRepo) return;
+    if (_prefsDebounce) clearTimeout(_prefsDebounce);
+    _prefsDebounce = setTimeout(async () => {
+      try {
+        const tu = document.getElementById("repo-rule-tool-use")?.value || "priority";
+        const ac = document.getElementById("repo-rule-access")?.value || "read-only";
+        const st = document.getElementById("repo-rule-style")?.value || "always-apply";
+        const gl = document.getElementById("repo-rule-globs")?.value || "";
+        const targets = repoIdeTarget === "vscode" ? ["vscode"] : ["cursor", "vscode"];
+        await fetch("/api/repos/prefs", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: currentDetailsRepo.path_ro,
+            tool_use: tu,
+            access: ac,
+            style: st,
+            globs: gl,
+            targets,
+          }),
+        });
+      } catch (_) {
+        // Best-effort; silently ignore errors.
+      }
+    }, 500);
+  }
+
+  // Copy the rule preview text to clipboard.
+  function copyRepoRulePreview() {
+    const pre = document.getElementById("repo-rule-preview");
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent || "").catch(() => {});
+  }
+
+  function _updateRepoIdeDependentUI() {
+    // Show/hide Cursor-only controls (style + globs).
+    const cursorOnlyControls = document.getElementById("repo-cursor-only-controls");
+    if (cursorOnlyControls) {
+      cursorOnlyControls.style.display = repoIdeTarget === "cursor" ? "contents" : "none";
+    }
+    // Update path hint.
+    const hint = document.getElementById("repo-rule-path-hint");
+    if (hint) {
+      hint.textContent = repoIdeTarget === "cursor"
+        ? "Writes .cursor/rules/zelosmcp.mdc"
+        : "Writes .github/copilot-instructions.md and .vscode/copilot-instructions.md";
+    }
+  }
+
+  // ── Global rule preview ──────────────────────────────────────────────
+
+  // Refetch the generated rule from /api/cursor-rule whenever the
   // running-backends set OR the access / tool-use selectors change. The
   // signature includes both control values so toggling either dropdown
   // forces a refetch.
   async function refreshCursorRule(status) {
     const access = ruleAccessValue();
     const toolUse = ruleToolUseValue();
+    const fmt = globalRuleFormat();
     const sig =
-      "access:" + access + "|tool_use:" + toolUse + "|" +
+      "fmt:" + fmt + "|access:" + access + "|tool_use:" + toolUse + "|" +
       (status.servers || [])
         .map((s) => s.name + ":" + (s.running ? "1" : "0"))
         .join(",");
     if (sig === lastRuleSig) return;
     lastRuleSig = sig;
     try {
-      const params = new URLSearchParams({ access, tool_use: toolUse });
+      const params = new URLSearchParams({ format: fmt, access, tool_use: toolUse });
       const r = await fetch("/api/cursor-rule?" + params.toString());
       cursorRule.textContent = await r.text();
     } catch (err) {
@@ -2747,13 +3252,13 @@ HTML_TEMPLATE = """\
     if (!container) return;
     container.innerHTML = '<span class="docs-empty">Loading...</span>';
 
-    const kindLabels = { rule: "Rules", extension: "Extensions", agent: "Agents", hook: "Hooks", all: "All" };
+    const kindLabels = { rule: "Rules", extension: "Extensions", agent: "Agents", hook: "Hooks", skill: "Skills", all: "All" };
 
     try {
       let rows;
       if (kind === "all") {
         // Fetch all kinds in parallel and merge.
-        const kinds = ["rule", "extension", "agent", "hook"];
+        const kinds = ["rule", "extension", "agent", "hook", "skill"];
         const resps = await Promise.all(
           kinds.map((k) => fetch(`/api/assets?kind=${k}&backend=${encodeURIComponent(backend)}`))
         );
@@ -3038,12 +3543,19 @@ HTML_TEMPLATE = """\
     const count = document.getElementById("repos-count");
     if (!list) return;
     const q = reposFilterValue();
-    const filtered = q
+    let filtered = q
       ? currentRepos.filter((r) => {
           const hay = (r.name + " " + r.path_ro).toLowerCase();
           return hay.includes(q);
         })
-      : currentRepos;
+      : [...currentRepos];
+
+    // Sort: repos with rules first, then alphabetically by name.
+    filtered.sort((a, b) => {
+      if (a.has_rule !== b.has_rule) return a.has_rule ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
     list.innerHTML = "";
     if (count) {
       if (q) count.textContent = `${filtered.length} / ${currentRepos.length}`;
@@ -3058,7 +3570,25 @@ HTML_TEMPLATE = """\
       list.appendChild(p);
       return;
     }
+
+    // Visual bucket separators between "With rules" and "Other".
+    let shownRulesBucket = false;
+    let shownOtherBucket = false;
+
     for (const repo of filtered) {
+      if (repo.has_rule && !shownRulesBucket) {
+        shownRulesBucket = true;
+        const sep = document.createElement("div");
+        sep.className = "repos-bucket-label";
+        sep.textContent = "With rules";
+        list.appendChild(sep);
+      } else if (!repo.has_rule && !shownOtherBucket) {
+        shownOtherBucket = true;
+        const sep = document.createElement("div");
+        sep.className = "repos-bucket-label";
+        sep.textContent = shownRulesBucket ? "Other" : "No rules yet";
+        list.appendChild(sep);
+      }
       const row = document.createElement("button");
       row.type = "button";
       row.className = "repo-row";
@@ -3086,13 +3616,19 @@ HTML_TEMPLATE = """\
         : "no zelosmcp.mdc yet";
       row.appendChild(rulePill);
 
-      const piPill = document.createElement("span");
-      piPill.className = "repo-pill" + (repo.pincher_indexed ? " on" : "");
-      piPill.textContent = "pincher";
-      piPill.title = repo.pincher_indexed
-        ? "indexed in pincher"
-        : "not yet indexed";
-      row.appendChild(piPill);
+      // Only show pincher pill when the pincher backend is running.
+      const pinchRunning = (currentStatus.servers || []).some(
+        (s) => s.name === "pincher" && s.running
+      );
+      if (pinchRunning) {
+        const piPill = document.createElement("span");
+        piPill.className = "repo-pill" + (repo.pincher_indexed ? " on" : "");
+        piPill.textContent = "pincher";
+        piPill.title = repo.pincher_indexed
+          ? "indexed in pincher"
+          : "not yet indexed";
+        row.appendChild(piPill);
+      }
 
       list.appendChild(row);
     }
@@ -3117,7 +3653,12 @@ HTML_TEMPLATE = """\
     if (meta) {
       const bits = [];
       bits.push(repo.has_rule ? "rule present" : "no rule");
-      bits.push(repo.pincher_indexed ? "indexed" : "not indexed");
+      const pinchRunning = (currentStatus.servers || []).some(
+        (s) => s.name === "pincher" && s.running
+      );
+      if (pinchRunning) {
+        bits.push(repo.pincher_indexed ? "indexed" : "not indexed");
+      }
       meta.textContent = bits.join(" • ");
     }
     if (paths) {
@@ -3126,10 +3667,50 @@ HTML_TEMPLATE = """\
         "Read-write: <code>" + escapeHtml(repo.path_rw) + "</code>";
     }
     if (status) { status.textContent = ""; status.className = "rule-write-status"; }
-    if (preview) {
-      preview.textContent = "Click Preview to render the rule body that will be saved.";
-    }
+    if (preview) { preview.textContent = "Loading preview…"; }
     onRepoStyleChange();
+    _updateRepoIdeDependentUI();
+    // Load stored prefs first, then trigger preview.
+    _loadRepoPrefsAndPreview(repo);
+  }
+
+  // Load the stored prefs for a repo via GET /api/repos/prefs, populate the
+  // dropdowns, then trigger the preview render.
+  async function _loadRepoPrefsAndPreview(repo) {
+    try {
+      const r = await fetch("/api/repos/prefs?path=" + encodeURIComponent(repo.path_ro));
+      if (r.ok) {
+        const prefs = await r.json();
+        _applyPrefsToDropdowns(prefs);
+      }
+    } catch (_) {
+      // Silently ignore — defaults already set in HTML
+    }
+    previewRepoRule();
+  }
+
+  // Apply prefs from the API to the dropdown controls.
+  function _applyPrefsToDropdowns(prefs) {
+    const tu = document.getElementById("repo-rule-tool-use");
+    const ac = document.getElementById("repo-rule-access");
+    const st = document.getElementById("repo-rule-style");
+    const gl = document.getElementById("repo-rule-globs");
+    if (tu && prefs.tool_use) tu.value = prefs.tool_use;
+    if (ac && prefs.access) ac.value = prefs.access;
+    if (st && prefs.style) st.value = prefs.style;
+    if (gl && prefs.globs !== undefined) gl.value = prefs.globs || "";
+    onRepoStyleChange();
+    _updateRepoIdeDependentUI();
+    // Restore IDE target tab
+    if (prefs.targets && Array.isArray(prefs.targets)) {
+      const ide = prefs.targets.includes("vscode") && !prefs.targets.includes("cursor")
+        ? "vscode" : "cursor";
+      document.querySelectorAll(".rule-ide-tab[data-ide]").forEach((b) => {
+        b.classList.toggle("active", b.dataset.ide === ide);
+      });
+      repoIdeTarget = ide;
+      _updateRepoIdeDependentUI();
+    }
   }
 
   function onRepoStyleChange() {
@@ -3139,32 +3720,43 @@ HTML_TEMPLATE = """\
     const scoped = style.value === "scoped";
     globs.disabled = !scoped;
     if (!scoped) globs.value = "";
+    triggerPreviewRefresh();
+    _persistRepoPrefs();
   }
 
+  // Return the /api/cursor-rule query string for the selected IDE tab.
   function repoRuleQueryString() {
     const params = new URLSearchParams();
-    const fmt = document.getElementById("repo-rule-format");
+    const fmt = repoIdeTarget === "cursor" ? "cursor-mdc" : "copilot-instructions";
     const tu = document.getElementById("repo-rule-tool-use");
     const access = document.getElementById("repo-rule-access");
     const style = document.getElementById("repo-rule-style");
     const globs = document.getElementById("repo-rule-globs");
-    if (fmt) params.set("format", fmt.value);
+    params.set("format", fmt);
     if (tu) params.set("tool_use", tu.value);
     if (access) params.set("access", access.value);
-    if (style) params.set("style", style.value);
-    if (globs && globs.value) params.set("globs", globs.value);
+    if (repoIdeTarget === "cursor") {
+      if (style) params.set("style", style.value);
+      if (globs && globs.value) params.set("globs", globs.value);
+    }
     return params.toString();
   }
 
-  function repoRuleBody() {
-    const fmt = document.getElementById("repo-rule-format");
+  // Return the POST body for /api/repos/write-rule.
+  function repoRuleBody(targetsOverride) {
     const tu = document.getElementById("repo-rule-tool-use");
     const access = document.getElementById("repo-rule-access");
     const style = document.getElementById("repo-rule-style");
     const globs = document.getElementById("repo-rule-globs");
+    const targets = targetsOverride || [repoIdeTarget];
+    // For legacy compat, also send format when writing a single target.
+    const fmt = targets.length === 1
+      ? (targets[0] === "cursor" ? "cursor-mdc" : "copilot-instructions")
+      : "cursor-mdc";
     return {
       path: currentDetailsRepo ? currentDetailsRepo.path_ro : null,
-      format: fmt ? fmt.value : "cursor-mdc",
+      format: fmt,
+      targets,
       tool_use: tu ? tu.value : "priority",
       access: access ? access.value : "read-only",
       style: style ? style.value : "always-apply",
@@ -3223,13 +3815,12 @@ HTML_TEMPLATE = """\
     }
   }
 
-  // Legacy helper kept for backward compat; new path uses extensions.
+  // Index helper — delegates to the pincher extension invoke endpoint.
   async function indexRepo() {
     if (!currentDetailsRepo) return;
     const status = document.getElementById("repo-rule-status");
     if (status) { status.className = "rule-write-status"; status.textContent = "Indexing..."; }
     try {
-      // Try the extension-based invoke first; fall back to legacy route.
       const ctx = { repo: {
         ro_path: currentDetailsRepo.path_ro,
         rw_path: currentDetailsRepo.path_rw,
@@ -3240,19 +3831,8 @@ HTML_TEMPLATE = """\
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ctx }),
       });
-      if (r.status === 503) {
-        // Fall back to legacy route
-        const r2 = await fetch("/api/repos/index", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: currentDetailsRepo.path_ro }),
-        });
-        const d2 = await r2.json();
-        if (!r2.ok || !d2.ok) throw new Error(d2.error || ("HTTP " + r2.status));
-      } else {
-        const data = await r.json();
-        if (!data.ok) throw new Error(data.error || data.message);
-      }
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || data.message);
       if (status) {
         status.className = "rule-write-status ok";
         status.textContent = "Indexed in pincher.";
@@ -3272,18 +3852,24 @@ HTML_TEMPLATE = """\
 
   // ── Comprehensive push ──────────────────────────────────────────────
 
-  async function pushComprehensive(kind) {
+  // Push one kind to the currently-selected IDE target (or both if
+  // targetsOverride is provided).
+  async function pushComprehensive(kind, targetsOverride) {
     if (!currentDetailsRepo) return;
     const status = document.getElementById("repo-rule-status");
-    const fmt = document.getElementById("repo-rule-format")?.value || "cursor-mdc";
+    const targets = targetsOverride || [repoIdeTarget];
+    const fmt = targets.length === 1
+      ? (targets[0] === "cursor" ? "cursor-mdc" : "copilot-instructions")
+      : "cursor-mdc";
     const access = document.getElementById("repo-rule-access")?.value || "read-only";
     const tool_use = document.getElementById("repo-rule-tool-use")?.value || "priority";
-    if (status) { status.className = "rule-write-status"; status.textContent = `Pushing ${kind}…`; }
+    const targetLabel = targets.length > 1 ? "Cursor + VS Code" : targets[0];
+    if (status) { status.className = "rule-write-status"; status.textContent = `Pushing ${kind} (${targetLabel})…`; }
     try {
       const r = await fetch(`/api/assets/push/${encodeURIComponent(kind)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: currentDetailsRepo.name, fmt, access, tool_use }),
+        body: JSON.stringify({ repo: currentDetailsRepo.name, fmt, targets, access, tool_use }),
       });
       const data = await r.json();
       if (data.ok) {
@@ -3291,7 +3877,7 @@ HTML_TEMPLATE = """\
         const hint = data.backends_included ? `(${data.backends_included.join(", ")})` : "";
         if (status) {
           status.className = "rule-write-status ok";
-          status.textContent = `Pushed ${kind} ${hint}: ${files.join(", ") || "(no files)"}`;
+          status.textContent = `Pushed ${kind} (${targetLabel}) ${hint}: ${files.join(", ") || "(no files)"}`;
         }
         if (kind === "rule") {
           currentDetailsRepo.has_rule = true;
@@ -3311,10 +3897,151 @@ HTML_TEMPLATE = """\
     }
   }
 
+  // Push all asset kinds to the selected IDE target.
   async function pushAllAssets() {
     await pushComprehensive("rule");
     await pushComprehensive("agent");
     await pushComprehensive("hook");
+    await pushComprehensive("skill");
+  }
+
+  // Push all asset kinds to BOTH Cursor and VS Code targets.
+  async function pushBothTargets() {
+    const both = ["cursor", "vscode"];
+    await pushComprehensive("rule", both);
+    await pushComprehensive("agent", both);
+    await pushComprehensive("hook", both);
+    await pushComprehensive("skill", both);
+  }
+
+  // Remove all zelosmcp-managed assets from the current repo.
+  async function removeAllAssets() {
+    if (!currentDetailsRepo) return;
+    const name = currentDetailsRepo.name;
+    const ok = window.confirm(
+      `Remove all zelosmcp-managed files from "${name}"?\\n\\n` +
+      "This will delete:\\n" +
+      "  \\u2022 Rule files (zelosmcp.mdc, copilot-instructions.md)\\n" +
+      "  \\u2022 Agent files\\n" +
+      "  \\u2022 Skill files\\n" +
+      "  \\u2022 zelosmcp.json prefs manifests\\n" +
+      "  \\u2022 zelosmcp entries from hooks and mcp.json\\n\\n" +
+      "Non-zelosmcp files in .cursor/, .github/, .vscode/ will be preserved."
+    );
+    if (!ok) return;
+    const status = document.getElementById("repo-rule-status");
+    if (status) { status.className = "rule-write-status"; status.textContent = "Removing…"; }
+    try {
+      const r = await fetch("/api/assets/remove-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: name }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        const items = (data.removed || []);
+        const deleted = items.filter((f) => f.action === "deleted").length;
+        const cleaned = items.filter((f) => f.action === "cleaned").length;
+        const parts = [];
+        if (deleted) parts.push(`${deleted} file${deleted !== 1 ? "s" : ""} deleted`);
+        if (cleaned) parts.push(`${cleaned} file${cleaned !== 1 ? "s" : ""} cleaned`);
+        if (status) {
+          status.className = "rule-write-status ok";
+          status.textContent = parts.length ? `Removed: ${parts.join(", ")}` : "Nothing to remove.";
+        }
+        currentDetailsRepo.has_rule = false;
+        const idx = currentRepos.findIndex((x) => x.path_ro === currentDetailsRepo.path_ro);
+        if (idx >= 0) currentRepos[idx] = { ...currentRepos[idx], has_rule: false };
+        renderReposList();
+        renderRepoDetailsMetaOnly();
+      } else {
+        if (status) {
+          status.className = "rule-write-status err";
+          status.textContent = "Remove failed: " + (data.error || "unknown error");
+        }
+      }
+    } catch (err) {
+      if (status) { status.className = "rule-write-status err"; status.textContent = "Remove error: " + err.message; }
+    }
+  }
+
+  // ── Bulk push to all repos with rules ────────────────────────────────
+
+  function confirmBulkPush() {
+    const reposWithRules = currentRepos.filter((r) => r.has_rule);
+    const count = reposWithRules.length;
+    if (count === 0) {
+      alert("No repositories currently have zelosmcp rules to push to.");
+      return;
+    }
+    const ok = window.confirm(
+      `Push rules + agents + hooks + skills to ${count} repositor${count === 1 ? "y" : "ies"} with existing zelosmcp rules?\\n\\n` +
+      "This will overwrite the current contents of:\\n" +
+      "  .cursor/rules/zelosmcp.mdc\\n" +
+      "  .github/copilot-instructions.md\\n" +
+      "  .vscode/copilot-instructions.md\\n" +
+      "  .cursor/skills/*, .github/skills/*, .vscode/skills/*\\n" +
+      "  .cursor/hooks.json, .github/hooks/zelosmcp.json, .vscode/hooks.json\\n" +
+      "  .cursor/zelosmcp.json, .github/zelosmcp.json, .vscode/zelosmcp.json\\n\\n" +
+      "Each repo's stored targets, access mode, and tool-use mode will be respected.\\n\\n" +
+      "ANY MANUAL EDITS TO THESE FILES WILL BE LOST. Continue?"
+    );
+    if (!ok) return;
+    bulkPushToAllRepos();
+  }
+
+  async function bulkPushToAllRepos() {
+    const btn = document.getElementById("repos-bulk-push-btn");
+    const resultsEl = document.getElementById("bulk-push-results");
+    if (btn) { btn.disabled = true; btn.textContent = "Pushing…"; }
+    if (resultsEl) {
+      resultsEl.style.display = "";
+      resultsEl.innerHTML = '<div style="font-size:12px;color:var(--mid);">Pushing to all repos with rules…</div>';
+    }
+    try {
+      const r = await fetch("/api/repos/push-all-with-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await r.json();
+      if (resultsEl) {
+        resultsEl.innerHTML = _renderBulkPushResults(data);
+      }
+      // Refresh the repo list so has_rule badges update.
+      await loadRepos({ force: true, silent: true });
+    } catch (err) {
+      if (resultsEl) {
+        resultsEl.innerHTML = `<div style="font-size:12px;color:red;">Bulk push failed: ${escapeHtml(err.message)}</div>`;
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "⬆ All"; }
+    }
+  }
+
+  function _renderBulkPushResults(data) {
+    const repos = Array.isArray(data.repos) ? data.repos : [];
+    if (repos.length === 0) {
+      return '<div style="font-size:12px;color:var(--mid);">No repos with rules found.</div>';
+    }
+    const rows = repos.map((r) => {
+      const kinds = Object.entries(r.kinds || {});
+      const allOk = kinds.every(([, kd]) => kd.ok);
+      const icon = allOk ? "✓" : "✗";
+      const color = allOk ? "green" : "red";
+      const details = kinds.map(([k, kd]) =>
+        `<span style="color:${kd.ok ? "green" : "red"}">${k}:${kd.ok ? "ok" : (kd.error || "err")}</span>`
+      ).join(" ");
+      return `<div style="font-size:11px;display:flex;gap:6px;align-items:baseline;">
+        <span style="color:${color};font-weight:700;">${icon}</span>
+        <span style="flex:1;font-weight:600;">${escapeHtml(r.repo)}</span>
+        <span>${details}</span>
+      </div>`;
+    }).join("");
+    const okCount = repos.filter((r) => Object.values(r.kinds || {}).every((kd) => kd.ok)).length;
+    const summary = `<div style="font-size:11px;font-weight:600;margin-bottom:4px;">`
+      + `${okCount}/${repos.length} repos OK</div>`;
+    return summary + rows;
   }
 
   // Update the running-backends hint in the push section.
@@ -3421,7 +4148,13 @@ HTML_TEMPLATE = """\
     if (!meta) return;
     const bits = [];
     bits.push(currentDetailsRepo.has_rule ? "rule present" : "no rule");
-    bits.push(currentDetailsRepo.pincher_indexed ? "indexed" : "not indexed");
+    // Only show pincher status when pincher backend is running.
+    const pinchRunning = (currentStatus.servers || []).some(
+      (s) => s.name === "pincher" && s.running
+    );
+    if (pinchRunning) {
+      bits.push(currentDetailsRepo.pincher_indexed ? "indexed" : "not indexed");
+    }
     meta.textContent = bits.join(" • ");
   }
 
@@ -3453,6 +4186,10 @@ HTML_TEMPLATE = """\
     if (name === "savings") {
       refreshSavings();
       ensureSavingsStream();
+    }
+    if (name === "events") {
+      loadEventHistory(0);
+      ensureEventsStream();
     }
     if (name === "docs") loadDocsIndex();
     if (name === "connections") loadConnections();
@@ -4037,6 +4774,13 @@ HTML_TEMPLATE = """\
   let savingsStream = null;
   let savingsPollTimer = null;
   let savingsFetchInflight = false;
+  let eventsStream = null;
+  let eventsPollTimer = null;
+  let eventsFetchInflight = false;
+  let eventsPageOffset = 0;
+  const eventsPageLimit = 25;
+  let currentEventsPage = null;
+  let currentEventSelectionId = null;
 
   function fmtNum(n) {
     if (n === null || n === undefined) return "—";
@@ -4116,21 +4860,29 @@ HTML_TEMPLATE = """\
       const enc = data.tokenizer && data.tokenizer.heuristic
         ? "heuristic" : (data.tokenizer.encoding || "tiktoken");
       const ts = new Date((data.generated_at || 0) * 1000);
-      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}`;
+      const retention = data.retention_hours ? ` • retention ${data.retention_hours}h` : "";
+      meta.textContent = `${enc} • updated ${ts.toLocaleTimeString()}${retention}`;
     }
 
     const compressionSaved = data.compression_saved_tokens_total || 0;
+    const transformSaved = data.response_transform_saved_tokens_total || 0;
     const pincherSaved = (data.pincher && data.pincher.tokens_saved_total) || 0;
     const totals = (data.calls && data.calls.totals) || {};
     const cost = (data.pincher && data.pincher.cost_avoided_usd_total) || 0;
+    const transactions = totals.transactions || totals.events || totals.calls || 0;
+    const upstreamOutput = totals.raw_output_tokens || data.upstream_output_tokens_total || 0;
+    const returnedOutput = totals.output_tokens || data.returned_output_tokens_total || 0;
 
     const set = (id, v) => {
       const el = document.getElementById(id);
       if (el) el.textContent = v;
     };
     set("kpi-compression-saved", fmtNum(compressionSaved));
+    set("kpi-transform-saved", fmtNum(transformSaved));
     set("kpi-pincher-saved", fmtNum(pincherSaved));
-    set("kpi-calls", fmtNum(totals.calls || 0));
+    set("kpi-transactions", fmtNum(transactions));
+    set("kpi-upstream-output", fmtNum(upstreamOutput));
+    set("kpi-returned-output", fmtNum(returnedOutput));
     set("kpi-cost", fmtUsd(cost));
 
     // Compression table
@@ -4158,14 +4910,35 @@ HTML_TEMPLATE = """\
     if (topBody) {
       const rows = (data.calls && data.calls.top_tools) || [];
       if (!rows.length) {
-        topBody.innerHTML = '<tr><td colspan="4" class="empty-cell">No calls recorded yet.</td></tr>';
+        topBody.innerHTML = '<tr><td colspan="7" class="empty-cell">No proxy events recorded yet.</td></tr>';
       } else {
         topBody.innerHTML = rows.map((t) => `
           <tr>
             <td><code>${escapeHtml(t.qualified)}</code></td>
-            <td class="num">${fmtNum(t.calls)}</td>
-            <td class="num">${fmtNum(t.tokens)}</td>
-            <td class="num">${t.avg_latency_ms.toFixed(0)} ms</td>
+            <td class="num">${fmtNum(t.events || t.calls || 0)}</td>
+            <td class="num">${fmtNum(t.input_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.raw_output_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.output_tokens || 0)}</td>
+            <td class="num">${fmtNum(t.transform_saved_tokens || 0)}</td>
+            <td class="num">${Number(t.avg_latency_ms || 0).toFixed(0)} ms</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    const transformBody = document.getElementById("savings-transform-body");
+    if (transformBody) {
+      const rows = data.response_transforms || [];
+      if (!rows.length) {
+        transformBody.innerHTML = '<tr><td colspan="5" class="empty-cell">No transformed responses recorded yet.</td></tr>';
+      } else {
+        transformBody.innerHTML = rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.transform_type || "raw")}</td>
+            <td class="num">${fmtNum(row.events || 0)}</td>
+            <td class="num">${fmtNum(row.raw_output_tokens || 0)}</td>
+            <td class="num">${fmtNum(row.output_tokens || 0)}</td>
+            <td class="num">${fmtNum(row.transform_saved_tokens || 0)}</td>
           </tr>
         `).join("");
       }
@@ -4176,16 +4949,17 @@ HTML_TEMPLATE = """\
     if (barsHost) {
       const rows = (data.calls && data.calls.per_backend) || [];
       if (!rows.length) {
-        barsHost.innerHTML = '<div class="empty-cell">No call events yet.</div>';
+        barsHost.innerHTML = '<div class="empty-cell">No proxy events yet.</div>';
       } else {
-        const max = Math.max(1, ...rows.map((r) => r.calls || 0));
+        const max = Math.max(1, ...rows.map((r) => r.events || r.calls || 0));
         barsHost.innerHTML = rows.map((b) => {
-          const pct = Math.round(((b.calls || 0) / max) * 100);
+          const count = b.events || b.calls || 0;
+          const pct = Math.round((count / max) * 100);
           return `
             <div class="backend-bar">
               <div class="backend-bar-name">${escapeHtml(b.backend)}</div>
               <div class="backend-bar-track"><div class="backend-bar-fill" style="width: ${pct}%"></div></div>
-              <div class="backend-bar-count">${fmtNum(b.calls)} calls</div>
+              <div class="backend-bar-count">${fmtNum(count)} events</div>
             </div>`;
         }).join("");
       }
@@ -4206,6 +4980,217 @@ HTML_TEMPLATE = """\
         }
         pre.textContent = body || JSON.stringify(stats, null, 2);
       }
+    }
+  }
+
+  function isEventsTabActive() {
+    const v = document.querySelector(".view[data-view=events]");
+    return v && v.classList.contains("active");
+  }
+
+  function currentEventFilters() {
+    return {
+      backend: (document.getElementById("events-backend-filter")?.value || "").trim(),
+      method: (document.getElementById("events-method-filter")?.value || "").trim(),
+      tool: (document.getElementById("events-tool-filter")?.value || "").trim(),
+      errors_only: !!document.getElementById("events-errors-only")?.checked,
+    };
+  }
+
+  function ensureEventsStream() {
+    if (eventsStream) return;
+    try {
+      eventsStream = new EventSource("/api/events/stream");
+    } catch (_) {
+      eventsStream = null;
+      return;
+    }
+    eventsStream.onmessage = () => {
+      if (isEventsTabActive()) loadEventHistory(eventsPageOffset);
+    };
+    eventsStream.onerror = () => {};
+    if (!eventsPollTimer) {
+      eventsPollTimer = setInterval(() => {
+        if (isEventsTabActive()) loadEventHistory(eventsPageOffset);
+      }, 5000);
+    }
+  }
+
+  function onEventsFilterChange() {
+    eventsPageOffset = 0;
+    if (isEventsTabActive()) loadEventHistory(0);
+  }
+
+  function changeEventsPage(direction) {
+    const nextOffset = Math.max(0, eventsPageOffset + (direction * eventsPageLimit));
+    if (nextOffset === eventsPageOffset && direction < 0) return;
+    loadEventHistory(nextOffset);
+  }
+
+  function renderEventDetails(event) {
+    const pre = document.getElementById("events-detail");
+    if (!pre) return;
+    if (!event) {
+      pre.textContent = "Select an event row to inspect its details.";
+      return;
+    }
+    const sections = [];
+    // Header
+    const upstream = event.raw_output_tokens || 0;
+    const returned = event.output_tokens || 0;
+    const saved = upstream - returned;
+    const savedStr = saved < 0 ? `(${Math.abs(saved)})` : String(saved);
+    sections.push(`── Event: ${event.event_id} ──`);
+    sections.push(`Time:      ${event.ts ? new Date(event.ts * 1000).toISOString() : '—'}`);
+    sections.push(`Backend:   ${event.backend || '—'}`);
+    sections.push(`Method:    ${event.method || '—'}`);
+    sections.push(`Tool:      ${event.tool || '—'}`);
+    sections.push(`Qualified: ${event.qualified || '—'}`);
+    sections.push(`Latency:   ${event.latency_ms || 0} ms`);
+    sections.push(`Input:     ${event.input_tokens || 0} tokens`);
+    sections.push(`Upstream:  ${upstream} tokens`);
+    sections.push(`Returned:  ${returned} tokens`);
+    sections.push(`Saved:     ${savedStr} tokens`);
+    if (event.transform_type) sections.push(`Transform: ${event.transform_type}`);
+    if (event.error) sections.push(`Error:     ${event.error_message || 'yes'}`);
+    sections.push('');
+
+    // Input message
+    sections.push('── Input Message ──');
+    if (event.input_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.input_text), null, 2)); }
+      catch(e) { sections.push(event.input_text); }
+    } else {
+      sections.push('(no input)');
+    }
+    sections.push('');
+
+    // Upstream message (raw from backend, before transforms)
+    sections.push('── Upstream Message (raw from backend) ──');
+    if (event.upstream_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.upstream_text), null, 2)); }
+      catch(e) { sections.push(event.upstream_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Returned message (after transforms, sent to IDE/LLM)
+    sections.push('── Returned Message (sent to IDE) ──');
+    if (event.returned_text) {
+      try { sections.push(JSON.stringify(JSON.parse(event.returned_text), null, 2)); }
+      catch(e) { sections.push(event.returned_text); }
+    } else {
+      sections.push('(not captured)');
+    }
+    sections.push('');
+
+    // Meta
+    if (event.meta) {
+      sections.push('── Meta ──');
+      sections.push(JSON.stringify(event.meta, null, 2));
+    }
+    pre.textContent = sections.join('\\n');
+  }
+
+  function selectEvent(eventId) {
+    currentEventSelectionId = eventId;
+    const page = currentEventsPage || { events: [] };
+    const event = (page.events || []).find((row) => row.event_id === eventId) || null;
+    renderEventDetails(event);
+    document.querySelectorAll("#events-body tr[data-event-id]").forEach((row) => {
+      row.classList.toggle("is-selected", row.dataset.eventId === eventId);
+    });
+  }
+
+  function renderEventsPage(page) {
+    currentEventsPage = page;
+    const meta = document.getElementById("events-meta");
+    const status = document.getElementById("events-status");
+    const body = document.getElementById("events-body");
+    const prev = document.getElementById("events-prev");
+    const next = document.getElementById("events-next");
+    if (!body) return;
+
+    const rows = page.events || [];
+    const total = page.total || 0;
+    const start = total ? eventsPageOffset + 1 : 0;
+    const end = Math.min(total, eventsPageOffset + rows.length);
+    if (meta) {
+      const retention = page.retention_hours ? `retention ${page.retention_hours}h` : "retention —";
+      meta.textContent = `${retention} • ${fmtNum(total)} total`;
+    }
+    if (status) {
+      status.textContent = total
+        ? `Showing ${fmtNum(start)}–${fmtNum(end)} of ${fmtNum(total)} events`
+        : "No matching events.";
+    }
+    if (prev) prev.disabled = eventsPageOffset <= 0;
+    if (next) next.disabled = (eventsPageOffset + rows.length) >= total;
+
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="9" class="empty-cell">No matching proxy events.</td></tr>';
+      currentEventSelectionId = null;
+      renderEventDetails(null);
+      return;
+    }
+
+    body.innerHTML = rows.map((row) => {
+      const upstream = row.raw_output_tokens || 0;
+      const returned = row.output_tokens || 0;
+      const saved = upstream - returned;
+      const savedStr = saved < 0 ? `(${fmtNum(Math.abs(saved))})` : fmtNum(saved);
+      const ts = row.ts ? new Date(row.ts * 1000).toLocaleTimeString() : "—";
+      const qualified = row.qualified || row.tool || row.method || "—";
+      const rowClass = row.error ? "is-error" : "";
+      return `
+        <tr class="${rowClass}" data-event-id="${escapeHtml(row.event_id)}" onclick="selectEvent('${escapeHtml(row.event_id)}')">
+          <td>${escapeHtml(ts)}</td>
+          <td>${escapeHtml(row.backend || "—")}</td>
+          <td><code>${escapeHtml(row.method || "—")}</code></td>
+          <td><code>${escapeHtml(qualified)}</code></td>
+          <td class="num">${fmtNum(row.input_tokens || 0)}</td>
+          <td class="num">${fmtNum(upstream)}</td>
+          <td class="num">${fmtNum(returned)}</td>
+          <td class="num">${savedStr}</td>
+          <td class="num">${Number(row.latency_ms || 0).toFixed(0)} ms</td>
+        </tr>`;
+    }).join("");
+
+    const selectionStillVisible = rows.some((row) => row.event_id === currentEventSelectionId);
+    selectEvent(selectionStillVisible ? currentEventSelectionId : rows[0].event_id);
+  }
+
+  async function loadEventHistory(offset) {
+    if (eventsFetchInflight) return;
+    if (typeof offset === "number") eventsPageOffset = Math.max(0, offset);
+    eventsFetchInflight = true;
+    const status = document.getElementById("events-status");
+    if (status) status.textContent = "Loading event history…";
+    try {
+      const filters = currentEventFilters();
+      const params = new URLSearchParams({
+        limit: String(eventsPageLimit),
+        offset: String(eventsPageOffset),
+      });
+      if (filters.backend) params.set("backend", filters.backend);
+      if (filters.method) params.set("method", filters.method);
+      if (filters.tool) params.set("tool", filters.tool);
+      if (filters.errors_only) params.set("errors_only", "1");
+      const r = await fetch(`/api/events?${params.toString()}`);
+      if (r.status === 503) {
+        if (status) status.textContent = "event store not initialised";
+        return;
+      }
+      if (!r.ok) {
+        if (status) status.textContent = "error " + r.status;
+        return;
+      }
+      renderEventsPage(await r.json());
+    } catch (err) {
+      if (status) status.textContent = "error: " + err.message;
+    } finally {
+      eventsFetchInflight = false;
     }
   }
 

@@ -392,7 +392,7 @@ class TestAuthProviderSpecToStatus:
 
 class TestPerBackendAuthProvider:
     def test_provider_only(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -407,7 +407,7 @@ class TestPerBackendAuthProvider:
         assert specs[0].auth_bearer is None
 
     def test_provider_with_audience(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "atlassian": {
                     "type": "streamable-http",
@@ -492,7 +492,7 @@ class TestPerBackendAuthProvider:
     def test_legacy_bearer_still_works(self, monkeypatch):
         monkeypatch.setenv("PAT", "ghp_xxx")
         # Backward compatibility — auth.bearer untouched by PR 2.
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -508,7 +508,7 @@ class TestPerBackendAuthProvider:
 
 class TestServerSpecToStatusForProvider:
     def test_provider_appears_in_status(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -529,7 +529,7 @@ class TestServerSpecToStatusForProvider:
 
     def test_bearer_redacted_alongside_no_provider(self, monkeypatch):
         monkeypatch.setenv("PAT", "ghp_xxx")
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -548,7 +548,7 @@ class TestServerSpecToStatusForProvider:
 
 class TestValidateProviderReferences:
     def test_no_references_no_validation(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "fs": {"command": "uvx", "args": ["server"]},
             }
@@ -557,7 +557,7 @@ class TestValidateProviderReferences:
         validate_provider_references(specs, {})
 
     def test_resolved_reference_passes(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -578,7 +578,7 @@ class TestValidateProviderReferences:
         validate_provider_references(specs, providers)  # No error.
 
     def test_dangling_reference_raises(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",
@@ -592,7 +592,7 @@ class TestValidateProviderReferences:
             validate_provider_references(specs, {})
 
     def test_dangling_reference_lists_available(self):
-        specs, _ = parse_config({
+        specs, _, _ = parse_config({
             "mcpServers": {
                 "github": {
                     "type": "streamable-http",

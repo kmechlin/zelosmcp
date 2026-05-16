@@ -1,5 +1,5 @@
 backend: zelosmcp
-seed_version: 3
+seed_version: 4
 # Global assets for the always-on zelosmcp builtin backend.
 # These are included in every push regardless of which user backends are running.
 
@@ -29,12 +29,12 @@ rules:
 
         Answer these four questions before issuing any tool call. The first matching YES dictates your FIRST tool call:
 
-        1. **Code structure / symbols / behavior?** ("summarize / explain / understand / find / trace / impact / blast radius" of repo, module, function, class) → FIRST call MUST be `pincher__*` (see Mandatory playbook → pincher).
-        2. **Files in the workspace?** ("read / edit / list / search / move / create" a file or directory) → FIRST call MUST be `filesystem__*` (see Mandatory playbook → filesystem).
-        3. **Containers, kubernetes pods, networks, volumes?** → use `docker__*` / `kubernetes__*`. Do NOT shell out for `docker ps`, `kubectl get`, etc.
+        1. **Code structure / symbols / behavior?** ("summarize / explain / understand / find / trace / impact / blast radius" of repo, module, function, class) → if `pincher` is loaded, FIRST call MUST be `pincher__*`. Load the `zelosmcp-pincher` skill (`/zelosmcp-pincher`) for the full workflow.
+        2. **Files in the workspace?** ("read / edit / list / search / move / create" a file or directory) → if `filesystem` is loaded, use `filesystem__*`. Load the `zelosmcp-filesystem` skill (`/zelosmcp-filesystem`) for the full workflow.
+        3. **Other MCP-covered tasks?** (containers, pods, networks, volumes, images, etc.) → Check the tool catalog sections below. Use the relevant backend tools before falling back to shell.
         4. **None of the above?** You may use `Shell` / `Read` / `Grep`, but only after stating which question you answered NO to and why no MCP tool fits.
 
-    compressed_rules_read_only:
+    compressed_rules:
       body: |
         ## Compressed backends
 
@@ -44,21 +44,9 @@ rules:
 
         1. **Discover:** browse the compact catalog embedded in `<backend>__get_tool_schema`'s description, or call `<backend>__search_tools(query="...", limit=5)` for targeted search by name / description.
         2. **Schema (optional):** `<backend>__get_tool_schema(tool_name="...")` returns the full JSON schema for one underlying tool.
-        3. **Invoke:** `<backend>__invoke_tool(tool_name="...", tool_input={...})`. Results are forwarded verbatim — identical to calling the tool directly. In read-only mode, do NOT invoke tools tagged `[mutates]`, `[destructive]`, or `[?]` via the wrapper.
+        3. **Invoke:** `<backend>__invoke_tool(tool_name="...", tool_input={...})`. Results are forwarded verbatim — identical to calling the tool directly.
 
-        Underlying tool names and per-tool descriptions are listed in each compressed backend's section below under **Underlying tools**.
-
-    compressed_rules_read_write:
-      body: |
-        ## Compressed backends
-
-        One or more backends below expose their tools via a **compressed wrapper trio** at `/mcp` instead of their full tool surface. The actual callable tools for these backends are `<backend>__get_tool_schema`, `<backend>__search_tools`, and `<backend>__invoke_tool` (or `<backend>__list_tools` at level=max).
-
-        **Do NOT call underlying tool names directly** (e.g. `pincher__architecture`) — the aggregator rejects them with "unknown tool". Use the wrapper pattern:
-
-        1. **Discover:** browse the compact catalog embedded in `<backend>__get_tool_schema`'s description, or call `<backend>__search_tools(query="...", limit=5)` for targeted search by name / description.
-        2. **Schema (optional):** `<backend>__get_tool_schema(tool_name="...")` returns the full JSON schema for one underlying tool.
-        3. **Invoke:** `<backend>__invoke_tool(tool_name="...", tool_input={...})`. Confirm with the user before invoking any underlying tool tagged `[destructive]`.
+        In **read-only** mode, do NOT invoke tools tagged `[mutates]`, `[destructive]`, or `[?]` via the wrapper. In **read-write** mode, confirm with the user before invoking any `[destructive]` tool.
 
         Underlying tool names and per-tool descriptions are listed in each compressed backend's section below under **Underlying tools**.
 
@@ -67,3 +55,42 @@ extensions: {}
 agents: {}
 
 hooks: {}
+
+skills:
+  zelosmcp-onboarding:
+    description: >-
+      Understand available zelosMCP backends, their tools, and calling
+      conventions. Use when asked about setup, available tools, getting
+      started, or how to use zelosMCP.
+    targets: [cursor, vscode]
+    body: |
+      # zelosMCP Onboarding
+
+      zelosMCP is an MCP aggregator proxy. It unifies multiple MCP backends
+      behind a single endpoint at `http://localhost:8000/mcp`.
+
+      ## Tool naming convention
+
+      Every tool is namespaced as `<backend>__<tool>` (double underscore).
+      The aggregator routes the call to the correct backend.
+
+      ## Compressed vs direct backends
+
+      Some backends are wire-compressed: their tools are only reachable via
+      a wrapper trio (`<backend>__get_tool_schema`, `<backend>__search_tools`,
+      `<backend>__invoke_tool`). Do NOT call underlying tool names directly
+      for compressed backends — use `invoke_tool(tool_name="...", tool_input={...})`.
+
+      ## Access modes
+
+      Rules are generated with either `read-only` or `read-write` access.
+      - **Read-only**: Do not call tools tagged `[mutates]`, `[destructive]`, or `[?]`.
+      - **Read-write**: Confirm with the user before calling `[destructive]` tools.
+
+      ## Managing rules and assets
+
+      Visit the zelosMCP web UI at `http://localhost:8000` to:
+      - Start/stop backends
+      - Regenerate rules with different access modes
+      - Edit per-backend tool instructions, skills, agents, and hooks
+      - Push updated files to your repo

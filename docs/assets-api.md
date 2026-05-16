@@ -35,7 +35,7 @@ Returns every row optionally filtered by query parameters.
 
 | Param | Type | Default | Effect |
 |---|---|---|---|
-| `kind` | string | (none) | Filter to one kind: `rule`, `extension`, `agent`, or `hook`. |
+| `kind` | string | (none) | Filter to one kind: `rule`, `extension`, `agent`, `hook`, or `skill`. |
 | `backend` | string | (none) | Filter to one backend name. |
 | `target` | string | (none) | Filter to one target: `""` (both), `"cursor"`, or `"vscode"`. |
 
@@ -77,8 +77,9 @@ Returns the list of registered asset kind descriptors.
 [
   { "id": "rule",      "label": "Rules",      "description": "Cursor .mdc and VS Code copilot-instructions.md rule content..." },
   { "id": "extension", "label": "Extensions", "description": "UI action buttons that invoke MCP tools or open links..." },
-  { "id": "agent",     "label": "Agents",     "description": "Cursor Subagent / Skill definitions..." },
-  { "id": "hook",      "label": "Hooks",      "description": "Cursor hook entries (event → command)..." }
+  { "id": "agent",     "label": "Agents",     "description": "Agent persona definitions with system prompts and tool restrictions..." },
+  { "id": "hook",      "label": "Hooks",      "description": "Cursor hook entries (event → command)..." },
+  { "id": "skill",     "label": "Skills",     "description": "Domain knowledge skill definitions loaded on demand by task relevance..." }
 ]
 ```
 
@@ -93,7 +94,7 @@ Returns store-wide statistics.
 ```json
 {
   "total": 42,
-  "by_kind": { "rule": 28, "extension": 6, "agent": 4, "hook": 4 },
+  "by_kind": { "rule": 28, "extension": 6, "agent": 4, "hook": 4, "skill": 2 },
   "by_source": { "seed": 38, "user": 4 }
 }
 ```
@@ -158,6 +159,7 @@ extensions:
     ...
 agents: {}
 hooks: {}
+skills: {}
 ```
 
 **Example**
@@ -397,7 +399,7 @@ The `filesystem` backend must be running.
 
 The high-level push endpoint used by the **Push rules**, **Push agents**, and **Push hooks** buttons. It collects assets from the `zelosmcp` global backend **and** every currently-running user backend, then writes the combined result to the target repo.
 
-**Path params**: `kind` — `rule`, `agent`, or `hook`. Extensions are not pushable.
+**Path params**: `kind` — `rule`, `agent`, `hook`, or `skill`. Extensions are not pushable.
 
 **Request body (JSON)**
 
@@ -461,6 +463,11 @@ curl -sS -X POST 'http://localhost:8000/api/assets/push/agent' \
 
 # Merge all hooks
 curl -sS -X POST 'http://localhost:8000/api/assets/push/hook' \
+  -H 'Content-Type: application/json' \
+  -d '{"repo": "workspace/myrepo"}' | jq
+
+# Push all skills
+curl -sS -X POST 'http://localhost:8000/api/assets/push/skill' \
   -H 'Content-Type: application/json' \
   -d '{"repo": "workspace/myrepo"}' | jq
 ```

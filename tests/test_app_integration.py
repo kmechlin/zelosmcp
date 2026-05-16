@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from zelosmcp.app import create_app
+from zelosmcp.app import create_app, _prefix_openapi_path
 from zelosmcp.manager import ProxyManager
 from tests.conftest import (
     fake_stdio_client,
@@ -116,6 +116,71 @@ class TestUIRoute:
             r = await c.get("/")
         assert 'data-view="docs"' in r.text
         assert "loadDocsIndex" in r.text
+
+    @pytest.mark.asyncio
+    async def test_index_has_events_view(self):
+        app, _ = _fresh()
+        async with _client(app) as c:
+            r = await c.get("/")
+        assert 'data-view="events"' in r.text
+        assert "loadEventHistory" in r.text
+
+
+class TestEventsAPI:
+    @pytest.mark.asyncio
+    async def test_events_page_and_summary(self):
+        app, manager = _fresh()
+        await manager.start_savings(":memory:")
+        assert manager.events is not None
+        await manager.events.record_event(
+            event_id="evt-1",
+            method="tools/call",
+            backend="docker",
+            tool="list_containers",
+            qualified="docker__list_containers",
+            compressed=True,
+            input_payload={"all": True},
+            output_payload={"count": 2},
+            raw_output_tokens=18,
+            raw_output_bytes=64,
+            transform_type="toon",
+            latency_ms=9,
+            error=False,
+        )
+
+        async with _client(app) as c:
+            page = await c.get(
+                "/api/events",
+                params={"backend": "docker", "limit": 10},
+            )
+            summary = await c.get("/api/events/summary")
+            savings = await c.get("/api/savings")
+            retention = await c.get("/api/events/retention")
+
+        assert page.status_code == 200
+        assert page.json()["total"] == 1
+        assert page.json()["events"][0]["event_id"] == "evt-1"
+        assert page.json()["filters"]["backend"] == "docker"
+
+        assert summary.status_code == 200
+        payload = summary.json()
+        assert payload["totals"]["events"] == 1
+        assert payload["totals"]["calls"] == 1
+        assert payload["totals"]["raw_output_tokens"] == 18
+        assert payload["top_tools"][0]["qualified"] == "docker__list_containers"
+
+        assert savings.status_code == 200
+        savings_payload = savings.json()
+        assert savings_payload["calls"]["totals"]["transactions"] == 1
+        assert savings_payload["calls"]["totals"]["raw_output_tokens"] == 18
+        assert savings_payload["response_transform_saved_tokens_total"] > 0
+        assert savings_payload["calls"]["top_tools"][0]["tokens"] >= 18
+
+        assert retention.status_code == 200
+        retention_payload = retention.json()
+        assert retention_payload["retention_hours"] == manager.event_retention_hours
+        assert retention_payload["prune_interval_mins"] == manager.event_prune_interval_mins
+        assert retention_payload["oldest_event_at"] is not None
 
     @pytest.mark.asyncio
     async def test_index_has_server_details_view(self):
@@ -235,6 +300,88 @@ class TestOpenAPI:
         assert "alpha_SearchRequest" in spec["components"]["schemas"]
         assert captured["url"] == "http://upstream.test/v1/openapi.json"
         assert captured["headers"]["x-forwarded-prefix"] == "/alpha"
+
+    # ── _prefix_openapi_path unit tests ──────────────────────────────────
+
+    def test_prefix_plain_path(self):
+        """Standard case: upstream path has no mount prefix yet."""
+        assert _prefix_openapi_path("/pincher", "/v1/adr") == "/pincher/v1/adr"
+
+    def test_prefix_strips_duplicate_mount(self):
+        """Upstream that self-reports its mount prefix must not double it."""
+        assert _prefix_openapi_path("/pincher", "/pincher/v1/adr") == "/pincher/v1/adr"
+
+    def test_prefix_strips_duplicate_mount_nested(self):
+        assert _prefix_openapi_path("/alpha", "/alpha/v1/search") == "/alpha/v1/search"
+
+    def test_prefix_root_path(self):
+        assert _prefix_openapi_path("/alpha", "/") == "/alpha"
+
+    def test_prefix_exact_mount_path(self):
+        # Upstream exposes its root as the mount path itself.
+        assert _prefix_openapi_path("/alpha", "/alpha") == "/alpha/alpha"
+
+    def test_prefix_does_not_strip_partial_overlap(self):
+        # '/alphabeta' should NOT strip '/alpha'.
+        assert _prefix_openapi_path("/alpha", "/alphabeta/v1") == "/alpha/alphabeta/v1"
+
+    def test_prefix_no_leading_slash_in_path(self):
+        assert _prefix_openapi_path("/alpha", "v1/items") == "/alpha/v1/items"
+
+    # ── integration: duplicate-mount path regression ──────────────────────
+
+    @pytest.mark.asyncio
+    async def test_openapi_does_not_double_prefix_when_upstream_includes_mount(self):
+        """Regression test: upstream returning /pincher/v1/... paths must not
+        become /pincher/pincher/v1/... in the merged spec."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "openapi": "3.0.3",
+                    "info": {"title": "Pincher", "version": "1.0.0"},
+                    "paths": {
+                        # Upstream self-reports its mount prefix in path keys.
+                        "/pincher/v1/adr": {
+                            "post": {
+                                "summary": "Store ADR",
+                                "responses": {"200": {"description": "OK"}},
+                            }
+                        }
+                    },
+                },
+            )
+
+        cfg = {
+            "mcpServers": {
+                "pincher": {
+                    "command": "echo",
+                    "args": ["p"],
+                    "reverseProxy": {
+                        "mount": "/pincher",
+                        "upstream": "http://pincher.test",
+                        "openapi": {"path": "/v1/openapi.json"},
+                    },
+                },
+            }
+        }
+
+        with _apply_patches()[1], _apply_patches()[2], _apply_patches()[3], _apply_patches()[4], _apply_patches()[5]:
+            app, manager = _fresh()
+            async with _lifespan(app):
+                _install_mock_upstream(manager, handler)
+                async with _client(app) as c:
+                    await c.post("/api/start", json=cfg)
+                    r = await c.get("/openapi.json")
+
+        assert r.status_code == 200
+        spec = r.json()
+        paths = spec["paths"]
+        # Must appear exactly once under the correct key.
+        assert "/pincher/v1/adr" in paths
+        # Must NOT be doubled.
+        assert "/pincher/pincher/v1/adr" not in paths
 
     @pytest.mark.asyncio
     async def test_openapi_json_survives_upstream_contract_failure(self):
@@ -1197,7 +1344,7 @@ class TestReverseProxy:
             # Skip _apply_patches so start_all is never called — the spec is
             # injected directly into _specs but no ProxyState exists.
             from zelosmcp.config import parse_config
-            specs, _ = parse_config(_PROXY_CONFIG)
+            specs, _, _ = parse_config(_PROXY_CONFIG)
             manager._specs = {s.name: s for s in specs}
 
             async with _client(app) as c:

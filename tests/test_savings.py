@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+import time
 
 import pytest
 
 from mcp.types import TextContent
 
 from zelosmcp.savings import (
+    EventRecorder,
     SavingsRecorder,
     TokenCounter,
     extract_pincher_meta,
@@ -140,7 +141,10 @@ async def test_recorder_records_compression_snapshot():
         assert row["backend"] == "pincher"
         assert row["level"] == "medium"
         assert row["raw_tokens"] > row["compressed_tokens"]
-        assert row["saved_tokens"] == row["raw_tokens"] - row["compressed_tokens"]
+        assert (
+            row["saved_tokens"]
+            == row["raw_tokens"] - row["compressed_tokens"]
+        )
         assert row["saved_pct"] > 0
     finally:
         await store.close()
@@ -200,6 +204,161 @@ async def test_non_pincher_call_does_not_record_meta():
 
 
 @pytest.mark.asyncio
+async def test_proxy_events_round_trip_filters_and_prune():
+    store = SavingsStore(":memory:")
+    await store.open()
+    try:
+        await store.insert_event(
+            event_id="evt-1",
+            method="tools/call",
+            backend="docker",
+            tool="list_containers",
+            qualified="docker__list_containers",
+            compressed=True,
+            input_tokens=5,
+            output_tokens=10,
+            raw_output_tokens=20,
+            raw_output_bytes=40,
+            transform_type="toon",
+            latency_ms=12,
+            error=False,
+            error_message=None,
+            meta={"count": 2},
+        )
+        await store.insert_event(
+            event_id="evt-2",
+            method="tools/list",
+            backend="pincher",
+            tool=None,
+            qualified=None,
+            compressed=False,
+            input_tokens=1,
+            output_tokens=2,
+            raw_output_tokens=None,
+            raw_output_bytes=None,
+            transform_type=None,
+            latency_ms=3,
+            error=True,
+            error_message="boom",
+            meta={"tools": 22},
+        )
+
+        docker_page = await store.query_events(backend="docker")
+        assert docker_page["total"] == 1
+        assert docker_page["events"][0]["event_id"] == "evt-1"
+        assert docker_page["events"][0]["compressed"] is True
+        assert docker_page["events"][0]["meta"] == {"count": 2}
+
+        filtered = await store.query_events(
+            method="tools/list",
+            errors_only=True,
+        )
+        assert filtered["total"] == 1
+        assert filtered["events"][0]["event_id"] == "evt-2"
+        assert filtered["events"][0]["error"] is True
+
+        deleted = await store.prune_before(time.time() + 1)
+        assert deleted == 2
+        remaining = await store.query_events()
+        assert remaining["total"] == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_events_summary_aggregates_transform_savings():
+    store = SavingsStore(":memory:")
+    await store.open()
+    try:
+        await store.insert_event(
+            event_id="evt-1",
+            method="tools/call",
+            backend="docker",
+            tool="list_containers",
+            qualified="docker__list_containers",
+            compressed=True,
+            input_tokens=5,
+            output_tokens=10,
+            raw_output_tokens=20,
+            raw_output_bytes=40,
+            transform_type="toon",
+            latency_ms=12,
+            error=False,
+            error_message=None,
+            meta=None,
+        )
+        await store.insert_event(
+            event_id="evt-2",
+            method="tools/list",
+            backend="pincher",
+            tool=None,
+            qualified=None,
+            compressed=False,
+            input_tokens=1,
+            output_tokens=2,
+            raw_output_tokens=None,
+            raw_output_bytes=None,
+            transform_type=None,
+            latency_ms=3,
+            error=True,
+            error_message="boom",
+            meta=None,
+        )
+
+        summary = await store.summarize_events()
+
+        assert summary["totals"]["events"] == 2
+        assert summary["totals"]["calls"] == 1
+        assert summary["totals"]["errors"] == 1
+        assert summary["totals"]["raw_output_tokens"] == 20
+        assert summary["totals"]["transform_saved_tokens"] == 10
+        assert summary["totals"]["transform_saved_pct"] == 50.0
+        assert summary["per_method"][0]["method"] == "tools/call"
+        assert summary["top_tools"][0]["qualified"] == "docker__list_containers"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_event_recorder_persists_and_broadcasts_event():
+    store = SavingsStore(":memory:")
+    await store.open()
+    try:
+        recorder = EventRecorder(store=store, counter=TokenCounter())
+        queue = recorder.subscribe()
+
+        await recorder.record_event(
+            event_id="evt-3",
+            method="tools/call",
+            backend="pincher",
+            tool="search",
+            qualified="pincher__search",
+            compressed=False,
+            input_payload={"query": "auth"},
+            output_payload={"matches": 3},
+            raw_output_tokens=25,
+            raw_output_bytes=50,
+            transform_type="toon",
+            latency_ms=18,
+            error=False,
+            meta={"source": "test"},
+        )
+
+        line = await queue.get()
+        payload = json.loads(line)
+        assert payload["event_id"] == "evt-3"
+        assert payload["method"] == "tools/call"
+        assert payload["input_tokens"] > 0
+        assert payload["output_tokens"] > 0
+
+        stored = await store.query_events(tool="search")
+        assert stored["total"] == 1
+        assert stored["events"][0]["meta"] == {"source": "test"}
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_snapshot_excludes_zelosmcp_from_totals():
     store = SavingsStore(":memory:")
     await store.open()
@@ -214,7 +373,12 @@ async def test_snapshot_excludes_zelosmcp_from_totals():
                 backend=backend, tool=tool,
                 qualified=f"{backend}__{tool}",
                 compressed=False,
-                arguments={}, result=FakeResult(content=[], structuredContent=None, isError=False),
+                arguments={},
+                result=FakeResult(
+                    content=[],
+                    structuredContent=None,
+                    isError=False,
+                ),
                 latency_ms=1, error=False,
             )
         snap = await recorder.snapshot()
@@ -232,7 +396,11 @@ async def test_measure_call_records_latency_and_passes_through_result():
     await store.open()
     try:
         recorder = SavingsRecorder(store=store, counter=TokenCounter())
-        sentinel = FakeResult(content=[], structuredContent=None, isError=False)
+        sentinel = FakeResult(
+            content=[],
+            structuredContent=None,
+            isError=False,
+        )
 
         async def dispatch():
             await asyncio.sleep(0.01)
@@ -277,6 +445,48 @@ async def test_measure_call_records_error_when_dispatch_raises():
         totals = await store.fetch_call_totals()
         assert totals["calls"] == 1
         assert totals["errors"] == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_measure_call_records_proxy_event_when_event_recorder_present():
+    store = SavingsStore(":memory:")
+    await store.open()
+    try:
+        savings = SavingsRecorder(store=store, counter=TokenCounter())
+        events = EventRecorder(store=store, counter=TokenCounter())
+        sentinel = FakeResult(
+            content=[], structuredContent=None, isError=False
+        )
+
+        async def dispatch():
+            return sentinel
+
+        raw_output_tokens = 23
+        raw_output_bytes = 99
+        transform_type = "toon"
+
+        ret = await measure_call(
+            recorder=savings,
+            event_recorder=events,
+            backend="filesystem",
+            tool="read_text_file",
+            qualified="filesystem__read_text_file",
+            compressed=True,
+            arguments={"path": "/etc/hosts"},
+            dispatch=dispatch,
+            raw_output_tokens_provider=lambda: raw_output_tokens,
+            raw_output_bytes_provider=lambda: raw_output_bytes,
+            transform_type_provider=lambda: transform_type,
+        )
+
+        assert ret is sentinel
+        page = await store.query_events(tool="read_text_file")
+        assert page["total"] == 1
+        assert page["events"][0]["raw_output_tokens"] == raw_output_tokens
+        assert page["events"][0]["raw_output_bytes"] == raw_output_bytes
+        assert page["events"][0]["transform_type"] == transform_type
     finally:
         await store.close()
 

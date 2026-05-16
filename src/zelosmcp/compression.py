@@ -157,9 +157,9 @@ def make_get_schema_wrapper(
 ) -> Tool:
     """Build the ``get_tool_schema`` wrapper Tool.
 
-    The wrapper's description embeds the compressed catalog (one line per
-    underlying tool) so the LLM can browse without round-trips. Required
-    arg: ``tool_name``.
+    The wrapper's description lists available tool names (without
+    per-tool descriptions) so the LLM can pick one without paying
+    tokens for the full catalog.  Required arg: ``tool_name``.
 
     When ``auth_pending=True`` (passthrough backend with no cached
     upstream catalog yet), the inline catalog is replaced with a notice
@@ -172,11 +172,11 @@ def make_get_schema_wrapper(
             f"{label}.\n\n{_AUTH_PENDING_NOTE}"
         )
     else:
-        catalog = _render_catalog(tools, level)
+        names = ", ".join(t.name for t in tools)
         description = (
             f"Return the full JSON schema for one tool exposed by {label}. "
-            f"Pass `tool_name` exactly as listed in the catalog below.\n\n"
-            f"Catalog ({len(tools)} tools, level={level}):\n{catalog}"
+            f"Pass `tool_name` exactly as listed below.\n\n"
+            f"Catalog ({len(tools)} tools): {names}"
         )
     return Tool(
         name=_wrapper_name(prefix, "get_tool_schema"),

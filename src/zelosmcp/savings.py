@@ -23,6 +23,7 @@ import json
 import logging
 import time
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from zelosmcp.savings_db import SavingsStore
 
@@ -218,6 +219,129 @@ def render_call_output_text(call_result: Any) -> str:
     return "".join(parts)
 
 
+def to_wire_payload(payload: Any) -> Any:
+    if payload is None or isinstance(payload, (str, int, float, bool)):
+        return payload
+    if isinstance(payload, dict):
+        return {
+            str(key): to_wire_payload(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, (list, tuple)):
+        return [to_wire_payload(item) for item in payload]
+    if hasattr(payload, "model_dump"):
+        try:
+            return payload.model_dump(by_alias=True, exclude_none=True)
+        except TypeError:
+            return payload.model_dump()
+        except Exception:
+            return payload
+    return payload
+
+
+# Max payload text stored per field to avoid DB bloat.
+_MAX_PAYLOAD_TEXT = 32 * 1024
+
+
+def _payload_to_text(payload: Any) -> str | None:
+    """Serialize a payload to a JSON string for storage, capped to avoid bloat."""
+    if payload is None:
+        return None
+    wire = to_wire_payload(payload)
+    try:
+        text = json.dumps(wire, default=str, ensure_ascii=False)
+    except Exception:
+        text = str(wire)
+    if len(text) > _MAX_PAYLOAD_TEXT:
+        text = text[:_MAX_PAYLOAD_TEXT] + "…(truncated)"
+    return text
+
+
+async def measure_event(
+    *,
+    recorder: EventRecorder | None,
+    method: str,
+    backend: str | None,
+    tool: str | None = None,
+    qualified: str | None = None,
+    compressed: bool = False,
+    input_payload: Any = None,
+    dispatch: Callable[[], Awaitable[Any]],
+    backend_provider: Callable[[], str | None] | None = None,
+    tool_provider: Callable[[], str | None] | None = None,
+    qualified_provider: Callable[[], str | None] | None = None,
+    compressed_provider: Callable[[], bool | None] | None = None,
+    output_payload_provider: Callable[[Any], Any] | None = None,
+    meta_provider: Callable[[Any], dict[str, Any] | None] | None = None,
+) -> Any:
+    if recorder is None:
+        return await dispatch()
+    started = time.perf_counter()
+    err = False
+    result: Any = None
+    caught: BaseException | None = None
+    try:
+        result = await dispatch()
+        err = bool(getattr(result, "isError", False))
+        return result
+    except BaseException as exc:
+        err = True
+        caught = exc
+        raise
+    finally:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            payload = (
+                output_payload_provider(result)
+                if output_payload_provider is not None else result
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("event output payload swallowed: %s", exc)
+            payload = result
+        try:
+            meta = meta_provider(result) if meta_provider is not None else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("event meta swallowed: %s", exc)
+            meta = None
+        try:
+            resolved_compressed = (
+                compressed_provider()
+                if compressed_provider is not None else None
+            )
+            # For non-call events no transform is applied, so upstream = returned.
+            input_text = _payload_to_text(input_payload)
+            output_text = _payload_to_text(payload)
+            await recorder.record_event(
+                event_id=uuid4().hex,
+                method=method,
+                backend=(
+                    backend_provider()
+                    if backend_provider is not None else backend
+                ),
+                tool=(
+                    tool_provider()
+                    if tool_provider is not None else tool
+                ),
+                qualified=(
+                    qualified_provider()
+                    if qualified_provider is not None else qualified
+                ),
+                compressed=(
+                    resolved_compressed
+                    if resolved_compressed is not None else compressed
+                ),
+                input_payload=input_payload,
+                output_payload=payload,
+                latency_ms=latency_ms,
+                error=err,
+                error_message=str(caught) if caught is not None else None,
+                meta=meta,
+                input_text=input_text,
+                upstream_text=output_text,
+                returned_text=output_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("event record swallowed: %s", exc)
 # ── Recorder ────────────────────────────────────────────────────────────
 
 
@@ -238,7 +362,11 @@ _INLINE_TOKEN_LIMIT = 64 * 1024
 class SavingsRecorder:
     """Writes savings data through the SQLite store and broadcasts events."""
 
-    def __init__(self, store: SavingsStore, counter: TokenCounter | None = None) -> None:
+    def __init__(
+        self,
+        store: SavingsStore,
+        counter: TokenCounter | None = None,
+    ) -> None:
         self.store = store
         self.counter = counter or TokenCounter()
         self._subscribers: list[asyncio.Queue[str]] = []
@@ -274,7 +402,7 @@ class SavingsRecorder:
             return max(1, len(payload_text) // 4)
         try:
             return self.counter.count_text(payload_text)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return max(1, len(payload_text) // 4)
 
     async def record_compression(
@@ -429,18 +557,186 @@ class SavingsRecorder:
         }
 
 
+class EventRecorder:
+    """Writes per-transaction proxy events and broadcasts them."""
+
+    def __init__(
+        self,
+        store: SavingsStore,
+        counter: TokenCounter | None = None,
+    ) -> None:
+        self.store = store
+        self.counter = counter or TokenCounter()
+        self._subscribers: list[asyncio.Queue[str]] = []
+
+    def subscribe(self) -> asyncio.Queue[str]:
+        q: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue[str]) -> None:
+        try:
+            self._subscribers.remove(q)
+        except ValueError:
+            pass
+
+    def _broadcast(self, event: dict[str, Any]) -> None:
+        line = json.dumps(event, default=str)
+        for q in list(self._subscribers):
+            try:
+                q.put_nowait(line)
+            except asyncio.QueueFull:
+                pass
+
+    def _count_safely(self, payload_text: str) -> int:
+        if not payload_text:
+            return 0
+        if len(payload_text) > _INLINE_TOKEN_LIMIT:
+            return max(1, len(payload_text) // 4)
+        try:
+            return self.counter.count_text(payload_text)
+        except Exception:
+            return max(1, len(payload_text) // 4)
+
+    def count_payload(self, payload: Any) -> int:
+        if payload is None:
+            return 0
+        if isinstance(payload, str):
+            return self._count_safely(payload)
+        payload = to_wire_payload(payload)
+        try:
+            payload_text = json.dumps(payload, default=str, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            payload_text = str(payload)
+        return self._count_safely(payload_text)
+
+    async def record_event(
+        self,
+        *,
+        event_id: str,
+        method: str,
+        backend: str | None,
+        tool: str | None,
+        qualified: str | None,
+        compressed: bool,
+        input_payload: Any = None,
+        output_payload: Any = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        raw_output_tokens: int | None = None,
+        raw_output_bytes: int | None = None,
+        transform_type: str | None = None,
+        latency_ms: int | None = None,
+        error: bool = False,
+        error_message: str | None = None,
+        meta: dict[str, Any] | None = None,
+        input_text: str | None = None,
+        upstream_text: str | None = None,
+        returned_text: str | None = None,
+    ) -> None:
+        ts = time.time()
+        counted_input = (
+            input_tokens
+            if input_tokens is not None else self.count_payload(input_payload)
+        )
+        counted_output = (
+            output_tokens
+            if output_tokens is not None
+            else self.count_payload(output_payload)
+        )
+        # Default upstream tokens to output tokens when no transform applied.
+        effective_raw = (
+            raw_output_tokens
+            if raw_output_tokens is not None else counted_output
+        )
+        try:
+            await self.store.insert_event(
+                event_id=event_id,
+                method=method,
+                backend=backend,
+                tool=tool,
+                qualified=qualified,
+                compressed=compressed,
+                input_tokens=counted_input,
+                output_tokens=counted_output,
+                raw_output_tokens=effective_raw,
+                raw_output_bytes=raw_output_bytes,
+                transform_type=transform_type,
+                latency_ms=latency_ms,
+                error=error,
+                error_message=error_message,
+                meta=meta,
+                input_text=input_text,
+                upstream_text=upstream_text,
+                returned_text=returned_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("record_event(%s) write failed: %s", event_id, exc)
+            return
+        self._broadcast({
+            "event_id": event_id,
+            "ts": ts,
+            "method": method,
+            "backend": backend,
+            "tool": tool,
+            "qualified": qualified,
+            "compressed": compressed,
+            "input_tokens": counted_input,
+            "output_tokens": counted_output,
+            "raw_output_tokens": effective_raw,
+            "raw_output_bytes": raw_output_bytes,
+            "transform_type": transform_type,
+            "latency_ms": latency_ms,
+            "error": error,
+            "error_message": error_message,
+            "meta": meta,
+        })
+
+    async def query_events(
+        self,
+        *,
+        backend: str | None = None,
+        method: str | None = None,
+        tool: str | None = None,
+        errors_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        return await self.store.query_events(
+            backend=backend,
+            method=method,
+            tool=tool,
+            errors_only=errors_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def summary(
+        self,
+        *,
+        backend: str | None = None,
+        top_n: int = 20,
+    ) -> dict[str, Any]:
+        return await self.store.summarize_events(backend=backend, top_n=top_n)
+
+
 # ── Wrapper helper used by aggregator/proxy instrumentation ─────────────
 
 
 async def measure_call(
     *,
     recorder: SavingsRecorder | None,
+    event_recorder: EventRecorder | None = None,
     backend: str,
     tool: str,
     qualified: str,
     compressed: bool,
     arguments: Any,
     dispatch: Callable[[], Awaitable[Any]],
+    raw_output_tokens_provider: Callable[[], int | None] | None = None,
+    raw_output_bytes_provider: Callable[[], int | None] | None = None,
+    transform_type_provider: Callable[[], str | None] | None = None,
+    upstream_text_provider: Callable[[], str | None] | None = None,
 ) -> Any:
     """Run ``dispatch()`` and route its result through the recorder.
 
@@ -449,30 +745,79 @@ async def measure_call(
     await — handy for paths that must not depend on savings being wired
     up (e.g. tests that don't construct a manager).
     """
-    if recorder is None:
+    if recorder is None and event_recorder is None:
         return await dispatch()
     started = time.perf_counter()
     err = False
     result: Any = None
+    caught: BaseException | None = None
     try:
         result = await dispatch()
         err = bool(getattr(result, "isError", False))
         return result
-    except BaseException:
+    except BaseException as exc:
         err = True
+        caught = exc
         raise
     finally:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        try:
-            await recorder.record_call(
-                backend=backend,
-                tool=tool,
-                qualified=qualified,
-                compressed=compressed,
-                arguments=arguments,
-                result=result,
-                latency_ms=latency_ms,
-                error=err,
-            )
-        except Exception as exc:
-            logger.debug("savings record_call swallowed: %s", exc)
+        if recorder is not None:
+            try:
+                await recorder.record_call(
+                    backend=backend,
+                    tool=tool,
+                    qualified=qualified,
+                    compressed=compressed,
+                    arguments=arguments,
+                    result=result,
+                    latency_ms=latency_ms,
+                    error=err,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("savings record_call swallowed: %s", exc)
+        if event_recorder is not None:
+            try:
+                input_text = _payload_to_text(arguments)
+                # upstream_text is the raw response before transforms
+                raw_upstream = None
+                if upstream_text_provider is not None:
+                    raw_upstream = upstream_text_provider()
+                # Count returned tokens as text content — what the LLM
+                # actually sees (not the CallToolResult wire envelope).
+                try:
+                    returned_content = render_call_output_text(result) if result is not None else ""
+                except Exception:
+                    returned_content = ""
+                returned_tokens = event_recorder.count_payload(returned_content)
+                returned_text = returned_content[:32 * 1024] if returned_content else None
+                await event_recorder.record_event(
+                    event_id=uuid4().hex,
+                    method="tools/call",
+                    backend=backend,
+                    tool=tool,
+                    qualified=qualified,
+                    compressed=compressed,
+                    input_payload=arguments,
+                    output_payload=result,
+                    output_tokens=returned_tokens,
+                    raw_output_tokens=(
+                        raw_output_tokens_provider()
+                        if raw_output_tokens_provider is not None else None
+                    ),
+                    raw_output_bytes=(
+                        raw_output_bytes_provider()
+                        if raw_output_bytes_provider is not None else None
+                    ),
+                    transform_type=(
+                        transform_type_provider()
+                        if transform_type_provider is not None else None
+                    ),
+                    latency_ms=latency_ms,
+                    error=err,
+                    error_message=str(caught) if caught is not None else None,
+                    input_text=input_text,
+                    upstream_text=raw_upstream,
+                    returned_text=returned_text,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("event record swallowed: %s", exc)

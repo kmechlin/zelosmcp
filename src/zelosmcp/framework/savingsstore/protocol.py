@@ -40,6 +40,26 @@ class SavingsStoreProtocol(Protocol):
         error: bool,
     ) -> None: ...
 
+    async def insert_event(
+        self,
+        *,
+        event_id: str,
+        method: str,
+        backend: str | None,
+        tool: str | None,
+        qualified: str | None,
+        compressed: bool,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        raw_output_tokens: int | None,
+        raw_output_bytes: int | None,
+        transform_type: str | None,
+        latency_ms: int | None,
+        error: bool,
+        error_message: str | None,
+        meta: dict[str, Any] | None,
+    ) -> None: ...
+
     async def insert_pincher_meta(
         self,
         *,
@@ -53,13 +73,37 @@ class SavingsStoreProtocol(Protocol):
     async def insert_pincher_stats_snapshot(self, payload: Any) -> None: ...
 
     async def fetch_compression(self) -> list[dict[str, Any]]: ...
+
+    async def prune_before(self, cutoff_ts: float) -> int: ...
+
+    async def query_events(
+        self,
+        *,
+        backend: str | None = None,
+        method: str | None = None,
+        tool: str | None = None,
+        errors_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]: ...
+
+    async def summarize_events(
+        self,
+        *,
+        backend: str | None = None,
+        top_n: int = 20,
+    ) -> dict[str, Any]: ...
+
     async def fetch_call_totals(
         self, *, exclude_backends: tuple[str, ...] = ()
     ) -> dict[str, Any]: ...
+
     async def fetch_per_backend(
         self, *, exclude_backends: tuple[str, ...] = ()
     ) -> list[dict[str, Any]]: ...
+
     async def fetch_top_tools(
         self, *, limit: int = 10, exclude_backends: tuple[str, ...] = ()
     ) -> list[dict[str, Any]]: ...
+
     async def fetch_pincher_totals(self) -> dict[str, Any]: ...
