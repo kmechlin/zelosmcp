@@ -62,6 +62,20 @@
       "compress": {
         "level": "medium"
       }
+    },
+    "mcpdoc": {
+      "command": "uvx",
+      "args": [
+        "--from", "mcpdoc", "mcpdoc",
+        "--urls",
+        "LangGraph:https://langchain-ai.github.io/langgraph/llms.txt",
+        "LangChain:https://python.langchain.com/llms.txt",
+        "--transport", "stdio"
+      ],
+      "started": false,
+      "compress": {
+        "level": "low"
+      }
     }
   }
 }
