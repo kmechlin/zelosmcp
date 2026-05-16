@@ -84,6 +84,21 @@ KNOWN_LLMS_TXT: dict[str, str] = {
 
 This registry is the foundation for Phase 2 and can grow independently of code changes.
 
+### 1e. Verify MCPDoc starts and tools appear in the aggregator
+
+Smoke-test that the full chain works before committing Phase 1 complete:
+
+1. **Start mcpdoc manually** using the exact `command` + `args` from the config entry added in 1b. Confirm it launches without errors and responds to an MCP `initialize` handshake over stdio.
+2. **Start zelosMCP** (or run the integration test harness) with mcpdoc's `started` flipped to `true`. Confirm:
+   - `mcpdoc` appears in the dashboard's server list with status "running"
+   - The aggregator at `/mcp` exposes `mcpdoc__list_doc_sources` and `mcpdoc__fetch_docs` in its `tools/list` response
+3. **Call both tools through the aggregator**:
+   - `mcpdoc__list_doc_sources` returns the URL list from the `--urls` config
+   - `mcpdoc__fetch_docs` with one of the starter URLs returns markdown content
+4. **Reset `started` back to `false`** in the committed config (opt-in default).
+
+If any step fails, fix it before moving to Phase 2. This is the definition of "Phase 1 done".
+
 ---
 
 ## Phase 2: Moonshot -- Auto-discover and configure docs sources
