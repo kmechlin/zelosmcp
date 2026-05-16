@@ -11,18 +11,18 @@ import type {
 } from "../src/types.js";
 
 describe("types", () => {
-  it("MODES contains exactly null, medium, max", () => {
-    expect(MODES).toEqual(["null", "medium", "max"]);
+  it("MODES contains exactly null plus all compression levels", () => {
+    expect(MODES).toEqual(["null", "low", "medium", "high", "max"]);
   });
 
   it("MODES is readonly", () => {
     expect(Object.isFrozen(MODES)).toBe(false);
-    expect(MODES.length).toBe(3);
+    expect(MODES.length).toBe(5);
   });
 
   it("Mode type accepts valid values", () => {
-    const modes: Mode[] = ["null", "medium", "max"];
-    expect(modes).toHaveLength(3);
+    const modes: Mode[] = ["null", "low", "medium", "high", "max"];
+    expect(modes).toHaveLength(5);
   });
 
   it("StaticResult shape is well-typed", () => {

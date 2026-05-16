@@ -1,6 +1,20 @@
-export type Mode = "null" | "medium" | "max";
+export type Mode = "null" | "low" | "medium" | "high" | "max";
 
-export const MODES: readonly Mode[] = ["null", "medium", "max"] as const;
+export const MODES: readonly Mode[] = [
+  "null",
+  "low",
+  "medium",
+  "high",
+  "max",
+] as const;
+
+export type ResponseFormat = "raw" | "toon" | "compact_json";
+
+export const RESPONSE_FORMATS: readonly ResponseFormat[] = [
+  "raw",
+  "toon",
+  "compact_json",
+] as const;
 
 export interface StaticResult {
   mode: Mode;

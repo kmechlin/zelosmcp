@@ -49,6 +49,10 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     ContentBlock,
     ErrorData,
+    GetPromptResult,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
     TextContent,
     Tool,
 )
@@ -409,6 +413,7 @@ def _load_yaml_rule_assets() -> "dict[str, Any]":
             directive_read_only=_s("directive_read_only"),
             directive_read_write=_s("directive_read_write"),
             directive_tool_use_priority=_s("directive_tool_use_priority"),
+            directive_path_translation=_s("directive_path_translation"),
             self_check_gate=_s("self_check_gate"),
             compressed_rules=_s("compressed_rules"),
         )
@@ -473,6 +478,16 @@ def _compressed_wrapper_entries(
     return lines
 
 
+def _render_skill_lines(summaries: list[Any]) -> list[str]:
+    """Render skill summaries as slash-invocation bullets."""
+    lines: list[str] = []
+    for summary in summaries:
+        slug = getattr(summary, "slug", "") or getattr(summary, "name", "")
+        desc = getattr(summary, "description", "") or getattr(summary, "name", "")
+        lines.append(f"- `/{slug}` — {desc}")
+    return lines
+
+
 _DEFAULT_MANDATORY_NAMES: frozenset[str] = frozenset({"filesystem", "pincher"})
 
 
@@ -486,6 +501,7 @@ def render_comprehensive_rule(
     tool_use: str = "priority",
     mandatory_names: set[str] | frozenset[str] | None = None,
     rule_assets: "dict[str, Any] | None" = None,
+    skill_assets: "dict[str, list[Any]] | None" = None,
     compressed_backends: "dict[str, dict[str, Any]] | None" = None,
 ) -> str:
     """Render a comprehensive agent-instructions document from the output
@@ -525,6 +541,11 @@ def render_comprehensive_rule(
     user edits are respected.  Pass ``None`` (the default) to use the
     bundled defaults — required for callers that don't open the store
     (e.g. tests).
+
+    ``skill_assets`` is an optional ``{backend: [SkillSummary, ...]}``
+    dict used to emit the slash-loadable skills that belong to each
+    backend. It is intentionally summary-only so generated rules don't
+    duplicate full skill bodies.
 
     ``compressed_backends`` maps backend names to their compression
     metadata (``{"level": ..., "scope": ...}``) for backends where the
@@ -607,7 +628,9 @@ def render_comprehensive_rule(
             "Cursor entry. Prefer these over shelling out — they return "
             "structured data and keep paths inside the container's "
             "`/user_data_rw` (read-write) and `/user_data_ro` "
-            "(kernel-enforced read-only) mounts."
+            "(kernel-enforced read-only) mounts. Always translate host "
+            "paths to `/user_data_ro/<repo>/...` for reads or "
+            "`/user_data_rw/<repo>/...` for writes before calling tools."
         )
     else:
         intro_paragraph = (
@@ -617,7 +640,7 @@ def render_comprehensive_rule(
             "Cursor entry. Paths inside the container's `/user_data_rw` "
             "(read-write) and `/user_data_ro` (kernel-enforced "
             "read-only) mounts are addressable through the filesystem "
-            "backend."
+            "backend. Always translate host paths before calling tools."
         )
 
     lines: list[str] = [
@@ -638,6 +661,7 @@ def render_comprehensive_rule(
             _pick("directive_tool_use_priority")
         )
         lines.append(_pick("self_check_gate"))
+        lines.append(_pick("directive_path_translation"))
 
         # Emit a single compressed-backends explanation block when any
         # user backend is wire-compressed. The block is pulled from the
@@ -648,6 +672,15 @@ def render_comprehensive_rule(
         }
         if compressed_user_backends:
             lines.append(_pick("compressed_rules"))
+
+        builtin_skills = (skill_assets or {}).get(NAME, [])
+        if builtin_skills:
+            lines.extend([
+                "## Built-in skills",
+                "",
+                *_render_skill_lines(builtin_skills),
+                "",
+            ])
 
     lines.extend(
         [
@@ -735,6 +768,12 @@ def render_comprehensive_rule(
                     for instr_line in instr.splitlines():
                         lines.append(f"  {instr_line}")
             lines.append("")
+            backend_skills = (skill_assets or {}).get(server_name, [])
+            if backend_skills:
+                lines.append("### Available skills")
+                lines.append("")
+                lines.extend(_render_skill_lines(backend_skills))
+                lines.append("")
         else:
             # ── Uncompressed backend ─────────────────────────────────────
             lines.append(f"## `{server_name}`")
@@ -762,6 +801,12 @@ def render_comprehensive_rule(
                     for instr_line in instr.splitlines():
                         lines.append(f"  {instr_line}")
             lines.append("")
+            backend_skills = (skill_assets or {}).get(server_name, [])
+            if backend_skills:
+                lines.append("### Available skills")
+                lines.append("")
+                lines.extend(_render_skill_lines(backend_skills))
+                lines.append("")
 
     lines.extend(
         [
@@ -987,6 +1032,7 @@ async def _h_generate_cursor_rule(
     catalog = await collect_backend_full_catalog(self_.manager, skip_self=True)
     mandatory = self_.manager.mandatory_names()
     rule_assets: dict[str, Any] | None = None
+    skill_assets: dict[str, list[Any]] | None = None
     if self_.manager.assets is not None:
         try:
             from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
@@ -994,6 +1040,16 @@ async def _h_generate_cursor_rule(
             rule_assets = await load_all_rule_assets(self_.manager.assets, backends)
         except Exception:
             rule_assets = None
+        try:
+            from zelosmcp.framework.assetstore.kinds.skill import (
+                load_all_skill_summaries,
+            )
+            backends = list(catalog.keys()) + ["zelosmcp"]
+            skill_assets = await load_all_skill_summaries(
+                self_.manager.assets, backends
+            )
+        except Exception:
+            skill_assets = None
 
     # Build the compression metadata map for all user backends that are
     # wire-compressed (scope ∈ {aggregator, global}, level ≠ low).
@@ -1018,6 +1074,7 @@ async def _h_generate_cursor_rule(
             tool_use=tool_use,
             mandatory_names=mandatory,
             rule_assets=rule_assets,
+            skill_assets=skill_assets,
             compressed_backends=compressed_backends or None,
         )
     )
@@ -1337,6 +1394,88 @@ class BuiltinServer:
     # ── MCP handler registration ───────────────────────────────────────
 
     def _register_handlers(self, srv: Server) -> None:
+        @srv.list_prompts()
+        async def list_prompts() -> list[Prompt]:
+            if self.manager.assets is None:
+                return []
+            from zelosmcp.framework.assetstore.kinds.prompt import (
+                load_all_prompt_rows,
+                prompt_arguments,
+                prompt_description,
+                prompt_slug,
+            )
+
+            prompts: list[Prompt] = []
+            for row in await load_all_prompt_rows(self.manager.assets):
+                args = [
+                    PromptArgument(
+                        name=arg.name,
+                        description=arg.description or None,
+                        required=arg.required,
+                    )
+                    for arg in prompt_arguments(row)
+                ]
+                prompts.append(Prompt(
+                    name=f"{row.backend}__{prompt_slug(row)}",
+                    description=prompt_description(row),
+                    arguments=args,
+                ))
+            return prompts
+
+        @srv.get_prompt()
+        async def get_prompt(
+            name: str,
+            arguments: dict[str, Any] | None = None,
+        ) -> GetPromptResult:
+            if self.manager.assets is None:
+                raise McpError(
+                    ErrorData(
+                        code=INVALID_PARAMS,
+                        message="asset store is not initialised",
+                    )
+                )
+            backend, _, prompt_name = name.partition("__")
+            if not backend or not prompt_name:
+                raise McpError(
+                    ErrorData(
+                        code=INVALID_PARAMS,
+                        message=(
+                            "prompt name must be '<backend>__<prompt>' "
+                            f"(got {name!r})"
+                        ),
+                    )
+                )
+
+            from zelosmcp.framework.assetstore.kinds.prompt import (
+                find_prompt_row,
+                prompt_description,
+                render_prompt,
+            )
+
+            row = await find_prompt_row(
+                self.manager.assets,
+                backend=backend,
+                name=prompt_name,
+            )
+            if row is None:
+                raise McpError(
+                    ErrorData(
+                        code=INVALID_PARAMS,
+                        message=f"unknown prompt: {name!r}",
+                    )
+                )
+
+            rendered = render_prompt(row, arguments or {})
+            return GetPromptResult(
+                description=prompt_description(row),
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(type="text", text=rendered),
+                    )
+                ],
+            )
+
         @srv.list_tools()
         async def list_tools() -> list[Tool]:
             return list(_TOOLS)

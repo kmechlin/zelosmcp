@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from zelosmcp.framework.assetstore.registry import (
@@ -47,6 +48,41 @@ KIND_ID = "skill"
 
 _SLUG_MAX = 64
 _DESC_MAX = 1024
+
+
+# ── Skill summaries ─────────────────────────────────────────────────────
+
+
+@dataclass
+class SkillSummary:
+    """Short skill row used by generated rules."""
+
+    name: str
+    slug: str
+    description: str
+
+
+async def load_all_skill_summaries(
+    store: Any | None,
+    backends: list[str],
+) -> dict[str, list[SkillSummary]]:
+    """Return skill summaries grouped by backend."""
+    if store is None:
+        return {}
+    out: dict[str, list[SkillSummary]] = {}
+    for backend in backends:
+        rows = await store.list(kind=KIND_ID, backend=backend)
+        summaries: list[SkillSummary] = []
+        for row in rows:
+            meta = row.meta or {}
+            summaries.append(SkillSummary(
+                name=row.name,
+                slug=_slug(row.name),
+                description=(meta.get("description") or row.name).strip(),
+            ))
+        if summaries:
+            out[backend] = summaries
+    return out
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────

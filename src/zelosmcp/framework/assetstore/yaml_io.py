@@ -76,6 +76,7 @@ async def dump_backend_as_yaml(store: Any, backend: str) -> str:
     from zelosmcp.framework.assetstore.kinds import extension as _ext_mod
     from zelosmcp.framework.assetstore.kinds import agent as _agent_mod
     from zelosmcp.framework.assetstore.kinds import hook as _hook_mod
+    from zelosmcp.framework.assetstore.kinds import prompt as _prompt_mod
     from zelosmcp.framework.assetstore.kinds import skill as _skill_mod
 
     kind_dump_map = {
@@ -83,6 +84,7 @@ async def dump_backend_as_yaml(store: Any, backend: str) -> str:
         "extension": ("extensions", _ext_mod.dump_section),
         "agent": ("agents", _agent_mod.dump_section),
         "hook": ("hooks", _hook_mod.dump_section),
+        "prompt": ("prompts", _prompt_mod.dump_section),
         "skill": ("skills", _skill_mod.dump_section),
     }
 

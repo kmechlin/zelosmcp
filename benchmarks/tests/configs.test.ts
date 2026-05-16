@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildConfig, applyConfig, fetchCurrentConfig } from "../src/configs.js";
+import {
+  buildConfig,
+  applyConfig,
+  fetchAssets,
+  fetchCurrentConfig,
+  pushAssets,
+} from "../src/configs.js";
 import type { ZelosMcpConfig } from "../src/configs.js";
 
 const baseConfig: ZelosMcpConfig = {
@@ -143,5 +149,82 @@ describe("fetchCurrentConfig", () => {
     expect(config.mcpServers.pincher).not.toHaveProperty("name");
     expect(config.mcpServers.pincher).not.toHaveProperty("transport");
     expect(config.mcpServers.pincher.command).toBe("pincher");
+  });
+});
+
+describe("pushAssets", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("POSTs each requested asset kind to the push endpoint", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    await pushAssets("http://localhost:8000", {
+      repo: "zelosmcp",
+      kinds: ["rule", "prompt"],
+      targets: ["cursor"],
+      access: "read-write",
+      toolUse: "priority",
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/assets/push/rule",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          repo: "zelosmcp",
+          targets: ["cursor"],
+          access: "read-write",
+          tool_use: "priority",
+        }),
+      }),
+    );
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/assets/push/prompt",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("throws when a push response is not ok", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve("boom"),
+      }),
+    );
+
+    await expect(
+      pushAssets("http://localhost:8000", { repo: "zelosmcp", kinds: ["rule"] }),
+    ).rejects.toThrow("POST /api/assets/push/rule failed (500)");
+  });
+});
+
+describe("fetchAssets", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("GETs assets by kind", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([
+          { kind: "prompt", backend: "pincher", name: "find-callers" },
+        ]),
+      }),
+    );
+
+    const rows = await fetchAssets("http://localhost:8000", "prompt");
+    expect(rows).toEqual([
+      { kind: "prompt", backend: "pincher", name: "find-callers" },
+    ]);
   });
 });

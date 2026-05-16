@@ -51,7 +51,7 @@ _TOOL_INSTRUCTION_ENTRY = {
 # Pattern matching all known rule section names.
 _RULE_SECTION_PATTERN = (
     "^(playbook|compressed_rules|directive)_(read_only|read_write)$"
-    "|^(self_check_gate|directive_tool_use_priority)$"
+    "|^(self_check_gate|directive_tool_use_priority|directive_path_translation)$"
     "|^playbook_.*$"   # allow custom playbook_ variants
 )
 
@@ -104,6 +104,25 @@ _AGENT_ENTRY = {
     "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"},
+        "tools": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "model": {"type": "string"},
+        "readonly": {"type": "boolean"},
+        "is_background": {"type": "boolean"},
+        "agents": {
+            "oneOf": [
+                {"type": "array", "items": {"type": "string"}},
+                {"const": "*"},
+            ],
+        },
+        "user_invocable": {"type": "boolean"},
+        "disable_model_invocation": {"type": "boolean"},
+        "handoffs": {
+            "type": "array",
+            "items": {"type": "object"},
+        },
         "targets": {
             "type": "array",
             "items": {"enum": ["cursor", "vscode"]},
@@ -164,6 +183,44 @@ _SKILLS_SECTION = {
     "additionalProperties": _SKILL_ENTRY,
 }
 
+_PROMPT_ARG_ENTRY = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "required": {"type": "boolean"},
+    },
+    "required": ["name"],
+}
+
+_PROMPT_ENTRY = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "args": {
+            "type": "array",
+            "items": _PROMPT_ARG_ENTRY,
+        },
+        "targets": {
+            "type": "array",
+            "items": {"enum": ["cursor"]},
+        },
+        "push": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
+        "body": {"type": "string"},
+    },
+}
+
+_PROMPTS_SECTION = {
+    "type": "object",
+    "additionalProperties": _PROMPT_ENTRY,
+}
+
 ASSET_FILE_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -183,6 +240,7 @@ ASSET_FILE_SCHEMA: dict[str, Any] = {
         "extensions": _EXTENSIONS_SECTION,
         "agents": _AGENTS_SECTION,
         "hooks": _HOOKS_SECTION,
+        "prompts": _PROMPTS_SECTION,
         "skills": _SKILLS_SECTION,
     },
 }

@@ -23,12 +23,32 @@ rules:
 
         **Always prefer the MCP tools listed below over shell commands, subprocess invocations, or local CLIs** when an MCP tool covers the task. They return structured data, avoid subprocess cost, and keep paths inside the sandboxed mounts. Reach for `bash` / `python -c` / direct file reads only when no MCP tool fits, and say so explicitly when you do.
 
+    directive_path_translation:
+      body: |
+        ## Container path translation (MANDATORY)
+
+        Every loaded backend runs inside the zelosMCP container. Host paths do NOT exist inside the container. Translate before every call:
+
+        | Use case | Path to pass |
+        |---|---|
+        | Read in pincher / filesystem | `/user_data_ro/<repo>/...` |
+        | Write in filesystem | `/user_data_rw/<repo>/...` |
+        | `pincher.project` argument | repo basename only (e.g. `zelosmcp`) |
+
+        Host root mapping: `/Users/KMECHL/workspace` maps to `/user_data_ro` for read-only access and `/user_data_rw` for read-write access.
+
+        Examples:
+        - GOOD: `pincher__invoke_tool(tool_name="index", tool_input={"path": "/user_data_ro/zelosmcp"})`
+        - GOOD: `filesystem__read_text_file(path="/user_data_rw/zelosmcp/.env")`
+        - BAD: `filesystem__read_text_file(path="/Users/KMECHL/workspace/zelosmcp/.env")` because the container cannot see this host path.
+
     self_check_gate:
       body: |
         ## Pre-flight check (run BEFORE every response)
 
-        Answer these four questions before issuing any tool call. The first matching YES dictates your FIRST tool call:
+        Answer these questions before issuing any tool call. The first matching YES dictates your FIRST tool call:
 
+        0. **Path involved?** Translate host paths to container paths first. Use `/user_data_ro/<repo>/...` for read-only tool inputs, `/user_data_rw/<repo>/...` for writes, and repo basename only for `pincher.project`.
         1. **Code structure / symbols / behavior?** ("summarize / explain / understand / find / trace / impact / blast radius" of repo, module, function, class) → if `pincher` is loaded, FIRST call MUST be `pincher__*`. Load the `zelosmcp-pincher` skill (`/zelosmcp-pincher`) for the full workflow.
         2. **Files in the workspace?** ("read / edit / list / search / move / create" a file or directory) → if `filesystem` is loaded, use `filesystem__*`. Load the `zelosmcp-filesystem` skill (`/zelosmcp-filesystem`) for the full workflow.
         3. **Other MCP-covered tasks?** (containers, pods, networks, volumes, images, etc.) → Check the tool catalog sections below. Use the relevant backend tools before falling back to shell.

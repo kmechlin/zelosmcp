@@ -74,6 +74,18 @@ class Aggregator:
     def running(self) -> bool:
         return self.session_manager is not None
 
+    def prune_resource_origin(self, known_backends: set[str]) -> None:
+        """Drop resource-origin entries whose owner backend is no longer
+        registered. Called after a config reload swaps the backend set so
+        stale URI → backend mappings don't survive across reloads when
+        the aggregator's lifecycle is preserved (hot-swap path)."""
+        if not self._resource_origin:
+            return
+        self._resource_origin = {
+            uri: name for uri, name in self._resource_origin.items()
+            if name in known_backends
+        }
+
     async def start(self) -> None:
         if self.running:
             return

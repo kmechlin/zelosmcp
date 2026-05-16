@@ -771,10 +771,14 @@ async def _push_comprehensive_rule(
         render_comprehensive_rule,
     )
     from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
+    from zelosmcp.framework.assetstore.kinds.skill import load_all_skill_summaries
     from zelosmcp.framework.assetstore.registry import ProjectFile
 
     catalog = await collect_backend_full_catalog(manager, skip_self=False)
     rule_assets = await load_all_rule_assets(store, list(catalog.keys()) + ["zelosmcp"])
+    skill_assets = await load_all_skill_summaries(
+        store, list(catalog.keys()) + ["zelosmcp"]
+    )
 
     project_files: list[ProjectFile] = []
 
@@ -785,6 +789,7 @@ async def _push_comprehensive_rule(
             fmt="cursor-mdc",
             tool_use=tool_use,
             rule_assets=rule_assets,
+            skill_assets=skill_assets,
         )
         project_files.append(ProjectFile(
             rel_path=".cursor/rules/zelosmcp.mdc",
@@ -799,6 +804,7 @@ async def _push_comprehensive_rule(
             fmt="copilot-instructions",
             tool_use=tool_use,
             rule_assets=rule_assets,
+            skill_assets=skill_assets,
         )
         project_files.append(ProjectFile(
             rel_path=".github/copilot-instructions.md",

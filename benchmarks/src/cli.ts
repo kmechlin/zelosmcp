@@ -4,9 +4,44 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { runStaticAnalysis } from "./static-analyzer.js";
 import { renderStaticTable, renderRunLogHtml } from "./report.js";
-import { runSuite, readRunLog, refetchRunLog, staticResultsPath, findProjectRoot, findProjectRules } from "./runner.js";
+import { runSuite, readRunLog, refetchRunLog, staticResultsPath, findProjectRoot, findProjectRules, isRetryableError } from "./runner.js";
 import { getSessionCookie } from "./usage-api.js";
-import type { PromptDef, StaticResult } from "./types.js";
+import {
+  MODES,
+  RESPONSE_FORMATS,
+  type Mode,
+  type PromptDef,
+  type ResponseFormat,
+  type StaticResult,
+} from "./types.js";
+
+// The @cursor/sdk spawns background tasks during Agent.create (e.g.
+// LocalIgnoreService.init → getTeamReposOrEmptyIfNotInTeam) whose
+// rejections are never awaited. When Cursor's API key exchange
+// endpoint hiccups (corporate-proxy / Zscaler / transient DNS), the
+// rejection escapes and Node 26 crashes the whole process by default
+// — taking the benchmark with it. Install permissive handlers so the
+// suite keeps running. Retryable network errors are logged quietly;
+// everything else is logged loudly but still non-fatal.
+process.on("unhandledRejection", (reason: unknown) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  if (isRetryableError(reason)) {
+    console.error(`\n[bench] suppressed transient SDK rejection: ${msg}`);
+    return;
+  }
+  console.error(`\n[bench] unhandled rejection (non-fatal): ${msg}`);
+  if (reason instanceof Error && reason.stack) console.error(reason.stack);
+});
+
+process.on("uncaughtException", (err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (isRetryableError(err)) {
+    console.error(`\n[bench] suppressed transient SDK exception: ${msg}`);
+    return;
+  }
+  console.error(`\n[bench] uncaught exception (non-fatal): ${msg}`);
+  if (err instanceof Error && err.stack) console.error(err.stack);
+});
 
 const program = new Command();
 
@@ -49,6 +84,31 @@ program
     "Prompt suite JSON path",
     "prompts/suite.json",
   )
+  .option(
+    "--mode <modes>",
+    `Comma-separated subset of modes to run (default: all). Valid: ${MODES.join(", ")}`,
+  )
+  .option(
+    "--pin-response-format <fmt>",
+    `Pin every server's response_format across all modes to isolate the ` +
+      `compression-only signal. Valid: ${RESPONSE_FORMATS.join(", ")}`,
+  )
+  .option(
+    "--pin-strip-meta <true|false>",
+    "Pin every server's strip_meta across all modes (true|false)",
+  )
+  .option(
+    "--no-clean-assets",
+    "Do not remove pushed .cursor rules/assets before the benchmark starts",
+  )
+  .option(
+    "--refresh-assets",
+    "Push fresh .cursor assets after each server config reload (default: enabled with --rules)",
+  )
+  .option(
+    "--no-refresh-assets",
+    "Do not push .cursor assets after server config reloads",
+  )
   .option("--rules", "Load project Cursor rules into each agent run")
   .action(
     async (opts: {
@@ -57,6 +117,11 @@ program
       delay: string;
       output: string;
       prompts: string;
+      mode?: string;
+      pinResponseFormat?: string;
+      pinStripMeta?: string;
+      cleanAssets?: boolean;
+      refreshAssets?: boolean;
       rules?: boolean;
     }) => {
       const apiKey = process.env.CURSOR_API_KEY;
@@ -67,6 +132,47 @@ program
         process.exit(1);
       }
 
+      let modes: readonly Mode[] | undefined;
+      if (opts.mode) {
+        const requested = opts.mode.split(",").map((m) => m.trim()).filter(Boolean);
+        const invalid = requested.filter((m): m is string => !MODES.includes(m as Mode));
+        if (invalid.length > 0) {
+          console.error(
+            `Error: invalid --mode value(s): ${invalid.join(", ")}. ` +
+              `Valid: ${MODES.join(", ")}`,
+          );
+          process.exit(1);
+        }
+        modes = requested as Mode[];
+      }
+
+      let pinResponseFormat: ResponseFormat | undefined;
+      if (opts.pinResponseFormat !== undefined) {
+        const fmt = opts.pinResponseFormat.trim();
+        if (!RESPONSE_FORMATS.includes(fmt as ResponseFormat)) {
+          console.error(
+            `Error: invalid --pin-response-format value: ${fmt}. ` +
+              `Valid: ${RESPONSE_FORMATS.join(", ")}`,
+          );
+          process.exit(1);
+        }
+        pinResponseFormat = fmt as ResponseFormat;
+      }
+
+      let pinStripMeta: boolean | undefined;
+      if (opts.pinStripMeta !== undefined) {
+        const v = opts.pinStripMeta.trim().toLowerCase();
+        if (v === "true") pinStripMeta = true;
+        else if (v === "false") pinStripMeta = false;
+        else {
+          console.error(
+            `Error: invalid --pin-strip-meta value: ${opts.pinStripMeta}. ` +
+              `Valid: true, false`,
+          );
+          process.exit(1);
+        }
+      }
+
       const promptsPath = resolve(opts.prompts);
       const prompts = JSON.parse(
         readFileSync(promptsPath, "utf-8"),
@@ -75,8 +181,17 @@ program
       const projectRoot = findProjectRoot(process.cwd());
       const ruleFiles = findProjectRules(projectRoot);
 
-      console.log(`Running ${prompts.length} prompts × 3 modes...`);
+      const modeCount = (modes ?? MODES).length;
+      console.log(`Running ${prompts.length} prompts × ${modeCount} mode${modeCount === 1 ? "" : "s"}...`);
       console.log(`Model:   ${opts.model}`);
+      console.log(`Modes:   ${(modes ?? MODES).join(", ")}`);
+      if (pinResponseFormat !== undefined) {
+        console.log(`Pin:     response_format=${pinResponseFormat}`);
+      }
+      if (pinStripMeta !== undefined) {
+        console.log(`Pin:     strip_meta=${pinStripMeta}`);
+      }
+      console.log(`Assets:  clean=${opts.cleanAssets !== false}, refresh=${opts.refreshAssets ?? Boolean(opts.rules)}`);
       console.log(`Root:    ${projectRoot}`);
 
       if (ruleFiles.length > 0) {
@@ -93,27 +208,44 @@ program
 
       const runLogPath = resolve(opts.output);
 
-      await runSuite({
-        zelosmcpUrl: opts.url,
-        model: opts.model,
-        apiKey,
-        prompts,
-        delayMs: parseInt(opts.delay, 10),
-        outputPath: runLogPath,
-        enableRules: opts.rules,
-      });
+      const writeReport = (): string | undefined => {
+        if (!existsSync(runLogPath)) return undefined;
+        const entries = readRunLog(runLogPath);
+        const sidecarPath = staticResultsPath(runLogPath);
+        const staticResults = existsSync(sidecarPath)
+          ? (JSON.parse(readFileSync(sidecarPath, "utf-8")) as StaticResult[])
+          : undefined;
+        const reportPath = resolve(dirname(runLogPath), basename(runLogPath, ".json") + ".html");
+        writeFileSync(reportPath, renderRunLogHtml(entries, staticResults));
+        return reportPath;
+      };
 
-      const entries = readRunLog(runLogPath);
-      const sidecarPath = staticResultsPath(runLogPath);
-      const staticResults = existsSync(sidecarPath)
-        ? (JSON.parse(readFileSync(sidecarPath, "utf-8")) as StaticResult[])
-        : undefined;
-      const reportPath = resolve(dirname(runLogPath), basename(runLogPath, ".json") + ".html");
-      writeFileSync(reportPath, renderRunLogHtml(entries, staticResults));
-
-      console.log(`\nRun log:  ${opts.output}`);
-      console.log(`Report:   ${reportPath}`);
-      process.exit(0);
+      let exitCode = 0;
+      try {
+        await runSuite({
+          zelosmcpUrl: opts.url,
+          model: opts.model,
+          apiKey,
+          prompts,
+          modes,
+          delayMs: parseInt(opts.delay, 10),
+          outputPath: runLogPath,
+          enableRules: opts.rules,
+          pinResponseFormat,
+          pinStripMeta,
+          cleanAssets: opts.cleanAssets,
+          refreshAssets: opts.refreshAssets,
+        });
+      } catch (err) {
+        exitCode = 1;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`\nrunSuite failed: ${msg}`);
+      } finally {
+        const reportPath = writeReport();
+        console.log(`\nRun log:  ${opts.output}`);
+        if (reportPath) console.log(`Report:   ${reportPath}`);
+      }
+      process.exit(exitCode);
     },
   );
 

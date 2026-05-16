@@ -1,9 +1,19 @@
-import type { RunLogEntry, StaticResult } from "./types.js";
+import { MODES, type Mode, type RunLogEntry, type StaticResult } from "./types.js";
 
 const MODE_LABELS: Record<string, string> = {
   null: "no compression",
+  low: "low",
   medium: "medium",
+  high: "high",
   max: "max",
+};
+
+const MODE_COLORS: Record<string, string> = {
+  null: "#4e79a7",
+  low: "#76b7b2",
+  medium: "#59a14f",
+  high: "#edc948",
+  max: "#f28e2b",
 };
 
 function pad(s: string, len: number): string {
@@ -16,6 +26,19 @@ function padNum(n: number, len: number): string {
 
 function modeLabel(mode: string): string {
   return MODE_LABELS[mode] ?? mode;
+}
+
+function orderedModes(
+  entries: RunLogEntry[],
+  staticResults?: StaticResult[],
+): string[] {
+  const seen = new Set<string>();
+  for (const entry of entries) seen.add(entry.mode);
+  for (const result of staticResults ?? []) seen.add(result.mode);
+
+  const ordered = MODES.filter((mode) => seen.has(mode));
+  const extras = [...seen].filter((mode) => !MODES.includes(mode as Mode)).sort();
+  return [...ordered, ...extras];
 }
 
 export function renderStaticTable(results: StaticResult[]): string {
@@ -48,17 +71,10 @@ export function renderStaticTable(results: StaticResult[]): string {
 }
 
 export function renderRunLogHtml(entries: RunLogEntry[], staticResults?: StaticResult[]): string {
-  const modes = ["null", "medium", "max"];
+  const modes = orderedModes(entries, staticResults);
 
   // Deduplicate prompts in insertion order
   const promptIds = [...new Set(entries.map((e) => e.promptId))];
-
-  // Per-prompt, per-mode total: categories = prompts, series = modes
-  const modeColors: Record<string, string> = {
-    null: "#4e79a7",
-    medium: "#59a14f",
-    max: "#f28e2b",
-  };
 
   function promptModeTotal(promptId: string, mode: string, key: keyof RunLogEntry): number {
     return entries
@@ -71,7 +87,7 @@ export function renderRunLogHtml(entries: RunLogEntry[], staticResults?: StaticR
       return JSON.stringify({
         label: MODE_LABELS[mode] ?? mode,
         data: promptIds.map((p) => promptModeTotal(p, mode, "totalTokens")),
-        backgroundColor: modeColors[mode] ?? "#aaa",
+        backgroundColor: MODE_COLORS[mode] ?? "#aaa",
       });
     })
     .join(",\n        ");
@@ -249,7 +265,7 @@ export function renderRunLogHtml(entries: RunLogEntry[], staticResults?: StaticR
   ${staticResults ? "<hr>" : ""}
 
   <h2>Total Tokens per Prompt by Compression Mode</h2>
-  <p class="caption">Grouped bars — total token cost per prompt across the three compression modes. Source: run-log.json</p>
+  <p class="caption">Grouped bars — total token cost per prompt across ${modes.length || 0} compression mode${modes.length === 1 ? "" : "s"}. Source: run-log.json</p>
   <div class="chart-wrap">
     <canvas id="tokenChart" height="160"></canvas>
   </div>
