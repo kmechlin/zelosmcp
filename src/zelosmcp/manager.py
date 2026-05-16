@@ -445,6 +445,15 @@ class ProxyManager:
             if name not in user_servers:
                 user_servers[name] = entry
                 injected.append(name)
+            else:
+                # Field-level merge: fill in top-level fields present in the
+                # mandatory entry that the user's entry omits. User fields
+                # always win on conflict (right-hand spread), so the caller can
+                # still override args/env/compress/etc. This prevents
+                # infrastructure fields like `reverseProxy` from being silently
+                # dropped when the caller only supplies a partial override
+                # (e.g. changing only compression level).
+                user_servers[name] = {**entry, **user_servers[name]}
 
         merged["mcpServers"] = user_servers
 
@@ -546,12 +555,14 @@ class ProxyManager:
                 return candidate
         return None
 
-    async def stop_all(self) -> None:
-        """Stop every user-configured backend AND the aggregator. The
-        always-on builtin (`zelosmcp`) is intentionally preserved so its
-        tools remain available across config reloads."""
-        await self.aggregator.stop()
-        # Snapshot of stoppable (non-builtin) backends.
+    async def _stop_user_backends_only(self) -> None:
+        """Stop every user-configured backend but leave the aggregator's
+        session_manager running. This is the hot-swap path used by
+        :meth:`start_all` so inbound ``/mcp`` requests never see a 503
+        window while backends are being recycled.
+
+        The always-on builtin (`zelosmcp`) is preserved unchanged.
+        """
         to_stop = [
             (name, state)
             for name, state in self.servers.items()
@@ -562,13 +573,25 @@ class ProxyManager:
                 *(state.stop() for _, state in to_stop),
                 return_exceptions=True,
             )
-        # Cancel only the log pumps for the backends we just stopped.
         for name, _ in to_stop:
             task = self._log_pumps.pop(name, None)
             if task is not None:
                 task.cancel()
         for name, _ in to_stop:
             self.servers.pop(name, None)
+
+    async def stop_all(self) -> None:
+        """Stop every user-configured backend AND the aggregator. The
+        always-on builtin (`zelosmcp`) is intentionally preserved so its
+        tools remain available across config reloads.
+
+        This is the hard stop used by ``/api/stop``. Config reloads via
+        ``/api/start`` use :meth:`_stop_user_backends_only` instead so
+        the aggregator's ``session_manager`` survives the swap and
+        Cursor's MCP SSE connection doesn't get a 503.
+        """
+        await self.aggregator.stop()
+        await self._stop_user_backends_only()
         self._specs.clear()
         self._primary = None
 
@@ -1529,13 +1552,22 @@ class ProxyManager:
         # `running` reflects whether any USER backend is up. The builtin
         # is always up by design, so it's excluded from this aggregate
         # so the UI badge / curl probes still mean what they used to.
-        return {
+        result: dict[str, Any] = {
             "primary": self._primary,
             "servers": servers,
             "running": any(
                 s.running for n, s in self.servers.items() if n != BUILTIN_NAME
             ),
         }
+        # Surface the active BuiltinConfig so config-round-trip tooling
+        # (e.g. the benchmark harness) can preserve top-level builtin
+        # settings across /api/start calls. Always present (even at
+        # defaults) so callers don't have to special-case absence.
+        if self._builtin_config is not None:
+            result["builtin"] = self._builtin_config.to_status()
+        else:
+            result["builtin"] = {}
+        return result
 
     def subscribe_logs(self) -> asyncio.Queue[str]:
         q: asyncio.Queue[str] = asyncio.Queue(maxsize=512)

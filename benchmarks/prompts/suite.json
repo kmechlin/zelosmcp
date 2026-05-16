@@ -1,0 +1,27 @@
+[
+  {
+    "id": "arch-overview",
+    "text": "Give me a high-level overview of this codebase's architecture. What are the main components and how do they interact?",
+    "category": "code-exploration"
+  },
+  {
+    "id": "find-entry-point",
+    "text": "What is the main entry point of this application? Trace the startup flow and explain what happens when the server starts.",
+    "category": "code-exploration"
+  },
+  {
+    "id": "symbol-lookup",
+    "text": "Find the function or class responsible for handling tool compression. Show me its implementation and explain how it works.",
+    "category": "symbol-lookup"
+  },
+  {
+    "id": "search-config",
+    "text": "Search for all configuration files in this project. What configuration options are available and what are their defaults?",
+    "category": "search"
+  },
+  {
+    "id": "trace-calls",
+    "text": "What functions call the MCP tools/list handler? Trace the call chain from the HTTP route to the final response.",
+    "category": "symbol-lookup"
+  }
+]

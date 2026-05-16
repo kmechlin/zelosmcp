@@ -7,6 +7,7 @@ session manager."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -366,6 +367,48 @@ class TestRenderComprehensiveRule:
         assert "## Tool-use priority" in out or "Tool-use priority" in out
         # Per-backend header still includes the prefer-over-shell hint.
         assert "Prefer these over equivalent shell commands." in out
+
+    def test_priority_includes_path_translation_directive(self):
+        out = render_comprehensive_rule(
+            {
+                "filesystem": _backend(
+                    [_tool("read_text_file", annotations={"readOnlyHint": True})]
+                )
+            }
+        )
+        assert "## Container path translation (MANDATORY)" in out
+        assert "/user_data_ro/<repo>/..." in out
+        assert "/Users/KMECHL/workspace" in out
+
+    def test_per_backend_and_builtin_skills_render(self):
+        out = render_comprehensive_rule(
+            {
+                "pincher": _backend(
+                    [_tool("architecture", annotations={"readOnlyHint": True})]
+                ),
+                "filesystem": _backend(
+                    [_tool("read_text_file", annotations={"readOnlyHint": True})]
+                ),
+            },
+            skill_assets={
+                "zelosmcp": [
+                    SimpleNamespace(
+                        slug="zelosmcp-onboarding",
+                        description="Understand zelosMCP setup.",
+                    )
+                ],
+                "pincher": [
+                    SimpleNamespace(
+                        slug="zelosmcp-pincher",
+                        description="Codebase intelligence with pincher.",
+                    )
+                ],
+            },
+        )
+        assert "## Built-in skills" in out
+        assert "/zelosmcp-onboarding" in out
+        assert "### Available skills" in out
+        assert "/zelosmcp-pincher" in out
 
     def test_tool_use_available_omits_priority_sections(self):
         """`tool_use=available` strips every prefer-MCP phrasing."""

@@ -2666,6 +2666,11 @@ HTML_TEMPLATE = """\
   //   stdio   -> { command, args?, env?, cwd? }    (no `type`)
   //   sse     -> { type: "sse", url, headers? }
   //   http    -> { type: "streamable-http", url, headers? }
+  // reverseProxy and compress are included when present so a round-trip
+  // through the textarea preserves infrastructure settings (e.g. the
+  // pincher dashboard mount). reverseProxy.auth is intentionally omitted
+  // because the status API masks bearer values as "***" and re-submitting
+  // that literal string would break authentication.
   function buildConfigFromStatus(status) {
     const out = { mcpServers: {} };
     for (const s of status.servers || []) {
@@ -2686,6 +2691,14 @@ HTML_TEMPLATE = """\
       } else {
         continue;
       }
+      if (spec.reverseProxy) {
+        // Strip the masked auth block so "***" is never re-submitted as a
+        // bearer token. The field is omitted entirely; users who need auth
+        // on the reverseProxy must supply it explicitly.
+        const { auth: _auth, ...rpRest } = spec.reverseProxy;
+        entry.reverseProxy = rpRest;
+      }
+      if (spec.compress) entry.compress = { ...spec.compress };
       out.mcpServers[s.name] = entry;
     }
     return Object.keys(out.mcpServers).length ? out : null;

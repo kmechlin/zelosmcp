@@ -435,7 +435,7 @@ def create_app(manager: ProxyManager | None = None):
         tags: [introspection]
         responses:
           200:
-            description: Aggregate status — list of servers, the primary name, and a global running flag.
+            description: Aggregate status — list of servers, the primary name, a global running flag, and the active BuiltinConfig.
             content:
               application/json:
                 schema:
@@ -456,6 +456,12 @@ def create_app(manager: ProxyManager | None = None):
                           running: { type: boolean }
                           error: { type: string, nullable: true }
                           primary: { type: boolean }
+                    builtin:
+                      type: object
+                      description: |
+                        Active BuiltinConfig (defaults omitted, matches the
+                        top-level `builtin` key accepted by /api/start).
+                        Always present; `{}` when all defaults are in effect.
         """
         return JSONResponse(manager.status())
 
@@ -1337,6 +1343,7 @@ def create_app(manager: ProxyManager | None = None):
         globs = request.query_params.get("globs")
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
         rule_assets_map = None
+        skill_assets_map = None
         if manager.assets is not None:
             try:
                 from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
@@ -1344,6 +1351,16 @@ def create_app(manager: ProxyManager | None = None):
                 rule_assets_map = await load_all_rule_assets(manager.assets, backends)
             except Exception:
                 rule_assets_map = None
+            try:
+                from zelosmcp.framework.assetstore.kinds.skill import (
+                    load_all_skill_summaries,
+                )
+                backends = list(catalog.keys()) + ["zelosmcp"]
+                skill_assets_map = await load_all_skill_summaries(
+                    manager.assets, backends
+                )
+            except Exception:
+                skill_assets_map = None
 
         # Compute compression metadata for backends whose wire surface at /mcp
         # is the wrapper trio (get_tool_schema / search_tools / invoke_tool)
@@ -1368,6 +1385,7 @@ def create_app(manager: ProxyManager | None = None):
             tool_use=tool_use,
             mandatory_names=manager.mandatory_names(),
             rule_assets=rule_assets_map,
+            skill_assets=skill_assets_map,
             compressed_backends=compressed_backends or None,
         )
         return PlainTextResponse(body, media_type="text/markdown; charset=utf-8")
@@ -2247,6 +2265,25 @@ def create_app(manager: ProxyManager | None = None):
         effective_targets = _resolve_targets(targets_list, fmt)
 
         catalog = await collect_backend_full_catalog(manager, skip_self=True)
+        _push_rule_assets = None
+        _push_skill_assets = None
+        if manager.assets is not None:
+            try:
+                from zelosmcp.framework.assetstore.kinds.rule import load_all_rule_assets
+                _backends = list(catalog.keys()) + ["zelosmcp"]
+                _push_rule_assets = await load_all_rule_assets(manager.assets, _backends)
+            except Exception:
+                _push_rule_assets = None
+            try:
+                from zelosmcp.framework.assetstore.kinds.skill import (
+                    load_all_skill_summaries,
+                )
+                _backends = list(catalog.keys()) + ["zelosmcp"]
+                _push_skill_assets = await load_all_skill_summaries(
+                    manager.assets, _backends
+                )
+            except Exception:
+                _push_skill_assets = None
         _push_compressed: dict[str, dict[str, Any]] = {}
         for _n, _s in manager._specs.items():
             if _s is None or _s.compress is None:
@@ -2271,6 +2308,8 @@ def create_app(manager: ProxyManager | None = None):
                 fmt=render_fmt,
                 tool_use=tool_use,
                 mandatory_names=manager.mandatory_names(),
+                rule_assets=_push_rule_assets,
+                skill_assets=_push_skill_assets,
                 compressed_backends=_push_compressed or None,
             )
 
@@ -2770,6 +2809,7 @@ def create_app(manager: ProxyManager | None = None):
                         resp = JSONResponse(
                             {"error": f"No MCP server '{target_label}' is running"},
                             status_code=503,
+                            headers={"Retry-After": "2"},
                         )
                         return await resp(scope, receive, send)
                     spec = manager.get_spec(target_label)
@@ -2838,7 +2878,11 @@ def create_app(manager: ProxyManager | None = None):
                     msg = "No MCP servers are running"
                 else:
                     msg = f"No MCP server '{target_label}' is running"
-                resp = JSONResponse({"error": msg}, status_code=503)
+                resp = JSONResponse(
+                    {"error": msg},
+                    status_code=503,
+                    headers={"Retry-After": "2"},
+                )
                 return await resp(scope, receive, send)
 
             # Reverse-proxy dispatch: a backend may declare a
@@ -2858,6 +2902,7 @@ def create_app(manager: ProxyManager | None = None):
                     resp = JSONResponse(
                         {"error": f"No MCP server '{spec.name}' is running"},
                         status_code=503,
+                        headers={"Retry-After": "2"},
                     )
                     return await resp(scope, receive, send)
                 return await manager.proxy_request(spec, scope, receive, send)

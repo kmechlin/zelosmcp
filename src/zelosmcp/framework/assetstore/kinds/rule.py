@@ -57,6 +57,7 @@ class BackendRuleAssets:
     directive_read_only: str = ""
     directive_read_write: str = ""
     directive_tool_use_priority: str = ""
+    directive_path_translation: str = ""
     self_check_gate: str = ""
 
 
@@ -86,6 +87,7 @@ async def load_backend_rule_assets(
         directive_read_only=by_name.get("directive_read_only", ""),
         directive_read_write=by_name.get("directive_read_write", ""),
         directive_tool_use_priority=by_name.get("directive_tool_use_priority", ""),
+        directive_path_translation=by_name.get("directive_path_translation", ""),
         self_check_gate=by_name.get("self_check_gate", ""),
     )
 
