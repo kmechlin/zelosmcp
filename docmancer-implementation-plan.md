@@ -495,7 +495,7 @@ These rules apply to every step of implementation. Violating any of them is a ha
 - [x] 1b: Add mcpdoc MCP server entry to configs/default-zelosmcp.json
 - [x] 1c: Create configs/assets/mcpdoc.yaml with rule playbooks and agent definitions
 - [x] 1d: Create curated llms.txt URL registry (Python data file)
-- [ ] 1e: Verify mcpdoc stdio backend starts and tools appear in aggregator
+- [x] 1e: Verify mcpdoc stdio backend starts and tools appear in aggregator
 
 ### Phase 2: Moonshot -- Auto-discovery UI
 - [ ] 2a: Create src/zelosmcp/docs_analyze.py with dependency parsers
