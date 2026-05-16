@@ -135,4 +135,5 @@ curl -sS -X POST http://localhost:8000/mcp \
 - [docs/configuration.md](configuration.md) — the parent `mcpServers` schema.
 - [docs/default-mcps.md](default-mcps.md) — which backends ship with compression on by default.
 - [docs/built-in-mcp.md](built-in-mcp.md) — the `zelosmcp__list_compressed_tools` discovery tool.
+- [docs/benchmarks.md](benchmarks.md) — measuring compression savings in practice: static tool-definition token counts and live prompt runs across all five levels.
 - [atlassian-labs/mcp-compressor](https://github.com/atlassian-labs/mcp-compressor) — design reference for the wrapper-tool pattern and level taxonomy.
