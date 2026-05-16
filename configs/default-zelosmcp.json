@@ -73,7 +73,7 @@
         "Docker:https://docs.docker.com/llms.txt",
         "--transport", "stdio"
       ],
-      "started": true,
+      "started": false,
       "compress": {
         "level": "low"
       }

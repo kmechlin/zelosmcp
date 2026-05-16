@@ -116,10 +116,10 @@ class TestMcpdocConfigParsing:
         assert "command" in entry
         assert entry["command"] == "uvx"
 
-    def test_mcpdoc_started_true(self):
+    def test_mcpdoc_started_false(self):
         cfg = _load_default_config()
         entry = cfg["mcpServers"]["mcpdoc"]
-        assert entry["started"] is True
+        assert entry["started"] is False
 
     def test_mcpdoc_has_urls_args(self):
         cfg = _load_default_config()
