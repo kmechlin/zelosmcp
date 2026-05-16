@@ -73,6 +73,9 @@
         "Docker:https://docs.docker.com/llms.txt",
         "--transport", "stdio"
       ],
+      "env": {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+      },
       "started": false,
       "compress": {
         "level": "low"
