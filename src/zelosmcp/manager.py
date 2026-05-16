@@ -445,6 +445,15 @@ class ProxyManager:
             if name not in user_servers:
                 user_servers[name] = entry
                 injected.append(name)
+            else:
+                # Field-level merge: fill in top-level fields present in the
+                # mandatory entry that the user's entry omits. User fields
+                # always win on conflict (right-hand spread), so the caller can
+                # still override args/env/compress/etc. This prevents
+                # infrastructure fields like `reverseProxy` from being silently
+                # dropped when the caller only supplies a partial override
+                # (e.g. changing only compression level).
+                user_servers[name] = {**entry, **user_servers[name]}
 
         merged["mcpServers"] = user_servers
 
