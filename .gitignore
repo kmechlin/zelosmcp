@@ -30,4 +30,4 @@ buildkitd.toml
 okta_client.env
 .bench.env
 benchmarks/.bench.env
-
+cursor_admin/
