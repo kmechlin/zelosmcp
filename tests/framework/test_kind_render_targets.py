@@ -85,6 +85,20 @@ class TestAgentRenderTargets:
         assert "description:" in vscode_file.body
         assert "# Agent body" in vscode_file.body
 
+    def test_vscode_body_renders_argument_hint(self):
+        row = _agent_row(targets=["vscode"])
+        row.meta["argument_hint"] = "Describe the task"
+        files = agent_render(row, _CTX)
+        vscode_file = next(f for f in files if ".github" in f.rel_path)
+        assert "argument-hint: Describe the task" in vscode_file.body
+
+    def test_vscode_body_renders_user_invocable_false(self):
+        row = _agent_row(targets=["vscode"])
+        row.meta["user_invocable"] = False
+        files = agent_render(row, _CTX)
+        vscode_file = next(f for f in files if ".github" in f.rel_path)
+        assert "user-invocable: false" in vscode_file.body
+
     def test_cursor_body_has_frontmatter(self):
         row = _agent_row(targets=["cursor"])
         files = agent_render(row, _CTX)
@@ -131,17 +145,15 @@ class TestHookRenderTargets:
         files = hook_render(row, _CTX)
         paths = [f.rel_path for f in files]
         assert ".cursor/hooks.json" not in paths
-        assert ".github/hooks/zelosmcp.json" in paths
-        assert ".vscode/hooks.json" in paths
+        assert ".github/hooks/hooks.json" in paths
 
     def test_both_targets(self):
         row = _hook_row(targets=["cursor", "vscode"])
         files = hook_render(row, _CTX)
         paths = [f.rel_path for f in files]
         assert ".cursor/hooks.json" in paths
-        assert ".github/hooks/zelosmcp.json" in paths
-        assert ".vscode/hooks.json" in paths
-        assert len(paths) == 3
+        assert ".github/hooks/hooks.json" in paths
+        assert len(paths) == 2
 
     def test_cursor_body_uses_cursor_event(self):
         row = _hook_row(targets=["cursor"], cursor_event="afterFileEdit")
@@ -153,8 +165,8 @@ class TestHookRenderTargets:
     def test_vscode_body_uses_vscode_event(self):
         row = _hook_row(targets=["vscode"], vscode_event="PreToolUse")
         files = hook_render(row, _CTX)
-        gh_file = next(f for f in files if ".github" in f.rel_path)
-        data = json.loads(gh_file.body)
+        vs_file = next(f for f in files if ".github" in f.rel_path)
+        data = json.loads(vs_file.body)
         assert data["event"] == "PreToolUse"
 
     def test_cursor_body_has_cursor_format(self):
@@ -170,8 +182,8 @@ class TestHookRenderTargets:
     def test_vscode_body_has_vscode_format(self):
         row = _hook_row(targets=["vscode"])
         files = hook_render(row, _CTX)
-        gh_file = next(f for f in files if ".github" in f.rel_path)
-        data = json.loads(gh_file.body)
+        vs_file = next(f for f in files if ".github" in f.rel_path)
+        data = json.loads(vs_file.body)
         # VS Code body: flat dict with event and command (will be merged into event-keyed map)
         assert data.get("event") is not None
         assert data.get("command") is not None
@@ -186,7 +198,7 @@ class TestHookRenderTargets:
         row = _hook_row(targets=None)
         files = hook_render(row, _CTX)
         paths = [f.rel_path for f in files]
-        assert len(paths) == 3
+        assert len(paths) == 2
 
 
 # ── Rule (per-row push) ────────────────────────────────────────────────
@@ -199,22 +211,20 @@ class TestRuleRenderTargets:
         assert ".cursor/rules/zelosmcp.mdc" in paths
         assert len(paths) == 1
 
-    def test_vscode_target_emits_both_paths(self):
+    def test_vscode_target_emits_one_path(self):
         row = _rule_row(target="vscode")
         files = rule_render(row, _CTX)
         paths = [f.rel_path for f in files]
         assert ".github/copilot-instructions.md" in paths
-        assert ".vscode/copilot-instructions.md" in paths
-        assert len(paths) == 2
+        assert len(paths) == 1
 
-    def test_empty_target_emits_all_three(self):
+    def test_empty_target_emits_cursor_and_vscode(self):
         row = _rule_row(target="")
         files = rule_render(row, _CTX)
         paths = [f.rel_path for f in files]
         assert ".cursor/rules/zelosmcp.mdc" in paths
         assert ".github/copilot-instructions.md" in paths
-        assert ".vscode/copilot-instructions.md" in paths
-        assert len(paths) == 3
+        assert len(paths) == 2
 
     def test_all_rule_files_mode_overwrite(self):
         row = _rule_row(target="")

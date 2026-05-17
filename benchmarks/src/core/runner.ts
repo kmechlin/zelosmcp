@@ -74,6 +74,7 @@ export interface CoreRunPromptOpts {
   model: string;
   enableRules?: boolean;
   rulesDir?: string;
+  agent?: string;
   projectRoot: string;
   logTranscripts?: boolean;
 }
@@ -92,6 +93,7 @@ export async function coreRunPrompt(
     model: opts.model,
     enableRules: opts.enableRules ?? false,
     rulesDir: opts.rulesDir,
+    agent: opts.agent,
     projectRoot: opts.projectRoot,
     mcpServerUrl: `${opts.zelosmcpUrl}/mcp`,
     logTranscripts: opts.logTranscripts,
@@ -138,6 +140,8 @@ export interface CoreRunSuiteOpts {
   outputPath: string;
   enableRules?: boolean;
   rulesDir?: string;
+  /** Agent name to activate for adapters that support it (e.g. "zelos-agent"). */
+  agent?: string;
   pinResponseFormat?: ResponseFormat;
   pinStripMeta?: boolean;
   cleanAssets?: boolean;
@@ -220,10 +224,24 @@ export async function coreRunSuite(opts: CoreRunSuiteOpts): Promise<RunLogEntry[
           });
         }
         console.log("  Asset refresh complete.");
-      } else if (configChanged && shouldRefreshAssets && firstStage && shouldCleanAssets) {
+      } else if (shouldRefreshAssets && firstStage && shouldCleanAssets && !opts.agent) {
         console.log(
           "  Skipping asset refresh for first stage to preserve no-assets baseline.",
         );
+      } else if (shouldRefreshAssets && firstStage && opts.agent) {
+        // When --agent is specified, assets must be pushed even on first stage
+        // (regardless of config change) so the agent file exists on disk.
+        for (const { adapter } of opts.adapterConfigs) {
+          console.log(
+            `  Pushing assets for ${repoName} (${adapter.label}) — required for --agent ${opts.agent}...`,
+          );
+          await adapter.pushAssets(opts.zelosmcpUrl, {
+            repo: repoName,
+            access: "read-write",
+            toolUse: "priority",
+          });
+        }
+        console.log("  Asset push complete.");
       }
 
       for (const prompt of opts.prompts) {
@@ -237,6 +255,7 @@ export async function coreRunSuite(opts: CoreRunSuiteOpts): Promise<RunLogEntry[
             model,
             enableRules: opts.enableRules,
             rulesDir: opts.rulesDir,
+            agent: opts.agent,
             projectRoot,
             logTranscripts: opts.logTranscripts,
           });

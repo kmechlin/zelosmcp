@@ -8,6 +8,8 @@ export interface AdapterRunOpts {
   enableRules: boolean;
   /** Override the IDE's default rules directory. Relative to projectRoot or absolute. */
   rulesDir?: string;
+  /** Agent name to activate (e.g. "zelos-agent"). When set, the adapter tells the IDE to use this agent. */
+  agent?: string;
   projectRoot: string;
   /** Full URL of the zelosMCP /mcp endpoint, e.g. "http://localhost:8000/mcp". */
   mcpServerUrl: string;

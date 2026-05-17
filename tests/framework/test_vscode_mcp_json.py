@@ -33,6 +33,14 @@ class TestBuildVscodeMcpJson:
         assert agg["type"] == "http"
         assert agg["url"].endswith("/mcp")
 
+    def test_running_backend_entries_present(self):
+        data = json.loads(_build_vscode_mcp_json(["pincher", "filesystem", "zelosmcp"]))
+        assert "zelosmcp-pincher" in data["servers"]
+        assert data["servers"]["zelosmcp-pincher"]["url"] == "http://localhost:8000/pincher/mcp"
+        assert "zelosmcp-filesystem" in data["servers"]
+        assert data["servers"]["zelosmcp-filesystem"]["url"] == "http://localhost:8000/filesystem/mcp"
+        assert "zelosmcp-zelosmcp" not in data["servers"]
+
     def test_default_url_when_no_public_url_env(self, monkeypatch):
         monkeypatch.delenv("ZELOSMCP_PUBLIC_URL", raising=False)
         data = json.loads(_build_vscode_mcp_json())
@@ -81,6 +89,21 @@ class TestMergeVscodeMcpJson:
         merged = _merge_vscode_mcp_json(existing, _build_vscode_mcp_json())
         data = json.loads(merged)
         assert data["servers"][_AGGREGATOR_ENTRY_NAME]["url"] != "http://stale:1/mcp"
+
+    def test_replaces_stale_managed_backend_entries(self):
+        existing = json.dumps({
+            "servers": {
+                _AGGREGATOR_ENTRY_NAME: {"type": "http", "url": "http://stale:1/mcp"},
+                "zelosmcp-docker": {"type": "http", "url": "http://stale:1/docker/mcp"},
+                "user-server": {"type": "http", "url": "https://user.example/mcp"},
+            },
+        })
+        merged = _merge_vscode_mcp_json(existing, _build_vscode_mcp_json(["pincher"]))
+        data = json.loads(merged)
+        assert _AGGREGATOR_ENTRY_NAME in data["servers"]
+        assert "zelosmcp-pincher" in data["servers"]
+        assert "zelosmcp-docker" not in data["servers"]
+        assert "user-server" in data["servers"]
 
     def test_invalid_existing_json_falls_back_to_new_body(self):
         merged = _merge_vscode_mcp_json("not json", _build_vscode_mcp_json())

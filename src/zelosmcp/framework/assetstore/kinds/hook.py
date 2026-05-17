@@ -4,9 +4,8 @@ Hook assets contain agent hook entries (event → command).  When pushed to a
 repo they are merged into their respective hook files:
 
 * **Cursor** — ``.cursor/hooks.json`` (flat array, owner-tagged merge)
-* **VS Code / GitHub** — ``.github/hooks/zelosmcp.json`` (VS Code
+* **VS Code** — ``.github/hooks/hooks.json`` (VS Code
   ``{"hooks": {"EventName": [...]}}`` schema, merge)
-* **VS Code / .vscode** — ``.vscode/hooks.json`` (same VS Code schema, merge)
 
 Only entries tagged ``"_owner": "zelosmcp"`` are managed by zelosMCP;
 everything else in these files is left untouched.
@@ -195,12 +194,7 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
         }
         vscode_body = json.dumps(vscode_entry, indent=2)
         files.append(ProjectFile(
-            rel_path=".github/hooks/zelosmcp.json",
-            body=vscode_body,
-            mode="merge",
-        ))
-        files.append(ProjectFile(
-            rel_path=".vscode/hooks.json",
+            rel_path=".github/hooks/hooks.json",
             body=vscode_body,
             mode="merge",
         ))
@@ -300,8 +294,7 @@ HOOK_KIND = AssetKind(
     description=(
         "Agent hook entries (event → command). "
         "Pushed to `.cursor/hooks.json` (Cursor flat-array format) and "
-        "`.github/hooks/zelosmcp.json` + `.vscode/hooks.json` "
-        "(VS Code event-keyed format) with safe merge — "
+        "`.github/hooks/hooks.json` (VS Code event-keyed format) with safe merge — "
         "zelosMCP only updates entries it owns."
     ),
     parse_section=_parse_section,

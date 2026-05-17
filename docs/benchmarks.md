@@ -179,7 +179,7 @@ When `run` is invoked, the following steps execute in order:
 Before any prompts run, previously pushed IDE assets are removed from the project so each benchmark stage starts from a known, clean state:
 
 - **Cursor**: removes `{root}/.cursor/rules/zelosmcp.mdc`, `.cursor/zelosmcp.json`, and any skills/agents/commands directories that were pushed by a prior run.
-- **Copilot**: removes `{root}/.github/copilot-instructions.md`, `.github/zelosmcp.json`, and any skills/agents/prompts directories.
+- **Copilot**: removes `{root}/.github/copilot-instructions.md`, `.vscode/zelosmcp.json`, and any skills/agents/prompts directories.
 
 Asset names are resolved by querying `GET /api/assets?kind={skill,agent,prompt}` so the cleanup tracks exactly what the server exposes.
 

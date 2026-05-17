@@ -817,8 +817,7 @@ def create_app(manager: ProxyManager | None = None):
           For `rule`: writes to IDE targets specified by `targets`
           (default: both `cursor` and `vscode`).
           - cursor: `.cursor/rules/zelosmcp.mdc`
-          - vscode: `.github/copilot-instructions.md` +
-                    `.vscode/copilot-instructions.md`
+          - vscode: `.github/copilot-instructions.md`
 
           For `agent`: writes one SKILL.md per agent per active target.
           For `hook`: merges into per-target hook files.
@@ -2213,8 +2212,7 @@ def create_app(manager: ProxyManager | None = None):
 
           The ``targets`` array controls which IDE output files are written:
           - ``cursor``: ``.cursor/rules/zelosmcp.mdc`` (mdc with frontmatter)
-          - ``vscode``: ``.github/copilot-instructions.md`` +
-                        ``.vscode/copilot-instructions.md`` (plain markdown)
+          - ``vscode``: ``.github/copilot-instructions.md`` (plain markdown)
 
           Defaults to both targets.  The legacy ``format`` field is still
           accepted (``cursor-mdc`` → cursor only, ``copilot-instructions``
@@ -2483,7 +2481,7 @@ def create_app(manager: ProxyManager | None = None):
         description: |
           Deletes all files created by zelosmcp push operations and cleans
           zelosmcp-owned entries from merge-mode files (hooks, mcp.json).
-          Preserves `.cursor/`, `.github/`, `.vscode/` directories and any
+          Preserves `.cursor/`, `.vscode/` directories and any
           files not managed by zelosmcp.
         tags: [lifecycle]
         requestBody:

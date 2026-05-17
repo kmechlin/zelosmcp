@@ -250,7 +250,7 @@ Skills (domain knowledge loaded on demand) are a separate kind — see [Skill (`
 | `name` | Agent identifier (e.g. `"code_reviewer"`). Also the default filename under `.cursor/agents/` and `.github/agents/`. |
 | `target` | `"cursor"` (stored value; push targets are driven by `meta.targets`). |
 | `body` | Markdown content of the agent definition file. |
-| `meta` | `{"name": "...", "description": "...", "targets": ["cursor", "vscode"], "push": {"cursor": "...", "vscode_github": "..."}}` |
+| `meta` | `{"name": "...", "description": "...", "targets": ["cursor", "vscode"], "push": {"cursor": "...", "vscode": "..."}}` |
 
 ### YAML section format
 
@@ -262,7 +262,7 @@ agents:
     targets: [cursor, vscode]   # optional; defaults to [cursor, vscode]
     model: "claude-sonnet-4-20250514"  # optional; pin to a specific model
     tools:                      # optional; restrict which tools the agent can call
-      - mcp_zelosmcp-aggr_pincher__invoke_tool
+      - mcp_zelosmcp-aggregate_pincher__invoke_tool
     agents:                     # optional; sub-agents this agent can invoke (or '*' for all)
       - other_agent
     readonly: true              # optional; Cursor-only — prevent file edits
@@ -270,7 +270,7 @@ agents:
     disable_model_invocation: true  # optional; VS Code — prevent other agents from calling this one
     push:
       cursor: ".cursor/agents/<agent_name>.md"              # optional; this is the default
-      vscode_github: ".github/agents/<agent_name>.agent.md" # optional; this is the default
+      vscode: ".github/agents/<agent_name>.agent.md" # optional; this is the default
     body: |
       # Agent Name
       You are a ...
@@ -286,7 +286,7 @@ If `push` paths are omitted, the push writer defaults to `.cursor/agents/<agent_
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `model` | string | _(editor default)_ | Pin the agent to a specific model. When omitted, the user's currently selected model is used. Use this to enforce a cheaper/faster model for high-volume subagents, or a stronger model for complex analysis. |
-| `tools` | list of strings | _(all available)_ | Restrict which MCP tools the agent can call. Use full tool names as registered at `/mcp` (e.g. `mcp_zelosmcp-aggr_pincher__invoke_tool`). |
+| `tools` | list of strings | _(all available)_ | Restrict which MCP tools the agent can call. Use full tool names as registered by VS Code for the configured MCP server (e.g. `mcp_zelosmcp-aggregate_pincher__invoke_tool`). |
 | `agents` | list or `'*'` | _(none)_ | Sub-agents this agent can invoke. Use `'*'` to allow calling any agent. VS Code only. |
 | `readonly` | bool | `false` | Prevent the agent from editing files. Cursor only. |
 | `is_background` | bool | `false` | Mark as a background agent. Cursor only. |
@@ -322,9 +322,9 @@ agents:
     targets: [cursor, vscode]
     model: "claude-sonnet-4-20250514"
     tools:
-      - mcp_zelosmcp-aggr_pincher__invoke_tool
-      - mcp_zelosmcp-aggr_pincher__search_tools
-      - mcp_zelosmcp-aggr_pincher__get_tool_schema
+      - mcp_zelosmcp-aggregate_pincher__invoke_tool
+      - mcp_zelosmcp-aggregate_pincher__search_tools
+      - mcp_zelosmcp-aggregate_pincher__get_tool_schema
     readonly: true
     body: |
       # Explore
@@ -431,7 +431,7 @@ The resulting `hooks.json` shape:
 
 Skill assets define domain knowledge that editors load on demand based on task relevance. Skills define *what the AI knows* — a body of knowledge loaded when the task matches. This is distinct from agents (which define *who* the AI is — personas with tool restrictions and model preferences).
 
-Skills are pushed to all three editor directories: `.cursor/skills/<slug>/SKILL.md`, `.github/skills/<slug>/SKILL.md`, and `.vscode/skills/<slug>/SKILL.md`.
+Skills are pushed to both editor directories: `.cursor/skills/<slug>/SKILL.md` and `.github/skills/<slug>/SKILL.md`.
 
 ### AssetRow shape
 
@@ -442,7 +442,7 @@ Skills are pushed to all three editor directories: `.cursor/skills/<slug>/SKILL.
 | `name` | Skill identifier (e.g. `"zelosmcp-pincher"`). Slugified for the directory name. |
 | `target` | `""` (both IDEs — skills target both Cursor and VS Code). |
 | `body` | Markdown content of the `SKILL.md` file. |
-| `meta` | `{"name": "...", "description": "...", "paths": ["**/*.py"], "targets": ["cursor", "vscode"], "push": {"cursor": ".cursor/skills/<slug>/SKILL.md", "vscode_github": ".github/skills/<slug>/SKILL.md", "vscode_vscode": ".vscode/skills/<slug>/SKILL.md"}}` |
+| `meta` | `{"name": "...", "description": "...", "paths": ["**/*.py"], "targets": ["cursor", "vscode"], "push": {"cursor": ".cursor/skills/<slug>/SKILL.md", "vscode": ".github/skills/<slug>/SKILL.md"}}` |
 
 ### YAML section format
 
@@ -483,8 +483,7 @@ skills:
 `POST /api/assets/push/skill` (or **Push skills** in the repo details pane) writes each skill's `SKILL.md` to all targeted directories. The file includes editor-specific YAML frontmatter:
 
 - **Cursor** — `name`, `description`, `paths` frontmatter → `.cursor/skills/<slug>/SKILL.md`
-- **VS Code / GitHub** — `name`, `description`, `argument-hint`, `context` frontmatter → `.github/skills/<slug>/SKILL.md`
-- **VS Code / .vscode** — same as GitHub → `.vscode/skills/<slug>/SKILL.md`
+- **VS Code** — `name`, `description`, `argument-hint`, `context` frontmatter → `.github/skills/<slug>/SKILL.md`
 
 Write mode is `overwrite`. Parent directories are created as needed.
 

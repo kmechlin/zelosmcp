@@ -58,7 +58,7 @@ VSCode uses a slightly different MCP config shape. Place this in `.vscode/mcp.js
 For Copilot agent guidance, generate a `copilot-instructions.md`:
 
 ```bash
-mkdir -p .github
+mkdir -p .vscode
 curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
   > .github/copilot-instructions.md
 ```

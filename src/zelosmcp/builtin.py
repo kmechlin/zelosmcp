@@ -519,8 +519,8 @@ def render_comprehensive_rule(
       - ``"copilot-instructions"``: plain markdown, no frontmatter,
         suitable for ``.github/copilot-instructions.md``. ``style`` and
         ``globs`` are ignored in this format because Copilot uses a
-        different scoping mechanism (``.github/instructions/*.instructions.md``
-        with an ``applyTo:`` frontmatter — out of scope here).
+        different scoping mechanism (per-glob ``.instructions.md``
+        files with an ``applyTo:`` frontmatter — out of scope here).
 
     ``tool_use`` controls prioritization phrasing:
       - ``"priority"`` (default): emits a "prefer MCP tools over shell"

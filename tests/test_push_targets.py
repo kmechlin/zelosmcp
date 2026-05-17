@@ -111,9 +111,10 @@ class TestAgentPushTargets:
         written_paths = _written_files(tmp_path)
         assert any(".cursor/agents" in p for p in written_paths)
         assert not any(".github/agents" in p for p in written_paths)
+        assert not any(".github/agents" in p for p in written_paths)
 
     @pytest.mark.asyncio
-    async def test_vscode_target_writes_github_and_vscode_skills(self, store, tmp_path):
+    async def test_vscode_target_writes_vscode_agents(self, store, tmp_path):
         from zelosmcp.framework.assetstore.row import AssetRow
         row = AssetRow(
             kind="agent", backend="zelosmcp", name="my_agent", target="cursor",
@@ -184,7 +185,7 @@ class TestHookPushTargets:
         )
         written_paths = _written_files(tmp_path)
         assert any(".cursor/hooks.json" in p for p in written_paths)
-        assert not any(".vscode/hooks.json" in p for p in written_paths)
+        assert not any(".github/hooks/hooks.json" in p for p in written_paths)
 
     @pytest.mark.asyncio
     async def test_vscode_target_writes_vscode_hook_files(self, store, tmp_path):
@@ -204,13 +205,12 @@ class TestHookPushTargets:
         )
         written_paths = _written_files(tmp_path)
         assert not any(".cursor/hooks.json" in p for p in written_paths)
-        assert any(".github/hooks" in p for p in written_paths)
-        assert any(".vscode/hooks.json" in p for p in written_paths)
+        assert any(".github/hooks/hooks.json" in p for p in written_paths)
 
     @pytest.mark.asyncio
     async def test_directories_created_before_write(self, store, tmp_path):
         """Regression: _local_write must create parent directories before writing
-        so .github/ and .vscode/ directories are created automatically."""
+        so .vscode/ directories are created automatically."""
         from zelosmcp.framework.assetstore.row import AssetRow
         row = AssetRow(
             kind="hook", backend="zelosmcp", name="lint", target="cursor",
@@ -226,11 +226,9 @@ class TestHookPushTargets:
             store, manager, kind="hook", repo_rw_path=str(tmp_path)
         )
         # Verify directories were created and files exist on disk.
-        assert (tmp_path / ".github" / "hooks").is_dir()
         assert (tmp_path / ".vscode").is_dir()
         written_paths = _written_files(tmp_path)
-        assert any(".github/hooks" in p for p in written_paths)
-        assert any(".vscode/hooks.json" in p for p in written_paths)
+        assert any(".github/hooks/hooks.json" in p for p in written_paths)
 
     @pytest.mark.asyncio
     async def test_vscode_hook_file_uses_event_keyed_format(self, store, tmp_path):
@@ -249,10 +247,10 @@ class TestHookPushTargets:
             store, manager, kind="hook", repo_rw_path=str(tmp_path)
         )
         # Find the .github/hooks file on disk and verify its format.
-        gh_files = [p for p in _written_files(tmp_path) if ".github/hooks" in p]
-        assert gh_files, "Expected a .github/hooks file to be written"
-        gh_path = tmp_path / gh_files[0]
-        data = json.loads(gh_path.read_text(encoding="utf-8"))
+        vs_files = [p for p in _written_files(tmp_path) if ".github/hooks/hooks.json" in p]
+        assert vs_files, "Expected a .github/hooks/hooks.json file to be written"
+        vs_path = tmp_path / vs_files[0]
+        data = json.loads(vs_path.read_text(encoding="utf-8"))
         assert "hooks" in data
         assert isinstance(data["hooks"], dict), "VS Code hooks should be event-keyed dict"
         assert "PostToolUse" in data["hooks"]
@@ -268,33 +266,29 @@ from zelosmcp.framework.assetstore.push import remove_pushed_assets
 class TestRemovePushedAssets:
     @pytest.mark.asyncio
     async def test_removes_rule_files(self, store, tmp_path):
-        """Rule files are deleted; parent .cursor/ and .github/ dirs remain."""
+        """Rule files are deleted; parent .cursor/ and .vscode/ dirs remain."""
         (tmp_path / ".cursor" / "rules").mkdir(parents=True)
         (tmp_path / ".cursor" / "rules" / "zelosmcp.mdc").write_text("# rule")
         (tmp_path / ".github").mkdir(parents=True)
         (tmp_path / ".github" / "copilot-instructions.md").write_text("# rule")
-        (tmp_path / ".vscode").mkdir(parents=True)
-        (tmp_path / ".vscode" / "copilot-instructions.md").write_text("# rule")
 
         removed = await remove_pushed_assets(store, repo_rw_path=str(tmp_path))
         paths = [r.path for r in removed if r.action == "deleted"]
         assert any("zelosmcp.mdc" in p for p in paths)
         assert any(".github/copilot-instructions.md" in p for p in paths)
-        assert any(".vscode/copilot-instructions.md" in p for p in paths)
         # Parent directories preserved
         assert (tmp_path / ".cursor").is_dir()
         assert (tmp_path / ".github").is_dir()
-        assert (tmp_path / ".vscode").is_dir()
 
     @pytest.mark.asyncio
     async def test_removes_zelosmcp_json(self, store, tmp_path):
-        for d in (".cursor", ".github", ".vscode"):
+        for d in (".cursor", ".vscode"):
             (tmp_path / d).mkdir(parents=True, exist_ok=True)
             (tmp_path / d / "zelosmcp.json").write_text("{}")
 
         removed = await remove_pushed_assets(store, repo_rw_path=str(tmp_path))
         deleted = [r.path for r in removed if r.action == "deleted"]
-        assert len([p for p in deleted if "zelosmcp.json" in p]) == 3
+        assert len([p for p in deleted if "zelosmcp.json" in p]) == 2
 
     @pytest.mark.asyncio
     async def test_removes_agent_skill_dirs(self, store, tmp_path):
@@ -337,16 +331,55 @@ class TestRemovePushedAssets:
 
     @pytest.mark.asyncio
     async def test_cleans_vscode_mcp_json(self, store, tmp_path):
-        """The zelosmcp-aggregate entry is removed; user entries survive."""
+        """zelosmcp-managed entries are removed; user entries survive."""
         (tmp_path / ".vscode").mkdir(parents=True)
-        mcp = {"servers": {"zelosmcp-aggregate": {"type": "http"}, "other": {"type": "http"}}}
+        mcp = {
+            "servers": {
+                "zelosmcp-aggregate": {"type": "http"},
+                "zelosmcp-pincher": {"type": "http"},
+                "other": {"type": "http"},
+            }
+        }
         (tmp_path / ".vscode" / "mcp.json").write_text(json.dumps(mcp))
 
         removed = await remove_pushed_assets(store, repo_rw_path=str(tmp_path))
         assert any(r.action == "cleaned" and "mcp.json" in r.path for r in removed)
         result = json.loads((tmp_path / ".vscode" / "mcp.json").read_text())
         assert "zelosmcp-aggregate" not in result["servers"]
+        assert "zelosmcp-pincher" not in result["servers"]
         assert "other" in result["servers"]
+
+    @pytest.mark.asyncio
+    async def test_push_writes_vscode_backend_entries_for_running_servers(self, store, tmp_path):
+        from zelosmcp.framework.assetstore.row import AssetRow
+
+        row = AssetRow(
+            kind="agent", backend="zelosmcp", name="my_agent", target="cursor",
+            body="# Agent\nDo stuff.",
+            meta={
+                "name": "my_agent",
+                "description": "An agent",
+                "targets": ["vscode"],
+                "push": {},
+            },
+            source="seed", seed_version=1,
+        )
+        await store.upsert(row)
+        manager = FakeManager(["pincher", "filesystem"])
+
+        await push_kind_for_all_running(
+            store, manager,
+            kind="agent",
+            repo_rw_path=str(tmp_path),
+            targets=["vscode"],
+        )
+
+        data = json.loads((tmp_path / ".vscode" / "mcp.json").read_text())
+        assert "zelosmcp-aggregate" in data["servers"]
+        assert "zelosmcp-pincher" in data["servers"]
+        assert data["servers"]["zelosmcp-pincher"]["url"].endswith("/pincher/mcp")
+        assert "zelosmcp-filesystem" in data["servers"]
+        assert data["servers"]["zelosmcp-filesystem"]["url"].endswith("/filesystem/mcp")
 
     @pytest.mark.asyncio
     async def test_preserves_non_zelosmcp_files(self, store, tmp_path):

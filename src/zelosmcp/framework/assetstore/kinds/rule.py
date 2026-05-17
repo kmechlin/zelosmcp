@@ -117,9 +117,8 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
     The body stored is the pre-rendered markdown blob; the push writer
     writes it directly.  A ``target`` of ``""`` or ``"cursor"`` writes the
     Cursor ``.mdc`` file.  A ``target`` of ``""`` or ``"vscode"`` writes
-    both the ``.github/copilot-instructions.md`` and the
-    ``.vscode/copilot-instructions.md`` paths so both Cursor's Copilot
-    variant and the local VS Code workspace discovery pick it up.
+    the ``.github/copilot-instructions.md`` path for VS Code workspace
+    discovery.
     """
     files: list[ProjectFile] = []
     target = row.target or ""
@@ -132,11 +131,6 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
     if target in ("vscode", ""):
         files.append(ProjectFile(
             rel_path=".github/copilot-instructions.md",
-            body=row.body,
-            mode="overwrite",
-        ))
-        files.append(ProjectFile(
-            rel_path=".vscode/copilot-instructions.md",
             body=row.body,
             mode="overwrite",
         ))
@@ -232,8 +226,7 @@ RULE_KIND = AssetKind(
     description=(
         "Cursor `.mdc` and VS Code `copilot-instructions.md` rule content — "
         "playbooks, per-tool guidance, and access-mode directives.  "
-        "VS Code target writes both `.github/copilot-instructions.md` and "
-        "`.vscode/copilot-instructions.md`."
+        "VS Code target writes `.github/copilot-instructions.md`."
     ),
     parse_section=_parse_section,
     validate=_validate,

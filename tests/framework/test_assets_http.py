@@ -213,6 +213,39 @@ class TestYamlEditorRoutes:
         assert r.json()["ok"] is True
         assert r.json()["errors"] == []
 
+    async def test_validate_accepts_rich_skill_fields(self, app_with_assets):
+        app, _, _ = app_with_assets
+        import yaml
+
+        valid = yaml.dump({
+            "backend": "pincher",
+            "seed_version": 1,
+            "skills": {
+                "codebase-explore": {
+                    "description": "Read-only codebase exploration workflow.",
+                    "targets": ["cursor", "vscode"],
+                    "argument_hint": "[question or area to inspect]",
+                    "user_invocable": True,
+                    "disable_model_invocation": False,
+                    "context": "fork",
+                    "metadata": {"owner": "zelosmcp"},
+                    "paths": ["**/*.py", "**/*.ts"],
+                    "body": "# Explore\n\nUse pincher before broad file reads.\n",
+                }
+            },
+        })
+
+        async with _client(app) as c:
+            r = await c.post(
+                "/api/assets/yaml/pincher/validate",
+                content=valid.encode(),
+                headers={"Content-Type": "text/yaml"},
+            )
+
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert r.json()["errors"] == []
+
     async def test_validate_returns_errors_for_invalid_yaml(self, app_with_assets):
         app, _, _ = app_with_assets
         bad = "backend: pincher\nseed_version: 1\nbad_key: true\n"
