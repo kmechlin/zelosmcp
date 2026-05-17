@@ -1,9 +1,9 @@
 
 # zelosMCP backend tool catalog
 
-Generated from the zelosMCP aggregator at `http://localhost:8000/mcp`. Every tool below is reachable as `<server>__<tool>` (double underscore) on that single Cursor entry. Prefer these over shelling out — they return structured data and keep paths inside the container's `/user_data_rw` (read-write) and `/user_data_ro` (kernel-enforced read-only) mounts.
+Generated from the zelosMCP aggregator at `http://localhost:8000/mcp`. Every tool below is reachable as `<server>__<tool>` (double underscore) on that single Cursor entry. Prefer these over shelling out — they return structured data and keep paths inside the container's `/user_data_rw` (read-write) and `/user_data_ro` (kernel-enforced read-only) mounts. Always translate host paths to `/user_data_ro/<repo>/...` for reads or `/user_data_rw/<repo>/...` for writes before calling tools.
 
-Currently-loaded backends: `docker`, `pincher`.
+Currently-loaded backends: `pincher`, `filesystem`.
 
 ## Access mode: READ-WRITE
 
@@ -22,6 +22,27 @@ Answer these four questions before issuing any tool call. The first matching YES
 3. **Other MCP-covered tasks?** (containers, pods, networks, volumes, images, etc.) → Check the tool catalog sections below. Use the relevant backend tools before falling back to shell.
 4. **None of the above?** You may use `Shell` / `Read` / `Grep`, but only after stating which question you answered NO to and why no MCP tool fits.
 
+## Container path translation (MANDATORY)
+
+Every loaded backend runs inside the zelosMCP container. Host paths do NOT exist inside the container. Translate before every call:
+
+| Use case | Path to pass |
+|---|---|
+| Read in pincher / filesystem | `/user_data_ro/<repo>/...` |
+| Write in filesystem | `/user_data_rw/<repo>/...` |
+| `pincher.project` argument | repo basename only (e.g. `zelosmcp`) |
+
+Host root mapping: `/Users/KMECHL/workspace` maps to `/user_data_ro` for read-only access and `/user_data_rw` for read-write access.
+
+Examples:
+- GOOD: `pincher__invoke_tool(tool_name="index", tool_input={"path": "/user_data_ro/zelosmcp"})`
+- GOOD: `filesystem__read_text_file(path="/user_data_rw/zelosmcp/.env")`
+- BAD: `filesystem__read_text_file(path="/Users/KMECHL/workspace/zelosmcp/.env")` because the container cannot see this host path.
+
+## Built-in skills
+
+- `/zelosmcp-onboarding` — Understand available zelosMCP backends, their tools, and calling conventions. Use when asked about setup, available tools, getting started, or how to use zelosMCP.
+
 ## Mutability markers
 
 - `[readonly]` &mdash; pure inspection (server declares `readOnlyHint: true`).
@@ -32,87 +53,6 @@ Answer these four questions before issuing any tool call. The first matching YES
 ## Tool naming convention
 
 Tool, prompt, and resource names at the aggregate `/mcp` are `<server>__<original>` (double underscore). Don't strip the prefix when calling — it's how the aggregator routes the call back to the right backend.
-
-## `docker`
-
-`docker` exposes 19 tools via the aggregator at `/mcp` (namespaced `docker__<tool>`). Prefer these over equivalent shell commands.
-
-- `docker__list_containers` `(all?, filters?)` [?]
-  List all Docker containers
-  `docker__list_containers` `(all?, filters?)` [?]
-    List all Docker containers
-- `docker__create_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-  Create a new Docker container
-  `docker__create_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-    Create a new Docker container
-- `docker__run_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-  Run an image in a new Docker container (preferred over `create_container` + `start_container`)
-  `docker__run_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?)` [mutates]
-    Run an image in a new Docker container (preferred over `create_container` + `start_container`)
-- `docker__recreate_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?, container_id?)` [?]
-  Stop and remove a container, then run a new container. Fails if the container does not exist.
-  `docker__recreate_container` `(image, detach?, name?, entrypoint?, command?, network?, environment?, ports?, volumes?, labels?, auto_remove?, container_id?)` [?]
-    Stop and remove a container, then run a new container. Fails if the container does not exist.
-- `docker__start_container` `(container_id)` [mutates]
-  Start a Docker container
-  `docker__start_container` `(container_id)` [mutates]
-    Start a Docker container
-- `docker__fetch_container_logs` `(container_id, tail?)` [?]
-  Fetch logs for a Docker container
-  `docker__fetch_container_logs` `(container_id, tail?)` [?]
-    Fetch logs for a Docker container
-- `docker__stop_container` `(container_id)` [mutates]
-  Stop a Docker container
-  `docker__stop_container` `(container_id)` [mutates]
-    Stop a Docker container
-- `docker__remove_container` `(container_id, force?)` [mutates]
-  Remove a Docker container
-  `docker__remove_container` `(container_id, force?)` [mutates]
-    Remove a Docker container
-- `docker__list_images` `(name?, all?, filters?)` [?]
-  List Docker images
-  `docker__list_images` `(name?, all?, filters?)` [?]
-    List Docker images
-- `docker__pull_image` `(repository, tag?)` [mutates]
-  Pull a Docker image
-  `docker__pull_image` `(repository, tag?)` [mutates]
-    Pull a Docker image
-- `docker__push_image` `(repository, tag?)` [mutates]
-  Push a Docker image
-  `docker__push_image` `(repository, tag?)` [mutates]
-    Push a Docker image
-- `docker__build_image` `(path, tag, dockerfile?)` [mutates]
-  Build a Docker image from a Dockerfile
-  `docker__build_image` `(path, tag, dockerfile?)` [mutates]
-    Build a Docker image from a Dockerfile
-- `docker__remove_image` `(image, force?)` [mutates]
-  Remove a Docker image
-  `docker__remove_image` `(image, force?)` [mutates]
-    Remove a Docker image
-- `docker__list_networks` `(filters?)` [?]
-  List Docker networks
-  `docker__list_networks` `(filters?)` [?]
-    List Docker networks
-- `docker__create_network` `(name, driver?, internal?, labels?)` [mutates]
-  Create a Docker network
-  `docker__create_network` `(name, driver?, internal?, labels?)` [mutates]
-    Create a Docker network
-- `docker__remove_network` `(network_id)` [mutates]
-  Remove a Docker network
-  `docker__remove_network` `(network_id)` [mutates]
-    Remove a Docker network
-- `docker__list_volumes` `(...)` [?]
-  List Docker volumes
-  `docker__list_volumes` `(...)` [?]
-    List Docker volumes
-- `docker__create_volume` `(name, driver?, labels?)` [mutates]
-  Create a Docker volume
-  `docker__create_volume` `(name, driver?, labels?)` [mutates]
-    Create a Docker volume
-- `docker__remove_volume` `(volume_name, force?)` [mutates]
-  Remove a Docker volume
-  `docker__remove_volume` `(volume_name, force?)` [mutates]
-    Remove a Docker volume
 
 ## `pincher`
 
@@ -168,6 +108,53 @@ Tool, prompt, and resource names at the aggregate `/mcp` are `<server>__<origina
 - `pincher__trace` `(name?, id?, project?, direction?, depth?, risk?, min_confidence?, kinds?, include_tests?, fields?)` [?]
   **Use before changing behaviour** that other code depends on, to find callers (inbound) or what it calls (outbound). Risk labels: CRITICAL=direct callers, HIGH=2 hops, MEDIUM=3 hops. Pass `name` for the common case; when the name is ambiguous (multiple symbols share it) trace falls back to the first match and surfaces alternatives in `_meta.ambiguous_match`. To trace a specific alternative, pass `id=` with the exact symbol ID from search/symbols/query — that's the disambiguation escape hatch (#474). Default traversal follows CALLS-family edges; pass `kinds=READS,WRITES` to trace data-flow edges instead (or `kinds=CALLS,READS` to mix). Test files and testdata/ fixtures are filtered by default; pass `include_tests=true` to see test coverage of a symbol. When `depth` is omitted, the result is auto-trimmed to the smallest depth with ≥5 hops (so hotspots don't dump 100+ rows); `_meta.depth_used` reports the trim. Pass `depth=N` explicitly to skip the trim.
   Find callers (inbound) or callees (outbound) of a symbol. CRITICAL=direct callers, HIGH=2 hops, MEDIUM=3 hops. Use before changing a function that other code depends on.
+
+### Available skills
+
+- `/zelosmcp-pincher` — Codebase intelligence with pincher: find symbols, read functions, trace callers, analyze blast radius. Use for any code understanding, exploration, or impact analysis task.
+- `/zelosmcp-pre-commit` — Pre-commit blast radius analysis. Use when committing, pushing, or asking about change impact.
+
+## `filesystem`
+
+`filesystem` exposes 14 tools via the aggregator at `/mcp` (namespaced `filesystem__<tool>`). Prefer these over equivalent shell commands.
+
+- `filesystem__read_file` `(path, tail?, head?)` [readonly]
+  Read the complete contents of a file as text. DEPRECATED: Use read_text_file instead.
+- `filesystem__read_text_file` `(path, tail?, head?)` [readonly]
+  Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.
+  Use `head=N` or `tail=N` for large files. Prefer this over the native `Read` tool for any file under the workspace root.
+- `filesystem__read_media_file` `(path)` [readonly]
+  Read an image or audio file. Returns the base64 encoded data and MIME type. Only works within allowed directories.
+- `filesystem__read_multiple_files` `(paths)` [readonly]
+  Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories.
+  One round trip for multiple files — use this when comparing or summarizing several files at once.
+- `filesystem__write_file` `(path, content)` [destructive]
+  Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.
+- `filesystem__edit_file` `(path, edits, dryRun?)` [destructive]
+  Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories.
+  Line-based edits only. Returns a git-style diff on success. Prefer over `write_file` for targeted changes.
+- `filesystem__create_directory` `(path)` [mutates]
+  Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories.
+- `filesystem__list_directory` `(path)` [readonly]
+  Get a detailed listing of all files and directories in a specified path. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is essential for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+- `filesystem__list_directory_with_sizes` `(path, sortBy?)` [readonly]
+  Get a detailed listing of all files and directories in a specified path, including sizes. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is useful for understanding directory structure and finding specific files within a directory. Only works within allowed directories.
+- `filesystem__directory_tree` `(path, excludePatterns?)` [readonly]
+  Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Files have no children array, while directories always have a children array (which may be empty). The output is formatted with 2-space indentation for readability. Only works within allowed directories.
+  Returns a recursive JSON tree with name/type/children. Pass `excludePatterns` to skip `node_modules`, `.venv`, etc.
+- `filesystem__move_file` `(source, destination)` [mutates]
+  Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.
+- `filesystem__search_files` `(path, pattern, excludePatterns?)` [readonly]
+  Recursively search for files and directories matching a pattern. The patterns should be glob-style patterns that match paths relative to the working directory. Use pattern like '*.ext' to match files in current directory, and '**/*.ext' to match files in all subdirectories. Returns full paths to all matching items. Great for finding files when you don't know their exact location. Only searches within allowed directories.
+  Glob patterns relative to the starting directory — use `**/*.ext` for recursive matches. Much faster than shell `find`.
+- `filesystem__get_file_info` `(path)` [readonly]
+  Retrieve detailed metadata about a file or directory. Returns comprehensive information including size, creation time, last modified time, permissions, and type. This tool is perfect for understanding file characteristics without reading the actual content. Only works within allowed directories.
+- `filesystem__list_allowed_directories` `(...)` [readonly]
+  Returns the list of directories that this server is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.
+
+### Available skills
+
+- `/zelosmcp-filesystem` — Sandboxed file operations via the filesystem backend. Use when reading, editing, listing, or searching files in the workspace.
 
 ## Don't do this
 

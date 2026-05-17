@@ -30,7 +30,7 @@ describe("cli", () => {
       "utf-8",
     );
     expect(content).toContain("--model");
-    expect(content).toContain("runSuite");
+    expect(content).toContain("coreRunSuite");
   });
 
   it("cli has refetch subcommand with --run-log option", () => {
@@ -42,12 +42,13 @@ describe("cli", () => {
     expect(content).toContain("refetchRunLog");
   });
 
-  it("cli requires CURSOR_API_KEY for run command", () => {
+  it("cli loads adapters and validates env for run command", () => {
     const content = readFileSync(
       resolve(__dirname, "../src/cli.ts"),
       "utf-8",
     );
-    expect(content).toContain("CURSOR_API_KEY");
+    expect(content).toContain("loadAdapter");
+    expect(content).toContain("validateEnv");
   });
 
   it("cli has report subcommand with --run-log option", () => {

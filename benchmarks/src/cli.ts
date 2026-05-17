@@ -4,11 +4,19 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { runStaticAnalysis } from "./static-analyzer.js";
 import { renderStaticTable, renderRunLogHtml } from "./report.js";
-import { runSuite, readRunLog, refetchRunLog, staticResultsPath, findProjectRoot, findProjectRules, isRetryableError } from "./runner.js";
+import { readRunLog, refetchRunLog, staticResultsPath, findProjectRoot, findProjectRules, isRetryableError } from "./runner.js";
 import { getSessionCookie } from "./usage-api.js";
+import { coreRunSuite, type AdapterConfig } from "./core/runner.js";
+import { loadAdapter, listAdapterIds } from "./adapters/registry.js";
+import {
+  applySecretsFile,
+  findDefaultSecretsFile,
+  resolveSecretsPath,
+} from "./secrets.js";
 import {
   MODES,
   RESPONSE_FORMATS,
+  type IdeId,
   type Mode,
   type PromptDef,
   type ResponseFormat,
@@ -70,9 +78,22 @@ program
 
 program
   .command("run")
-  .description("Send prompts via @cursor/sdk under each compression mode")
+  .description("Send prompts via IDE adapter(s) under each compression mode")
   .requiredOption("--url <url>", "zelosMCP base URL", "http://localhost:8000")
-  .requiredOption("--model <model>", "Cursor model ID", "composer-2")
+  .option(
+    "--ide <ide>",
+    `IDE adapter(s) to benchmark. Valid: cursor, copilot, all (default: cursor)`,
+    "cursor",
+  )
+  .option("--model <model>", "Model ID applied to all adapters; overridden by --cursor-model / --copilot-model")
+  .option("--cursor-model <model>", "Model ID for Cursor (default: composer-2)")
+  .option("--copilot-model <model>", "Model ID for Copilot (default: claude-sonnet-4.5)")
+  .option("--rules-dir <path>", "Custom rules directory (relative to project root or absolute)")
+  .option(
+    "--secrets-file <path>",
+    `Dotenv-style file with API keys (default: auto-detect ${"`.bench.env`"} in CWD / benchmarks dir). ` +
+      "Existing env vars take precedence.",
+  )
   .option("--delay <ms>", "Delay between prompts in ms", "5000")
   .option(
     "--output <path>",
@@ -99,21 +120,30 @@ program
   )
   .option(
     "--no-clean-assets",
-    "Do not remove pushed .cursor rules/assets before the benchmark starts",
+    "Do not remove pushed IDE rules/assets before the benchmark starts",
   )
   .option(
     "--refresh-assets",
-    "Push fresh .cursor assets after each server config reload (default: enabled with --rules)",
+    "Push fresh assets after each server config reload (default: enabled with --rules)",
   )
   .option(
     "--no-refresh-assets",
-    "Do not push .cursor assets after server config reloads",
+    "Do not push assets after server config reloads",
   )
-  .option("--rules", "Load project Cursor rules into each agent run")
+  .option("--rules", "Load project IDE rules into each agent run")
+  .option(
+    "--log-transcripts",
+    "Save per-prompt transcript JSON files (tool calls, thoughts, dialog) to results/transcripts/",
+  )
   .action(
     async (opts: {
       url: string;
-      model: string;
+      ide: string;
+      model?: string;
+      cursorModel?: string;
+      copilotModel?: string;
+      rulesDir?: string;
+      secretsFile?: string;
       delay: string;
       output: string;
       prompts: string;
@@ -123,15 +153,64 @@ program
       cleanAssets?: boolean;
       refreshAssets?: boolean;
       rules?: boolean;
+      logTranscripts?: boolean;
     }) => {
-      const apiKey = process.env.CURSOR_API_KEY;
-      if (!apiKey) {
+      // ── Load secrets file (before adapter env validation) ────────────────
+      if (opts.secretsFile) {
+        const secretsPath = resolveSecretsPath(opts.secretsFile);
+        if (!existsSync(secretsPath)) {
+          console.error(`Error: secrets file not found: ${secretsPath}`);
+          process.exit(1);
+        }
+        const applied = applySecretsFile(secretsPath);
+        if (applied.size > 0) {
+          console.log(`Loaded ${applied.size} secret(s) from ${secretsPath}: ${[...applied].join(", ")}`);
+        }
+      } else {
+        const auto = findDefaultSecretsFile();
+        if (auto) {
+          const applied = applySecretsFile(auto);
+          if (applied.size > 0) {
+            console.log(`Auto-loaded ${applied.size} secret(s) from ${auto}: ${[...applied].join(", ")}`);
+          }
+        }
+      }
+
+      // ── Parse IDE selection ───────────────────────────────────────────────
+      const ideArg = (opts.ide ?? "cursor").toLowerCase().trim();
+      let ideIds: IdeId[];
+      if (ideArg === "all") {
+        ideIds = listAdapterIds();
+      } else if (ideArg === "cursor" || ideArg === "copilot") {
+        ideIds = [ideArg];
+      } else {
         console.error(
-          "Error: CURSOR_API_KEY environment variable is required for the run command.",
+          `Error: invalid --ide value: ${ideArg}. Valid: cursor, copilot, all`,
         );
         process.exit(1);
       }
 
+      // ── Load adapters and validate environment ────────────────────────────
+      const adapterConfigs: AdapterConfig[] = [];
+      for (const id of ideIds) {
+        const adapter = await loadAdapter(id);
+        const { ok, missing } = adapter.validateEnv();
+        if (!ok) {
+          console.error(
+            `Error: missing env var(s) for ${adapter.label}: ${missing.join(", ")}`,
+          );
+          process.exit(1);
+        }
+        const modelForIde =
+          id === "cursor"
+            ? (opts.cursorModel ?? opts.model ?? adapter.defaultModel)
+            : id === "copilot"
+              ? (opts.copilotModel ?? opts.model ?? adapter.defaultModel)
+              : (opts.model ?? adapter.defaultModel);
+        adapterConfigs.push({ adapter, model: modelForIde });
+      }
+
+      // ── Validate other options ────────────────────────────────────────────
       let modes: readonly Mode[] | undefined;
       if (opts.mode) {
         const requested = opts.mode.split(",").map((m) => m.trim()).filter(Boolean);
@@ -174,37 +253,27 @@ program
       }
 
       const promptsPath = resolve(opts.prompts);
-      const prompts = JSON.parse(
-        readFileSync(promptsPath, "utf-8"),
-      ) as PromptDef[];
+      const prompts = JSON.parse(readFileSync(promptsPath, "utf-8")) as PromptDef[];
 
       const projectRoot = findProjectRoot(process.cwd());
-      const ruleFiles = findProjectRules(projectRoot);
 
       const modeCount = (modes ?? MODES).length;
-      console.log(`Running ${prompts.length} prompts × ${modeCount} mode${modeCount === 1 ? "" : "s"}...`);
-      console.log(`Model:   ${opts.model}`);
-      console.log(`Modes:   ${(modes ?? MODES).join(", ")}`);
-      if (pinResponseFormat !== undefined) {
-        console.log(`Pin:     response_format=${pinResponseFormat}`);
-      }
-      if (pinStripMeta !== undefined) {
-        console.log(`Pin:     strip_meta=${pinStripMeta}`);
-      }
-      console.log(`Assets:  clean=${opts.cleanAssets !== false}, refresh=${opts.refreshAssets ?? Boolean(opts.rules)}`);
-      console.log(`Root:    ${projectRoot}`);
-
-      if (ruleFiles.length > 0) {
-        const status = opts.rules ? "enabled" : "disabled (pass --rules to include)";
-        console.log(`Rules:   ${status}`);
-        for (const f of ruleFiles) {
-          console.log(`         ${f}`);
-        }
-      } else {
-        console.log(`Rules:   none found in ${projectRoot}/.cursor/rules/`);
-      }
-
-      console.log(`Output:  ${opts.output}\n`);
+      const adapterLabels = adapterConfigs
+        .map((c) => `${c.adapter.label}/${c.model}`)
+        .join(", ");
+      console.log(
+        `Running ${prompts.length} prompts × ${modeCount} mode${modeCount === 1 ? "" : "s"} × ` +
+          `${adapterConfigs.length} adapter${adapterConfigs.length === 1 ? "" : "s"}...`,
+      );
+      console.log(`Adapters: ${adapterLabels}`);
+      console.log(`Modes:    ${(modes ?? MODES).join(", ")}`);
+      if (pinResponseFormat !== undefined) console.log(`Pin:      response_format=${pinResponseFormat}`);
+      if (pinStripMeta !== undefined) console.log(`Pin:      strip_meta=${pinStripMeta}`);
+      console.log(`Assets:   clean=${opts.cleanAssets !== false}, refresh=${opts.refreshAssets ?? Boolean(opts.rules)}`);
+      if (opts.logTranscripts) console.log(`Transcripts: enabled (results/transcripts/)`);
+      if (opts.rulesDir) console.log(`Rules dir: ${opts.rulesDir}`);
+      console.log(`Root:     ${projectRoot}`);
+      console.log(`Output:   ${opts.output}\n`);
 
       const runLogPath = resolve(opts.output);
 
@@ -222,24 +291,25 @@ program
 
       let exitCode = 0;
       try {
-        await runSuite({
+        await coreRunSuite({
           zelosmcpUrl: opts.url,
-          model: opts.model,
-          apiKey,
+          adapterConfigs,
           prompts,
           modes,
           delayMs: parseInt(opts.delay, 10),
           outputPath: runLogPath,
           enableRules: opts.rules,
+          rulesDir: opts.rulesDir,
           pinResponseFormat,
           pinStripMeta,
           cleanAssets: opts.cleanAssets,
           refreshAssets: opts.refreshAssets,
+          logTranscripts: opts.logTranscripts,
         });
       } catch (err) {
         exitCode = 1;
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`\nrunSuite failed: ${msg}`);
+        console.error(`\ncoreRunSuite failed: ${msg}`);
       } finally {
         const reportPath = writeReport();
         console.log(`\nRun log:  ${opts.output}`);
