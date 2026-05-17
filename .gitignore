@@ -28,4 +28,6 @@ docker-tools/cert.pem
 buildkitd.toml
 ./tmp/
 okta_client.env
-apikey.env
+.bench.env
+benchmarks/.bench.env
+
