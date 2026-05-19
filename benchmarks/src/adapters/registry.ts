@@ -17,6 +17,12 @@ export async function loadAdapter(id: IdeId): Promise<IdeAdapter> {
       const { CopilotAdapter } = await import("./copilot/index.js");
       return new CopilotAdapter();
     }
+    case "zelos": {
+      const { ZelosAdapter } = await import("./zelos/index.js");
+      return new ZelosAdapter();
+    }
+    case "claude":
+      throw new Error(`IDE adapter "${id}" is not yet implemented`);
     default: {
       const _exhaustive: never = id;
       throw new Error(`Unknown IDE adapter: ${_exhaustive}`);
@@ -26,5 +32,5 @@ export async function loadAdapter(id: IdeId): Promise<IdeAdapter> {
 
 /** Return all supported adapter IDs in the order they run in "all" mode. */
 export function listAdapterIds(): IdeId[] {
-  return ["cursor", "copilot"];
+  return ["cursor", "copilot", "zelos"];
 }

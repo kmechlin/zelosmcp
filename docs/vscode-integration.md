@@ -15,8 +15,8 @@ Read [cursor-integration.md](cursor-integration.md) first if you haven't; this p
 | Instructions file path | `.cursor/rules/*.mdc` | `.github/copilot-instructions.md` |
 | Instructions file format | Markdown with YAML frontmatter (`alwaysApply`, `globs`) | Plain markdown, no frontmatter |
 | Generator query param | `format=cursor-mdc` (default) | `format=copilot-instructions` |
-| Agent push path | `.cursor/agents/<name>.md` | `.github/agents/<name>.md` |
-| Skill push paths | `.cursor/skills/<slug>/SKILL.md` | `.github/skills/<slug>/SKILL.md` + `.vscode/skills/<slug>/SKILL.md` |
+| Agent push path | `.cursor/agents/<name>.md` | `.github/agents/<name>.agent.md` |
+| Skill push paths | `.cursor/skills/<slug>/SKILL.md` | `.github/skills/<slug>/SKILL.md` |
 
 Both IDEs talk to the same `http://localhost:8000/mcp` endpoint and consume the same tool catalog.
 
@@ -85,11 +85,9 @@ When a push targets `"vscode"`, the following files are written to the repo:
 | --- | --- | --- |
 | `.vscode/mcp.json` | Aggregator server entry | **Merge** — user entries preserved |
 | `.github/copilot-instructions.md` | Tool catalog + playbooks (plain markdown) | Overwrite |
-| `.vscode/copilot-instructions.md` | Same as above (VS Code also reads from here) | Overwrite |
 | `.vscode/zelosmcp.json` | Push metadata (targets, access, timestamps) | Overwrite |
-| `.github/zelosmcp.json` | Same push metadata | Overwrite |
 
-The instructions files (`.github/copilot-instructions.md` and `.vscode/copilot-instructions.md`) are always overwritten because they are fully generated from the current backend catalog — there is no user-authored content to preserve.
+The instructions file (`.github/copilot-instructions.md`) is always overwritten because it is fully generated from the current backend catalog — there is no user-authored content to preserve.
 
 Push defaults to both `cursor` and `vscode` targets. To push only VS Code configs:
 
@@ -104,7 +102,7 @@ curl -X POST http://localhost:8000/api/push \
 Generate from the same `/api/cursor-rule` endpoint with `format=copilot-instructions`:
 
 ```bash
-mkdir -p .github
+mkdir -p .vscode
 curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
   > .github/copilot-instructions.md
 ```
@@ -120,14 +118,14 @@ curl -fsSL 'http://localhost:8000/api/cursor-rule?access=read-write&format=copil
 
 ## Per-glob Copilot instructions (`applyTo:`)
 
-Copilot has a `.github/instructions/*.instructions.md` directory for guidance scoped to particular file patterns. zelosMCP's generator doesn't natively emit this format — wrap the body manually:
+Copilot has a `.vscode/instructions/*.instructions.md` directory for guidance scoped to particular file patterns. zelosMCP's generator doesn't natively emit this format — wrap the body manually:
 
 ```bash
-mkdir -p .github/instructions
+mkdir -p .vscode/instructions
 {
   printf -- '---\napplyTo: "**/*.py"\n---\n\n'
   curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions'
-} > .github/instructions/zelosmcp-python.instructions.md
+} > .vscode/instructions/zelosmcp-python.instructions.md
 ```
 
 ## Workflows
@@ -147,7 +145,7 @@ curl -X POST http://localhost:8000/api/push \
 Alternatively, generate the instructions file manually:
 
 ```bash
-mkdir -p .github
+mkdir -p .vscode
 curl -fsSL 'http://localhost:8000/api/cursor-rule?format=copilot-instructions' \
   > .github/copilot-instructions.md
 ```
@@ -212,7 +210,7 @@ VSCode uses `"http"` for streamable HTTP transport. `"streamable-http"` is the C
 
 ### Copilot ignores the instructions file
 
-- Confirm `.github/copilot-instructions.md` is at the **repo root's** `.github/` directory (not nested deeper).
+- Confirm `.github/copilot-instructions.md` is at the **workspace root's** `.vscode/` directory (not nested deeper).
 - Check that the VS Code setting `github.copilot.chat.codeGeneration.useInstructionFiles` is `true` (this is the default).
 - Reload VSCode after changing the file — Copilot caches instructions on startup.
 - Note: the instructions are a **soft preference**, not a hard policy. Copilot may still use built-in tools when it judges them more appropriate.

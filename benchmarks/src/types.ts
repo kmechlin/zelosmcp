@@ -16,7 +16,7 @@ export const RESPONSE_FORMATS: readonly ResponseFormat[] = [
   "compact_json",
 ] as const;
 
-export type IdeId = "cursor" | "copilot" | "claude";
+export type IdeId = "cursor" | "copilot" | "zelos" | "claude";
 
 export interface StaticResult {
   mode: Mode;

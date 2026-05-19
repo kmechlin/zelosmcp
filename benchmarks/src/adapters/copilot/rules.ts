@@ -24,10 +24,8 @@ function walkMarkdownFiles(dir: string): string[] {
 /**
  * Return rule/instruction files for the VS Code + GitHub Copilot IDE.
  *
- * Auto-discovery order:
+ * Auto-discovery:
  *   1. `.github/copilot-instructions.md`
- *   2. `.vscode/copilot-instructions.md`
- *   3. All `*.md` files under `.github/instructions/` (per-glob instructions)
  *
  * Override: when `rulesDir` is provided (relative to projectRoot or absolute),
  * that directory is walked for `*.md` files instead.
@@ -48,19 +46,12 @@ export function findCopilotRules(projectRoot: string, rulesDir?: string): RulesC
   }
 
   const githubDir = join(projectRoot, ".github");
-  const vscodeDir = join(projectRoot, ".vscode");
-  const instructionsDir = join(githubDir, "instructions");
 
   const candidates: string[] = [
     join(githubDir, "copilot-instructions.md"),
-    join(vscodeDir, "copilot-instructions.md"),
   ];
 
   const files = candidates.filter((f) => existsSync(f));
-
-  if (existsSync(instructionsDir)) {
-    files.push(...walkMarkdownFiles(instructionsDir));
-  }
 
   return {
     dir: githubDir,
@@ -80,29 +71,25 @@ function assetSlug(name: string): string {
 
 /**
  * Remove pushed Copilot-side zelosMCP instruction files and asset directories
- * from the project's `.github/` and `.vscode/` directories.
+ * from the project's `.github/` directory.
  */
 export async function cleanCopilotAssets(
   zelosmcpUrl: string,
   projectRoot: string,
 ): Promise<void> {
   const githubDir = join(projectRoot, ".github");
-  const vscodeDir = join(projectRoot, ".vscode");
 
   const removals = new Set<string>([
     join(githubDir, "copilot-instructions.md"),
-    join(vscodeDir, "copilot-instructions.md"),
-    join(githubDir, "zelosmcp.json"),
-    join(vscodeDir, "zelosmcp.json"),
+    join(projectRoot, ".vscode", "zelosmcp.json"),
   ]);
 
   try {
     for (const row of await fetchAssets(zelosmcpUrl, "skill")) {
       removals.add(join(githubDir, "skills", assetSlug(row.name)));
-      removals.add(join(vscodeDir, "skills", assetSlug(row.name)));
     }
     for (const row of await fetchAssets(zelosmcpUrl, "agent")) {
-      removals.add(join(githubDir, "agents", `${assetSlug(row.name)}.md`));
+      removals.add(join(githubDir, "agents", `${assetSlug(row.name)}.agent.md`));
     }
     for (const row of await fetchAssets(zelosmcpUrl, "prompt")) {
       removals.add(join(githubDir, "prompts", `${assetSlug(row.name)}.md`));

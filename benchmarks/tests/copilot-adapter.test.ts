@@ -144,6 +144,28 @@ describe("CopilotAdapter", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("buildCopilotArgs scopes tool permissions to zelosmcp and skill", async () => {
+    const { buildCopilotArgs } = await import("../src/adapters/copilot/index.js");
+    const args = buildCopilotArgs({
+      prompt: { id: "p1", text: "Explain startup", category: "test" },
+      model: "claude-sonnet-4.5",
+      agent: "zelos-agent",
+      logTranscripts: true,
+    });
+
+    expect(args).toContain("--allow-tool=zelosmcp");
+    expect(args).toContain("--allow-tool=skill");
+    expect(args).not.toContain("--allow-all-tools");
+    expect(args).toContain("--deny-tool=bash");
+    expect(args).toContain("--deny-tool=create");
+    expect(args).toContain("--deny-tool=edit");
+    expect(args).toContain("--deny-tool=glob");
+    expect(args).toContain("--agent");
+    expect(args).toContain("zelos-agent");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+  });
 });
 
 // ── Tests for adapter registry ──────────────────────────────────────────────

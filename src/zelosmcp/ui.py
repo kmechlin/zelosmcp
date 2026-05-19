@@ -1602,7 +1602,7 @@ HTML_TEMPLATE = """\
             inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
             to make changes through the MCPs.
             <span id="rule-tab-hint-cursor">Save as <code>.cursor/rules/zelosmcp.mdc</code> in any workspace (or <code>~/.cursor/rules/</code> for global).</span>
-            <span id="rule-tab-hint-vscode" style="display:none">Save as <code>.github/copilot-instructions.md</code> (picked up by VS Code Copilot) and/or <code>.vscode/copilot-instructions.md</code>.</span>
+            <span id="rule-tab-hint-vscode" style="display:none">Save as <code>.github/copilot-instructions.md</code> (picked up by VS Code Copilot).</span>
           </p>
           <div class="snippet">
             <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
@@ -2817,7 +2817,7 @@ HTML_TEMPLATE = """\
     if (hint) {
       hint.textContent = repoIdeTarget === "cursor"
         ? "Writes .cursor/rules/zelosmcp.mdc"
-        : "Writes .github/copilot-instructions.md and .vscode/copilot-instructions.md";
+        : "Writes .github/copilot-instructions.md";
     }
   }
 
@@ -3926,7 +3926,7 @@ HTML_TEMPLATE = """\
       "  \\u2022 Skill files\\n" +
       "  \\u2022 zelosmcp.json prefs manifests\\n" +
       "  \\u2022 zelosmcp entries from hooks and mcp.json\\n\\n" +
-      "Non-zelosmcp files in .cursor/, .github/, .vscode/ will be preserved."
+      "Non-zelosmcp files in .cursor/, .vscode/ will be preserved."
     );
     if (!ok) return;
     const status = document.getElementById("repo-rule-status");
@@ -3979,10 +3979,9 @@ HTML_TEMPLATE = """\
       "This will overwrite the current contents of:\\n" +
       "  .cursor/rules/zelosmcp.mdc\\n" +
       "  .github/copilot-instructions.md\\n" +
-      "  .vscode/copilot-instructions.md\\n" +
-      "  .cursor/skills/*, .github/skills/*, .vscode/skills/*\\n" +
-      "  .cursor/hooks.json, .github/hooks/zelosmcp.json, .vscode/hooks.json\\n" +
-      "  .cursor/zelosmcp.json, .github/zelosmcp.json, .vscode/zelosmcp.json\\n\\n" +
+      "  .cursor/skills/*, .github/skills/*\\n" +
+      "  .cursor/hooks.json, .github/hooks/hooks.json\\n" +
+      "  .cursor/zelosmcp.json, .vscode/zelosmcp.json\\n\\n" +
       "Each repo's stored targets, access mode, and tool-use mode will be respected.\\n\\n" +
       "ANY MANUAL EDITS TO THESE FILES WILL BE LOST. Continue?"
     );

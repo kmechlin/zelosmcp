@@ -154,11 +154,29 @@ class TestRealYamlFiles:
         assert "tool:architecture" in names
         assert "tool:search" in names
 
+    async def test_pincher_skill_copy_mentions_wrappers(self, store):
+        await seed_all(store)
+        row = await store.get("skill", "pincher", "codebase-explore", target="cursor")
+        assert row is not None
+        assert "pincher__invoke_tool" in row.body
+        assert "pincher__search_tools" in row.body
+        assert "pincher MCP wrappers" in (row.meta or {}).get("description", "")
+
     async def test_filesystem_yaml_seeds(self, store):
         await seed_all(store)
         rules = await store.list(kind="rule", backend="filesystem")
         names = {r.name for r in rules}
         assert "tool:read_text_file" in names
+
+    async def test_flat_agent_descriptions_reference_skills(self, store):
+        await seed_all(store)
+        row = await store.get("agent", "zelosmcp", "zelos-agent-vscode", target="cursor")
+        assert row is not None
+        desc = (row.meta or {}).get("description", "")
+        assert "`codebase-explore`" in desc
+        assert "`file-operations`" in desc
+        assert "`change-blast-radius`" in desc
+        assert "`code-review`" in desc
 
     async def test_global_yaml_seeds(self, store):
         """global.yaml should seed backend=zelosmcp directive rows."""

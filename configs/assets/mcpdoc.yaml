@@ -1,83 +1,57 @@
 backend: mcpdoc
-seed_version: 1
+seed_version: 2
 
 rules:
+  sections:
+    playbook_read_only:
+      body: |
+        ### `mcpdoc`
+
+        Use mcpdoc for external docs published through `llms.txt`. Fetch
+        only the pages needed for the question.
+
+    playbook_read_write:
+      body: |
+        ### `mcpdoc`
+
+        mcpdoc itself is read-only. Use it to gather references before
+        writing code or docs through other backends.
+
   tool_instructions:
     list_doc_sources:
       body: |
-        Lists all configured llms.txt documentation sources. Call this first to see what external docs are available, then use fetch_docs to retrieve specific pages.
+        Call first to see which external docs sources are configured.
     fetch_docs:
       body: |
-        Fetches documentation from a specific llms.txt URL. Pass a URL returned by list_doc_sources (or a sub-page URL discovered from the llms.txt index). Returns rendered markdown content from the docs site.
+        Fetch only URLs from a configured `llms.txt` index or pages discovered from that index.
 
-agents:
-  docs-researcher:
-    name: "Docs researcher"
-    description: >-
-      Fetches external library documentation from llms.txt sources.
-      Use when the user needs reference docs for a framework or library
-      that publishes llms.txt (e.g. LangGraph, LangChain, FastAPI, React).
-    targets: [cursor, vscode]
-    tools:
-      - mcp_zelosmcp-aggr_mcpdoc__list_doc_sources
-      - mcp_zelosmcp-aggr_mcpdoc__fetch_docs
-    body: |
-      # Docs Researcher
-
-      You fetch external library documentation from sites that publish
-      `llms.txt`. Follow the workflow below exactly.
-
-      ## Workflow
-
-      1. **List sources.** Call `mcpdoc__list_doc_sources` to see all
-         configured documentation sources and their URLs.
-      2. **Read the index.** Call `mcpdoc__fetch_docs` with the base
-         `llms.txt` URL to get the site's page index.
-      3. **Reflect.** Decide which pages are most relevant to the user's
-         question. Prefer focused pages over broad overviews.
-      4. **Fetch.** Call `mcpdoc__fetch_docs` with each relevant page URL.
-         Fetch only what you need — avoid downloading entire sites.
-      5. **Synthesize.** Summarize the relevant information concisely,
-         citing the source URL for each fact.
-
-      ## Forbidden
-
-      - Do NOT guess URLs. Only fetch URLs returned by `list_doc_sources`
-        or discovered from the `llms.txt` index page.
-      - Do NOT edit, create, or delete any files.
-      - Do NOT use web scraping or general HTTP fetching tools.
+agents: {}
 
 skills:
-  zelosmcp-docs:
+  doc-research:
     description: >-
-      External documentation lookup via mcpdoc. Use when the user asks
-      about a library or framework that publishes llms.txt.
+      Targeted external documentation lookup through mcpdoc. Use when a
+      task depends on framework or library docs published via llms.txt.
     targets: [cursor, vscode]
+    argument_hint: "[library, framework, or concept]"
+    context: fork
     body: |
-      # MCPDoc — External Documentation
+      # Doc Research
 
-      ## What it does
-
-      MCPDoc fetches documentation from sites that publish `llms.txt` —
-      a machine-readable index of their docs pages. Sites opt in by
-      publishing this file, so there are no scraping or ToS concerns.
-
-      ## Tools
-
-      - `mcpdoc__list_doc_sources` — list configured docs sources
-      - `mcpdoc__fetch_docs` — fetch a specific docs page by URL
+      Use this skill for external documentation research without scraping
+      or broad browsing.
 
       ## Workflow
 
-      1. Call `list_doc_sources` to see available sources.
-      2. Fetch the `llms.txt` index URL to discover page URLs.
-      3. Fetch specific pages relevant to the question.
+      1. Call `list_doc_sources`.
+      2. Fetch the relevant `llms.txt` index.
+      3. Fetch only the pages needed to answer the question.
+      4. Summarize the answer with source URLs.
 
-      ## When to use
+      ## Guardrails
 
-      Use MCPDoc when the user asks about external libraries or
-      frameworks (e.g. "How does LangGraph's StateGraph work?",
-      "Show me FastAPI dependency injection docs"). Do NOT use it
-      for local project docs — pincher's `corpus=docs` handles those.
+      - Do not guess URLs.
+      - Prefer narrow pages over broad manuals.
+      - Use pincher, not mcpdoc, for local project docs.
 
 hooks: {}

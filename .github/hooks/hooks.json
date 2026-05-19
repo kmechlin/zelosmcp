@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "echo 'Before committing, run /change-blast-radius or switch to the reviewer agent for a focused validation pass.'",
+        "_owner": "zelosmcp",
+        "_key": "pre_commit_review_hint",
+        "name": "Pre-commit review hint"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "echo 'Use zelos-plan for planning, zelos-ask for questions, zelos-agent for implementation, and zelos-mcp-only for pure MCP operations.'",
+        "_owner": "zelosmcp",
+        "_key": "session_start_hint",
+        "name": "Session start hint"
+      }
+    ]
+  }
+}
