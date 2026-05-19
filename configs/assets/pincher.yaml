@@ -1,0 +1,295 @@
+backend: pincher
+seed_version: 5
+
+rules:
+  tool_instructions:
+    search:
+      body: |
+        Filter with `kind=Function` / `language=Go` / `language=Python`; supports wildcards (`auth*`) and phrases (`"process order"`). Start here when you don't know a symbol's exact ID.
+    context:
+      body: |
+        Returns the symbol body plus its direct imports and callees in one shot (~90% token reduction vs reading files). Pass `fields=symbol,callees` to drop imports when not needed.
+    architecture:
+      body: |
+        Call once per session on any unfamiliar project to get language breakdown, entry points, and hotspot functions. Much cheaper than reading files to understand the codebase shape.
+    trace:
+      body: |
+        Find callers (inbound) or callees (outbound) of a symbol. CRITICAL=direct callers, HIGH=2 hops, MEDIUM=3 hops. Use before changing a function that other code depends on.
+    changes:
+      body: |
+        Map `git diff` → affected symbols → impacted callers with risk labels. Run before committing to see blast radius. Use `scope=staged` for staged changes, `scope=all` for everything.
+    adr:
+      body: |
+        Persistent project knowledge store. Actions: `set` (store), `get` (retrieve), `list` (all entries), `delete`. Call `adr list` early in unfamiliar work — prior agents' notes often save a search chain.
+
+extensions:
+  index_project:
+    label: "Index in pincher"
+    description: "Run pincher__index on the selected repo path"
+    tool: index
+    args_template:
+      path: "{ctx.repo.ro_path}"
+    targets:
+      - repos_row
+    requires_running: true
+    confirm: false
+    success:
+      message: "Indexed {result.symbols} symbol(s) in {result.duration_ms}ms"
+    error:
+      message: "Indexing failed: {error}"
+
+  view_dashboard:
+    label: "Open dashboard"
+    description: "Open the pincher analytics dashboard in a new tab"
+    type: link
+    href: "{ctx.proxy.mount}/v1/dashboard"
+    targets:
+      - server_details
+    requires_running: true
+
+agents:
+  explore:
+    name: "Explore"
+    description: >-
+      Fast read-only codebase exploration and Q&A subagent.
+      Prefer over manually chaining multiple search and file-reading
+      operations to avoid cluttering the main conversation.
+      Safe to call in parallel.
+      Specify thoroughness: quick, medium, or thorough.
+    targets: [cursor, vscode]
+    tools:
+      - mcp_zelosmcp-aggr_pincher__invoke_tool
+      - mcp_zelosmcp-aggr_pincher__search_tools
+      - mcp_zelosmcp-aggr_pincher__get_tool_schema
+    body: |
+      # Explore
+
+      You are a read-only codebase investigation agent. Your job is to
+      explore code structure, understand behavior, and produce concise
+      implementation plans — never edit files.
+
+      ## Tools
+
+      Use pincher tools exclusively. If pincher is wire-compressed, call
+      `pincher__invoke_tool(tool_name="<tool>", tool_input={...})`.
+
+      ### Workflow
+
+      1. **Orient.** Call `architecture` once to get language breakdown,
+         entry points, and hotspot functions.
+      2. **Find.** Use `search` (FTS5, wildcards, `kind=`/`language=` filters)
+         to locate symbols by name.
+      3. **Read.** Use `context` to fetch a function's source plus its
+         imports and callees in one shot. Use `symbols` to batch-fetch
+         multiple IDs.
+      4. **Trace.** Use `trace` to map callers (inbound) or callees
+         (outbound). Risk labels: CRITICAL = 1 hop, HIGH = 2, MEDIUM = 3.
+      5. **Blast radius.** Use `changes` to map `git diff` to affected
+         symbols and impacted callers before proposing edits.
+      6. **Recall.** Call `adr list` early — prior agents' notes often
+         save a search chain.
+
+      ### Forbidden
+
+      - Do NOT edit, create, or delete any files.
+      - Do NOT use `grep`, `find`, `cat`, or `read_file` for tasks
+        pincher covers.
+      - Do NOT call tools tagged `[mutates]` or `[destructive]`.
+
+      ## Output format
+
+      End every response with a **Plan** section:
+
+      ```
+      ## Plan
+
+      1. <concrete step with file path and function name>
+      2. ...
+      ```
+
+      Keep the plan minimal — only steps that directly address the user's
+      goal. Reference symbols by their stable pincher IDs where possible.
+
+prompts:
+  find-callers:
+    description: "Find callers of a symbol using pincher trace."
+    args:
+      - name: symbol_name
+        description: "Function, class, or method name to trace."
+        required: true
+      - name: project
+        description: "Repo basename, e.g. zelosmcp. Do not pass a host path."
+        required: false
+    targets: [cursor]
+    body: |
+      Find callers of `{{symbol_name}}` in project `{{project}}` (defaults to the current repo basename if blank).
+
+      First translate any host path context to the container project name. For `/Users/KMECHL/workspace/zelosmcp`, use `project="zelosmcp"`.
+
+      **If pincher is wire-compressed** (the catalog exposes `pincher__invoke_tool` instead of `pincher__trace`):
+
+      `pincher__invoke_tool(tool_name="trace", tool_input={"name": "{{symbol_name}}", "project": "{{project}}", "direction": "in", "depth": 3})`
+
+      **If pincher is uncompressed**:
+
+      `pincher__trace(name="{{symbol_name}}", project="{{project}}", direction="in", depth=3)`
+
+      Summarize CRITICAL/HIGH/MEDIUM callers and cite stable pincher IDs.
+
+  read-context:
+    description: "Read one symbol and direct dependencies using pincher context."
+    args:
+      - name: symbol_id
+        description: "Stable pincher symbol ID."
+        required: true
+      - name: project
+        description: "Repo basename, e.g. zelosmcp."
+        required: false
+    targets: [cursor]
+    body: |
+      Read symbol context for `{{symbol_id}}` in project `{{project}}`.
+
+      **If pincher is wire-compressed**:
+
+      `pincher__invoke_tool(tool_name="context", tool_input={"id": "{{symbol_id}}", "project": "{{project}}", "fields": "symbol,callees"})`
+
+      **If pincher is uncompressed**:
+
+      `pincher__context(id="{{symbol_id}}", project="{{project}}", fields="symbol,callees")`
+
+      Explain the symbol, its direct callees, and any path-sensitive assumptions.
+
+  blast-radius:
+    description: "Analyze current git diff blast radius with pincher changes."
+    args: []
+    targets: [cursor]
+    body: |
+      Analyze the current working-tree blast radius with pincher.
+
+      **If pincher is wire-compressed**:
+
+      `pincher__invoke_tool(tool_name="changes", tool_input={"scope": "staged"})`
+
+      **If pincher is uncompressed**:
+
+      `pincher__changes(scope="staged")`
+
+      If there are no staged changes, rerun with `scope="unstaged"` and then `scope="all"` as needed. Summarize changed symbols, impacted callers, and tests to run.
+
+  index-here:
+    description: "Index this repo in pincher using the container read-only path."
+    args:
+      - name: project
+        description: "Repo basename under /user_data_ro, e.g. zelosmcp."
+        required: true
+    targets: [cursor]
+    body: |
+      Index project `{{project}}` in pincher.
+
+      Translate host paths before calling pincher. For `/Users/KMECHL/workspace/{{project}}`, pass `/user_data_ro/{{project}}`.
+
+      **If pincher is wire-compressed**:
+
+      `pincher__invoke_tool(tool_name="index", tool_input={"path": "/user_data_ro/{{project}}"})`
+
+      **If pincher is uncompressed**:
+
+      `pincher__index(path="/user_data_ro/{{project}}")`
+
+      After indexing, call `architecture` scoped to `project="{{project}}"` to verify the project is usable.
+
+hooks: {}
+
+skills:
+  zelosmcp-pincher:
+    description: >-
+      Codebase intelligence with pincher: find symbols, read functions,
+      trace callers, analyze blast radius. Use for any code understanding,
+      exploration, or impact analysis task.
+    targets: [cursor, vscode]
+    body: |
+      # Pincher — Codebase Intelligence
+
+      ## Calling convention
+
+      - **Direct:** `pincher__<tool>(args)`
+      - **Compressed:** `pincher__invoke_tool(tool_name="<tool>", tool_input={args})`
+
+      If pincher is wire-compressed, do NOT call `pincher__architecture` etc. directly — the aggregator rejects them. Use `pincher__invoke_tool` instead.
+
+      ## Container paths (mandatory)
+
+      Pincher runs inside the zelosMCP container. Host paths such as
+      `/Users/KMECHL/workspace/zelosmcp` do not exist there.
+
+      | Input | Correct value |
+      |---|---|
+      | `project` | repo basename only, e.g. `zelosmcp` |
+      | `path` for `index` | `/user_data_ro/<repo>` |
+      | file paths in explanations | `/user_data_ro/<repo>/...` |
+
+      Host root mapping: `/Users/KMECHL/workspace` maps to `/user_data_ro`
+      for pincher reads. Translate before every tool call.
+
+      Examples:
+      - Compressed index: `pincher__invoke_tool(tool_name="index", tool_input={"path": "/user_data_ro/zelosmcp"})`
+      - Direct index: `pincher__index(path="/user_data_ro/zelosmcp")`
+      - Project-scoped architecture: `pincher__invoke_tool(tool_name="architecture", tool_input={"project": "zelosmcp"})`
+      - Blast radius: `pincher__invoke_tool(tool_name="changes", tool_input={"project": "zelosmcp", "scope": "staged"})`
+
+      ## Intent → tool mapping
+
+      | User intent | Tool |
+      |---|---|
+      | Understand repo / project / codebase | `architecture` |
+      | Find a symbol by name | `search` |
+      | Read function + dependencies | `context` |
+      | Callers / callees / impact of change | `trace` |
+      | Blast radius of git diff | `changes` |
+      | Store / recall decisions & conventions | `adr` |
+      | Ingest external docs | `fetch` |
+
+      ## Workflow
+
+      - **Orient first.** Call `architecture` on any unfamiliar project for language breakdown, entry points, and hotspot functions.
+      - **Scope to the active project.** Always pass `project=<repo basename>` (for example `zelosmcp`). Never pass host paths as `project`. Use `list` to confirm indexed project names.
+      - **Index before querying** (read-write only). Run `index` once per project — incremental by default.
+      - **Find symbols by name.** Use `search` (FTS5 BM25; wildcards `auth*`, phrases `"process order"`, `kind=Function`/`language=Go` filters).
+      - **Read source efficiently.** Prefer `context` over `symbol` — includes deps in one call (~90% token savings).
+      - **Batch lookups.** Use `symbols` (plural, max 100 IDs per call) instead of calling `symbol` in a loop.
+      - **Impact analysis.** Use `trace` for inbound/outbound call paths (CRITICAL=1 hop, HIGH=2, MEDIUM=3).
+      - **Pre-commit safety.** Run `changes` before committing for blast-radius analysis.
+      - **Graph queries.** Use `query` with the Cypher subset; call `schema` first to see node/edge kinds.
+      - **Persist knowledge.** `adr` set/get/list/delete survives across sessions.
+      - **Stable IDs.** Format: `{file_path}::{qualified_name}#{kind}` (e.g. `internal/db/db.go::db.Open#Function`).
+
+      ## Forbidden fallbacks
+
+      Do NOT use these for tasks pincher covers:
+      - `Shell` invocations of `find`, `tree`, `wc -l`, `ls -R`, `git ls-files`
+      - `Grep` to find a symbol by name (use `search`)
+      - `Read` on 3+ files to understand one function (use `context`)
+      - Passing host paths beginning with `/Users/`, `/home/`, or `/tmp/` — translate to `/user_data_ro/<repo>/...` first.
+
+      If you must violate, say so explicitly.
+
+  zelosmcp-pre-commit:
+    description: >-
+      Pre-commit blast radius analysis. Use when committing, pushing,
+      or asking about change impact.
+    targets: [cursor, vscode]
+    body: |
+      # Pre-commit Analysis
+
+      Run `pincher__changes` (or `invoke_tool(tool_name="changes")` if compressed)
+      before committing. Returns:
+      - Changed symbols from `git diff`
+      - Impacted callers with risk labels (CRITICAL/HIGH/MEDIUM/LOW)
+      - Tests to re-run (ranked by overlap)
+
+      ## Scopes
+
+      - `scope=unstaged` (default) — working-tree changes
+      - `scope=staged` — staged changes only
+      - `scope=all` — includes untracked files
+      - `scope=base:<branch>` — diff vs branch's merge-base (PR preview)

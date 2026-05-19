@@ -14,7 +14,7 @@ from mcp.types import (
     TextContent,
     Tool,
 )
-from localmcp.proxy import ProxyState
+from zelosmcp.proxy import ProxyState
 
 
 class FakeResult:
@@ -22,6 +22,48 @@ class FakeResult:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+
+def make_pincher_call_result(
+    *,
+    text: str = "ok",
+    tokens_used: int = 100,
+    tokens_saved: int = 900,
+    cost_avoided: float = 0.0042,
+    location: str = "result",
+):
+    """Build a fake CallToolResult-shaped object with the pincher `_meta`
+    envelope placed at one of three known locations.
+
+    ``location`` selects which carrier holds the envelope:
+    - ``"result"`` — directly on the result via ``meta``.
+    - ``"structured"`` — on ``structuredContent``.
+    - ``"annotation"`` — on ``content[0].annotations``.
+    """
+    meta_payload = {
+        "tokens_used": tokens_used,
+        "tokens_saved": tokens_saved,
+        "cost_avoided": cost_avoided,
+    }
+    text_block = TextContent(type="text", text=text)
+    if location == "annotation":
+        text_block = FakeResult(
+            type="text",
+            text=text,
+            annotations=meta_payload,
+        )
+    structured = None
+    meta_attr = None
+    if location == "result":
+        meta_attr = meta_payload
+    elif location == "structured":
+        structured = {"_meta": meta_payload}
+    return FakeResult(
+        content=[text_block],
+        structuredContent=structured,
+        isError=False,
+        meta=meta_attr,
+    )
 
 
 def _tool(name: str) -> Tool:
@@ -59,24 +101,26 @@ def make_mock_session() -> AsyncMock:
 
 
 @asynccontextmanager
-async def fake_stdio_client(params):
+async def fake_stdio_client(params, **kwargs):
     read = MagicMock()
     write = MagicMock()
     yield read, write
 
 
 @asynccontextmanager
-async def fake_sse_client(url):
+async def fake_sse_client(url, *args, **kwargs):
     read = MagicMock()
     write = MagicMock()
     yield read, write
 
 
 @asynccontextmanager
-async def fake_http_client(url):
+async def fake_http_client(url, *args, **kwargs):
+    """Mirrors streamablehttp_client which yields (read, write, get_session_id)."""
     read = MagicMock()
     write = MagicMock()
-    yield read, write
+    get_session_id = MagicMock()
+    yield read, write, get_session_id
 
 
 @asynccontextmanager
@@ -102,8 +146,8 @@ def patch_proxy_deps():
         yield
 
     patches = [
-        patch("localmcp.proxy.stdio_client", side_effect=fake_stdio_client),
-        patch("localmcp.proxy.ClientSession", side_effect=patched_client_session),
+        patch("zelosmcp.proxy.stdio_client", side_effect=fake_stdio_client),
+        patch("zelosmcp.proxy.ClientSession", side_effect=patched_client_session),
         patch.object(
             __import__("mcp.server.streamable_http_manager", fromlist=["StreamableHTTPSessionManager"]).StreamableHTTPSessionManager,
             "run",

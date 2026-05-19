@@ -1,0 +1,162 @@
+backend: filesystem
+seed_version: 5
+
+rules:
+  tool_instructions:
+    read_text_file:
+      body: |
+        Use `head=N` or `tail=N` for large files. Prefer this over the native `Read` tool for any file under the workspace root.
+    read_multiple_files:
+      body: |
+        One round trip for multiple files — use this when comparing or summarizing several files at once.
+    edit_file:
+      body: |
+        Line-based edits only. Returns a git-style diff on success. Prefer over `write_file` for targeted changes.
+    search_files:
+      body: |
+        Glob patterns relative to the starting directory — use `**/*.ext` for recursive matches. Much faster than shell `find`.
+    directory_tree:
+      body: |
+        Returns a recursive JSON tree with name/type/children. Pass `excludePatterns` to skip `node_modules`, `.venv`, etc.
+
+extensions: {}
+
+agents: {}
+
+hooks: {}
+
+prompts:
+  read-translated:
+    description: "Translate a host path and read it with filesystem."
+    args:
+      - name: host_path
+        description: "Host path under /Users/KMECHL/workspace or an already-translated container path."
+        required: true
+    targets: [cursor]
+    body: |
+      Read `{{host_path}}` with filesystem after translating it to a container path.
+
+      If the input starts with `/Users/KMECHL/workspace/`, translate it to `/user_data_ro/`. Example: `/Users/KMECHL/workspace/zelosmcp/README.md` becomes `/user_data_ro/zelosmcp/README.md`.
+
+      **If filesystem is wire-compressed**:
+
+      `filesystem__invoke_tool(tool_name="read_text_file", tool_input={"path": "<translated /user_data_ro path>"})`
+
+      **If filesystem is uncompressed**:
+
+      `filesystem__read_text_file(path="<translated /user_data_ro path>")`
+
+      Never pass `/Users/...` to the filesystem backend.
+
+  tree-here:
+    description: "List a repo tree using the container read-only path."
+    args:
+      - name: project
+        description: "Repo basename under /user_data_ro, e.g. zelosmcp."
+        required: true
+    targets: [cursor]
+    body: |
+      Return a directory tree for project `{{project}}` using the container path `/user_data_ro/{{project}}`.
+
+      **If filesystem is wire-compressed**:
+
+      `filesystem__invoke_tool(tool_name="directory_tree", tool_input={"path": "/user_data_ro/{{project}}", "excludePatterns": [".git", "node_modules", ".venv"]})`
+
+      **If filesystem is uncompressed**:
+
+      `filesystem__directory_tree(path="/user_data_ro/{{project}}", excludePatterns=[".git", "node_modules", ".venv"])`
+
+      Summarize the tree and call out likely entry points.
+
+  safe-edit:
+    description: "Edit a file with filesystem using the read-write mount."
+    args:
+      - name: container_path
+        description: "Read-write container path under /user_data_rw."
+        required: true
+      - name: old
+        description: "Exact text to replace."
+        required: true
+      - name: new
+        description: "Replacement text."
+        required: true
+    targets: [cursor]
+    body: |
+      Safely edit `{{container_path}}` with filesystem.
+
+      Confirm the path starts with `/user_data_rw/`. If the user supplied a host path under `/Users/KMECHL/workspace/`, translate it to `/user_data_rw/` before editing. Do not edit in read-only mode.
+
+      **If filesystem is wire-compressed**:
+
+      `filesystem__invoke_tool(tool_name="edit_file", tool_input={"path": "{{container_path}}", "edits": [{"oldText": "{{old}}", "newText": "{{new}}"}]})`
+
+      **If filesystem is uncompressed**:
+
+      `filesystem__edit_file(path="{{container_path}}", edits=[{"oldText": "{{old}}", "newText": "{{new}}"}])`
+
+      Review the returned diff before continuing.
+
+skills:
+  zelosmcp-filesystem:
+    description: >-
+      Sandboxed file operations via the filesystem backend. Use when
+      reading, editing, listing, or searching files in the workspace.
+    targets: [cursor, vscode]
+    body: |
+      # Filesystem — Sandboxed File Access
+
+      ## Calling convention
+
+      - **Direct:** `filesystem__<tool>(args)`
+      - **Compressed:** `filesystem__invoke_tool(tool_name="<tool>", tool_input={args})`
+
+      If filesystem is wire-compressed, do NOT call `filesystem__read_text_file` etc. directly — use `filesystem__invoke_tool` instead.
+
+      ## Container paths (mandatory)
+
+      The filesystem backend runs inside the zelosMCP container. Host paths
+      such as `/Users/KMECHL/workspace/zelosmcp` do not exist there.
+
+      | Use case | Path to pass |
+      |---|---|
+      | Read-only file/directory access | `/user_data_ro/<repo>/...` |
+      | Write/edit/move/create access | `/user_data_rw/<repo>/...` |
+
+      Host root mapping: `/Users/KMECHL/workspace` maps to `/user_data_ro`
+      for read-only access and `/user_data_rw` for writes. Translate before
+      every filesystem tool call.
+
+      Examples:
+      - Read: `filesystem__read_text_file(path="/user_data_ro/zelosmcp/README.md")`
+      - Write/edit: `filesystem__edit_file(path="/user_data_rw/zelosmcp/README.md", edits=[...])`
+      - Bad: `filesystem__read_text_file(path="/Users/KMECHL/workspace/zelosmcp/README.md")`
+
+      ## Intent → tool mapping
+
+      | Task | Tool |
+      |---|---|
+      | Read a file | `read_text_file` (use `head`/`tail` for large files) |
+      | Compare / summarize multiple files | `read_multiple_files` |
+      | List directory contents | `list_directory` or `directory_tree` |
+      | Find files by pattern | `search_files` (glob, `**/*.ext`) |
+      | Edit / patch a file | `edit_file` (preferred) or `write_file` |
+      | Create / move / rename | `create_directory` / `move_file` |
+      | File metadata | `get_file_info` |
+
+      ## Workflow
+
+      - Every path must live under an allowed directory (check `list_allowed_directories`).
+      - Resolve every path to `/user_data_ro/<repo>/...` (read) or `/user_data_rw/<repo>/...` (write) BEFORE the tool call.
+      - Prefer `edit_file` over `write_file` — it returns a git-style diff and is non-destructive.
+      - `create_directory` is idempotent; `move_file` fails if destination exists (safe renames).
+      - Use `directory_tree` with `excludePatterns` to skip `node_modules`, `.venv`, etc.
+
+      ## Forbidden fallbacks
+
+      Do NOT use these for tasks filesystem covers:
+      - `Shell` invocations of `cat`, `head`, `tail`, `ls`, `find`, `tree`, `wc`, `du`, `stat`
+      - `Read` on workspace paths when `read_text_file` works
+      - `sed`, `awk`, or `echo > file` for edits — use `edit_file`
+      - Passing host paths beginning with `/Users/`, `/home/`, or `/tmp/` — translate to `/user_data_ro/<repo>/...` or `/user_data_rw/<repo>/...` first.
+
+      In **read-only** mode, do NOT call `write_file`, `edit_file`, `move_file`, or `create_directory`.

@@ -1,0 +1,214 @@
+# zelosMCP Kubernetes manifest.
+#
+# Defines:
+#   - Deployment   (one Pod, replicas: 1 by default — multi-replica
+#                   needs a shared PVC and identical auth.key across
+#                   Pods; see deploy/README.md for the gotchas)
+#   - Service      (cluster-internal port 8000; add an Ingress /
+#                   Gateway resource per your cluster's conventions)
+#   - ConfigMap    (mcpServers catalog; low-sensitivity)
+#   - Secret       (auth-providers config + AES key for token store;
+#                   medium-sensitivity)
+#   - PVC          (persistent state — savings.sqlite + auth.sqlite +
+#                   auth.key live here across Pod restarts)
+#
+# Apply with:
+#   kubectl create namespace zelosmcp
+#   kubectl apply -f deploy/kubernetes/zelosmcp.yaml -n zelosmcp
+#
+# Replace these placeholders before applying:
+#   - IMAGE_TAG_HERE      registry path of your built image
+#   - YOUR_FERNET_KEY     base64 Fernet key (see deploy/README.md)
+#   - YOUR_GH_CLIENT_ID   github_oauth_app client_id
+#   - YOUR_OKTA_*         okta_authorization_code values (or remove if not used)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zelosmcp-mcp-servers
+  labels:
+    app: zelosmcp
+data:
+  mcp-servers.json: |
+    {
+      "mcpServers": {
+        "github": {
+          "type": "streamable-http",
+          "url": "https://api.githubcopilot.com/mcp/",
+          "passthrough": true,
+          "auth": { "provider": "github_oauth_app" }
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zelosmcp-auth
+  labels:
+    app: zelosmcp
+type: Opaque
+stringData:
+  # Fernet key — generated ONCE per deployment. Lose this and every
+  # stored token becomes undecryptable.
+  auth.key: "YOUR_FERNET_KEY"
+
+  # Provider client_ids — env-resolved at config-load time inside the
+  # container via ${VAR} substitution in auth-providers.json below.
+  ZELOSMCP_GITHUB_CLIENT_ID: "YOUR_GH_CLIENT_ID"
+  ZELOSMCP_OKTA_ISSUER: "https://nike.okta.com/oauth2/default"
+  ZELOSMCP_OKTA_CLIENT_ID: "YOUR_OKTA_CLIENT_ID"
+  ZELOSMCP_OKTA_REDIRECT_URI: "http://localhost:8000/api/auth/nike_okta/callback"
+  ZELOSMCP_OKTA_MEMBERSHIP_HINT: "Nike.uee.maria"
+
+  # Auth-providers config. References the env vars above via
+  # ${VAR} substitution, which zelosMCP resolves at config-load.
+  auth-providers.json: |
+    {
+      "providers": {
+        "github_oauth_app": {
+          "type": "github_device_flow",
+          "client_id": "${ZELOSMCP_GITHUB_CLIENT_ID}",
+          "scopes": ["repo", "read:org", "user:email", "gist", "workflow"]
+        },
+        "nike_okta": {
+          "type": "okta_authorization_code",
+          "issuer": "${ZELOSMCP_OKTA_ISSUER}",
+          "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+          "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
+          "scopes": ["openid", "profile", "email"],
+          "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zelosmcp-state
+  labels:
+    app: zelosmcp
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard      # uncomment + adjust for your cluster
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zelosmcp
+  labels:
+    app: zelosmcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zelosmcp
+  template:
+    metadata:
+      labels:
+        app: zelosmcp
+    spec:
+      containers:
+        - name: zelosmcp
+          image: IMAGE_TAG_HERE
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # Tell the container where to find its providers config
+            # at startup (auto-loaded by the lifespan hook).
+            - name: ZELOSMCP_AUTH_PROVIDERS_FILE
+              value: /etc/zelosmcp/auth-providers.json
+            # Override the default auth-key path so we use the file
+            # mounted from the Secret rather than auto-generating one
+            # per Pod (which would lose every token on restart).
+            - name: ZELOSMCP_AUTH_KEY_FILE
+              value: /etc/zelosmcp/auth.key
+            # Provider client_ids — pulled from the same Secret that
+            # carries the auth-providers JSON.
+            - name: ZELOSMCP_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_GITHUB_CLIENT_ID
+            - name: ZELOSMCP_OKTA_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_OKTA_ISSUER
+                  optional: true
+            - name: ZELOSMCP_OKTA_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_OKTA_CLIENT_ID
+                  optional: true
+            - name: ZELOSMCP_OKTA_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_OKTA_REDIRECT_URI
+                  optional: true
+            - name: ZELOSMCP_OKTA_MEMBERSHIP_HINT
+              valueFrom:
+                secretKeyRef:
+                  name: zelosmcp-auth
+                  key: ZELOSMCP_OKTA_MEMBERSHIP_HINT
+                  optional: true
+          volumeMounts:
+            - name: mcp-servers
+              mountPath: /etc/zelosmcp/mcp-servers.json
+              subPath: mcp-servers.json
+              readOnly: true
+            - name: auth-config
+              mountPath: /etc/zelosmcp/auth-providers.json
+              subPath: auth-providers.json
+              readOnly: true
+            - name: auth-config
+              mountPath: /etc/zelosmcp/auth.key
+              subPath: auth.key
+              readOnly: true
+            - name: state
+              mountPath: /root/.zelosmcp
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: mcp-servers
+          configMap:
+            name: zelosmcp-mcp-servers
+        - name: auth-config
+          secret:
+            secretName: zelosmcp-auth
+            defaultMode: 0600
+        - name: state
+          persistentVolumeClaim:
+            claimName: zelosmcp-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zelosmcp
+  labels:
+    app: zelosmcp
+spec:
+  selector:
+    app: zelosmcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  # Add an Ingress / Gateway resource on top per your cluster's
+  # conventions to expose this Service externally.

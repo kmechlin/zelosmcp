@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "github_oauth_app": {
+      "type": "github_device_flow",
+      "client_id": "${ZELOSMCP_GITHUB_CLIENT_ID}",
+      "scopes": [
+        "repo",
+        "read:org",
+        "user:email",
+        "gist",
+        "workflow"
+      ]
+    },
+    "okta": {
+      "type": "okta_authorization_code",
+      "issuer": "${ZELOSMCP_OKTA_ISSUER}",
+      "client_id": "${ZELOSMCP_OKTA_CLIENT_ID}",
+      "redirect_uri": "${ZELOSMCP_OKTA_REDIRECT_URI}",
+      "scopes": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "membership_hint": "${ZELOSMCP_OKTA_MEMBERSHIP_HINT}"
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "_doc": [
+    "Full Nike-internal example config showing the modern auth-provider",
+    "broker pattern alongside legacy passthrough/static modes.",
+    "",
+    "Pair with configs/example-auth-providers.json for the matching",
+    "providers config:",
+    "  make load ZELOSMCP_CONFIG=configs/example-passthrough-zelosmcp.json \\",
+    "             ZELOSMCP_AUTH_PROVIDERS_FILE=configs/example-auth-providers.json",
+    "",
+    "Three auth modes shown:",
+    "  * github / githubcopilot — broker mode via 'auth.provider' ->",
+    "    'github_oauth_app'. zelosMCP mints user-OAuth tokens via the",
+    "    GUI device flow and injects them on outbound requests. The",
+    "    backend's wrappers stay HIDDEN in tools/list until the user",
+    "    completes the device flow in the Connections page.",
+    "  * atlassian / artifactory — broker mode via 'auth.provider' ->",
+    "    'nike_okta'. Same browser-Connect UX; tokens come from Nike's Okta",
+    "    tenant. The 'membership_hint' field on the okta provider in",
+    "    the providers config surfaces the authorized-group requirement",
+    "    (e.g. Nike.uee.maria) on the GUI card.",
+    "  * box — legacy passthrough mode (no provider). Forwards inbound",
+    "    Authorization verbatim — Cursor's MCP OAuth client handles the",
+    "    dance against box.com directly. Backend's wrappers are visible",
+    "    by default (no gating).",
+    "",
+    "For headless / CI deploys without browser access, switch a backend",
+    "to the 'static' provider (see ci_pat in example-auth-providers.json)",
+    "and reference it via 'auth.provider' here."
+  ],
+  "mcpServers": {
+    "kubernetes": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "kubernetes-mcp-server@latest"
+      ],
+      "compress": {
+        "level": "medium"
+      }
+    },
+    "docker": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-docker"
+      ],
+      "env": {
+        "DOCKER_HOST": "unix:///var/run/docker.sock"
+      }
+    },
+    "github": {
+      "type": "streamable-http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "passthrough": true,
+      "auth": {
+        "provider": "github_oauth_app"
+      }
+    },
+    "githubcopilot": {
+      "type": "streamable-http",
+      "url": "https://api.githubcopilot.com/mcp",
+      "passthrough": true,
+      "auth": {
+        "provider": "github_oauth_app"
+      }
+    },
+    "atlassian": {
+      "type": "streamable-http",
+      "url": "https://mcp-atlassian.nike.com/mcp",
+      "passthrough": true,
+      "auth": {
+        "provider": "nike_okta",
+        "audience": "api://atlassian-mcp"
+      }
+    },
+    "artifactory": {
+      "type": "streamable-http",
+      "url": "https://artifactory.nike.com/mcp",
+      "passthrough": true,
+      "auth": {
+        "provider": "nike_okta",
+        "audience": "api://artifactory-mcp"
+      }
+    },
+    "box": {
+      "type": "streamable-http",
+      "url": "https://mcp.box.com",
+      "passthrough": true,
+      "passthroughPool": {
+        "maxSessions": 64,
+        "idleTtlSeconds": 1800
+      }
+    }
+  }
+}

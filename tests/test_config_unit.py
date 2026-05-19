@@ -1,0 +1,1005 @@
+"""Unit tests for zelosmcp.config.parse_config / ServerSpec."""
+from __future__ import annotations
+
+import pytest
+
+from zelosmcp.config import (
+    COMPRESS_LEVELS,
+    COMPRESS_SCOPES,
+    CompressSpec,
+    ConfigError,
+    PassthroughPoolSpec,
+    ReverseProxySpec,
+    ServerSpec,
+    parse_config,
+)
+
+
+class TestParseStructure:
+    def test_non_object_raises(self):
+        with pytest.raises(ConfigError, match="JSON object"):
+            parse_config([])
+
+    def test_missing_mcpServers(self):
+        with pytest.raises(ConfigError, match="mcpServers"):
+            parse_config({})
+
+    def test_empty_mcpServers(self):
+        with pytest.raises(ConfigError, match="at least one"):
+            parse_config({"mcpServers": {}})
+
+    def test_mcpServers_not_object(self):
+        with pytest.raises(ConfigError, match="object mapping"):
+            parse_config({"mcpServers": []})
+
+
+class TestStdio:
+    def test_basic_command(self):
+        specs, primary, _ = parse_config({
+            "mcpServers": {
+                "fs": {"command": "npx", "args": ["-y", "@m/fs"]},
+            }
+        })
+        assert primary is None
+        assert len(specs) == 1
+        s = specs[0]
+        assert s.name == "fs"
+        assert s.transport == "stdio"
+        assert s.command == "npx"
+        assert s.args == ["-y", "@m/fs"]
+        assert s.env is None
+        assert s.cwd is None
+
+    def test_command_with_env_and_cwd(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "fs": {
+                    "command": "uvx",
+                    "args": ["server"],
+                    "env": {"K": "v"},
+                    "cwd": "/tmp",
+                }
+            }
+        })
+        s = specs[0]
+        assert s.env == {"K": "v"}
+        assert s.cwd == "/tmp"
+
+    def test_command_must_be_nonempty(self):
+        with pytest.raises(ConfigError, match="non-empty string"):
+            parse_config({"mcpServers": {"x": {"command": "  "}}})
+
+    def test_args_must_be_strings(self):
+        with pytest.raises(ConfigError, match="array of strings"):
+            parse_config({"mcpServers": {"x": {"command": "echo", "args": [1, 2]}}})
+
+    def test_env_must_be_string_map(self):
+        with pytest.raises(ConfigError, match="string→string"):
+            parse_config({"mcpServers": {"x": {"command": "echo", "env": {"K": 5}}}})
+
+    def test_cwd_type_check(self):
+        with pytest.raises(ConfigError, match="cwd"):
+            parse_config({"mcpServers": {"x": {"command": "echo", "cwd": 5}}})
+
+
+class TestRemote:
+    def test_sse(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "linear": {"type": "sse", "url": "https://x/sse",
+                           "headers": {"Authorization": "Bearer t"}}
+            }
+        })
+        s = specs[0]
+        assert s.transport == "sse"
+        assert s.url == "https://x/sse"
+        assert s.headers == {"Authorization": "Bearer t"}
+
+    def test_streamable_http(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "gh": {"type": "streamable-http", "url": "https://x/mcp"}
+            }
+        })
+        s = specs[0]
+        assert s.transport == "http"
+        assert s.url == "https://x/mcp"
+        assert s.headers is None
+
+    def test_remote_requires_url(self):
+        with pytest.raises(ConfigError, match="requires a 'url'"):
+            parse_config({"mcpServers": {"x": {"type": "sse"}}})
+
+    def test_unknown_type(self):
+        with pytest.raises(ConfigError, match="determine transport"):
+            parse_config({"mcpServers": {"x": {"type": "ws", "url": "ws://"}}})
+
+
+class TestNames:
+    @pytest.mark.parametrize(
+        "name",
+        ["api", "mcp", "docs", "redoc", "openapi.json", "zelosmcp"],
+    )
+    def test_reserved_names_rejected(self, name):
+        with pytest.raises(ConfigError, match="reserved"):
+            parse_config({"mcpServers": {name: {"command": "echo"}}})
+
+    @pytest.mark.parametrize("name", ["bad name", "with/slash", "", "$weird"])
+    def test_invalid_names_rejected(self, name):
+        with pytest.raises(ConfigError):
+            parse_config({"mcpServers": {name: {"command": "echo"}}})
+
+    def test_duplicate_case_insensitive(self):
+        with pytest.raises(ConfigError, match="Duplicate"):
+            parse_config({"mcpServers": {
+                "Foo": {"command": "echo"},
+                "foo": {"command": "echo"},
+            }})
+
+
+class TestPrimary:
+    def test_primary_resolved(self):
+        specs, primary, _ = parse_config({
+            "primaryMCP": "b",
+            "mcpServers": {
+                "a": {"command": "echo"},
+                "b": {"command": "echo"},
+            },
+        })
+        assert primary == "b"
+        assert [s.name for s in specs] == ["a", "b"]
+
+    def test_unknown_primary_accepted(self):
+        # primaryMCP is deprecated — unknown values no longer raise (the field
+        # is informational only; ProxyManager.start_all logs a deprecation
+        # warning when it sees a value).
+        specs, primary, _ = parse_config({
+            "primaryMCP": "ghost",
+            "mcpServers": {"a": {"command": "echo"}},
+        })
+        assert [s.name for s in specs] == ["a"]
+        assert primary == "ghost"
+
+    def test_primary_must_be_string(self):
+        with pytest.raises(ConfigError, match="primaryMCP"):
+            parse_config({
+                "primaryMCP": 1,
+                "mcpServers": {"a": {"command": "echo"}},
+            })
+
+
+class TestServerSpecToStatus:
+    def test_stdio_status(self):
+        s = ServerSpec(
+            name="x", transport="stdio", command="echo",
+            args=["a"], env={"K": "v"}, cwd="/tmp",
+        )
+        d = s.to_status()
+        assert d["name"] == "x"
+        assert d["transport"] == "stdio"
+        assert d["command"] == "echo"
+        assert d["args"] == ["a"]
+        assert d["env"] == {"K": "v"}
+        assert d["cwd"] == "/tmp"
+
+    def test_remote_status(self):
+        s = ServerSpec(
+            name="x", transport="http", url="https://x",
+            headers={"Authorization": "Bearer t"},
+        )
+        d = s.to_status()
+        assert d["url"] == "https://x"
+        assert d["headers"] == {"Authorization": "Bearer t"}
+
+
+def _stdio_with_proxy(rp: dict) -> dict:
+    """Build a single-server config wrapping ``rp`` as the reverseProxy block."""
+    return {
+        "mcpServers": {
+            "alpha": {"command": "echo", "args": ["a"], "reverseProxy": rp},
+        }
+    }
+
+
+class TestReverseProxy:
+    def test_minimal_block_parses(self):
+        specs, _, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "http://127.0.0.1:8080",
+        }))
+        rp = specs[0].reverse_proxy
+        assert rp is not None
+        assert rp.mount == "/alpha"
+        assert rp.upstream == "http://127.0.0.1:8080"
+        assert rp.strip_prefix is False
+        assert rp.headers == {}
+        assert rp.auth_bearer is None
+
+    def test_full_block_parses(self):
+        specs, _, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "https://upstream.example.com:9443",
+            "stripPrefix": True,
+            "headers": {"X-Custom": "yes"},
+            "auth": {"bearer": "literal-token"},
+            "openapi": {"path": "/v1/openapi.json"},
+        }))
+        rp = specs[0].reverse_proxy
+        assert rp is not None
+        assert rp.strip_prefix is True
+        assert rp.headers == {"X-Custom": "yes"}
+        assert rp.auth_bearer == "literal-token"
+        assert rp.openapi is not None
+        assert rp.openapi.path == "/v1/openapi.json"
+        assert rp.to_status()["openapi"] == {"path": "/v1/openapi.json"}
+
+    def test_remote_backend_can_have_proxy(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "alpha": {
+                    "type": "streamable-http",
+                    "url": "http://x/mcp",
+                    "reverseProxy": {
+                        "mount": "/alpha",
+                        "upstream": "http://127.0.0.1:8080",
+                    },
+                },
+            }
+        })
+        assert specs[0].reverse_proxy is not None
+
+    def test_missing_proxy_field_is_optional(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"alpha": {"command": "echo"}},
+        })
+        assert specs[0].reverse_proxy is None
+
+    @pytest.mark.parametrize(
+        "mount, message",
+        [
+            ("alpha", "must start with"),       # no leading slash
+            ("/alpha/", "must not end with"),   # trailing slash
+            ("/foo/../bar", "must not contain '..'"),
+            ("/al pha", "whitespace"),
+            ("/api", "reserved"),
+            ("/mcp", "reserved"),
+            ("/", "reserved"),
+            ("/docs", "reserved"),
+        ],
+    )
+    def test_bad_mounts_rejected(self, mount, message):
+        with pytest.raises(ConfigError, match=message):
+            parse_config(_stdio_with_proxy({
+                "mount": mount,
+                "upstream": "http://127.0.0.1:8080",
+            }))
+
+    def test_missing_mount_rejected(self):
+        with pytest.raises(ConfigError, match="mount"):
+            parse_config(_stdio_with_proxy({"upstream": "http://x:8080"}))
+
+    def test_missing_upstream_rejected(self):
+        with pytest.raises(ConfigError, match="upstream"):
+            parse_config(_stdio_with_proxy({"mount": "/alpha"}))
+
+    @pytest.mark.parametrize(
+        "upstream",
+        ["", "ftp://upstream", "not a url", "http://"],
+    )
+    def test_bad_upstream_rejected(self, upstream):
+        with pytest.raises(ConfigError, match="upstream"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": upstream,
+            }))
+
+    def test_strip_prefix_must_be_bool(self):
+        with pytest.raises(ConfigError, match="stripPrefix"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "stripPrefix": "yes",
+            }))
+
+    def test_headers_must_be_string_map(self):
+        with pytest.raises(ConfigError, match="reverseProxy.headers"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "headers": {"X": 1},
+            }))
+
+    def test_auth_must_be_object(self):
+        with pytest.raises(ConfigError, match="auth must be an object"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "auth": "Bearer xyz",
+            }))
+
+    def test_auth_bearer_env_interpolation(self, monkeypatch):
+        monkeypatch.setenv("PINCHER_HTTP_KEY", "s3cret")
+        specs, _, _ = parse_config(_stdio_with_proxy({
+            "mount": "/alpha",
+            "upstream": "http://x:8080",
+            "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
+        }))
+        assert specs[0].reverse_proxy.auth_bearer == "s3cret"
+
+    def test_auth_bearer_missing_env_var_raises(self, monkeypatch):
+        monkeypatch.delenv("PINCHER_HTTP_KEY", raising=False)
+        with pytest.raises(ConfigError, match="not set"):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "auth": {"bearer": "${PINCHER_HTTP_KEY}"},
+            }))
+
+    @pytest.mark.parametrize(
+        "openapi, message",
+        [
+            ("not-object", "openapi must be an object"),
+            ({}, "openapi.path"),
+            ({"path": "v1/openapi.json"}, "must start with"),
+            ({"path": "https://upstream.test/openapi.json"}, "not a URL"),
+            ({"path": "/bad path/openapi.json"}, "whitespace"),
+            ({"path": "/../openapi.json"}, "must not contain"),
+        ],
+    )
+    def test_bad_openapi_contracts_rejected(self, openapi, message):
+        with pytest.raises(ConfigError, match=message):
+            parse_config(_stdio_with_proxy({
+                "mount": "/alpha",
+                "upstream": "http://x:8080",
+                "openapi": openapi,
+            }))
+
+    def test_overlapping_mounts_rejected_exact(self):
+        with pytest.raises(ConfigError, match="claimed by both"):
+            parse_config({
+                "mcpServers": {
+                    "a": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/dup", "upstream": "http://a:1"},
+                    },
+                    "b": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/dup", "upstream": "http://b:1"},
+                    },
+                }
+            })
+
+    def test_overlapping_mounts_rejected_prefix(self):
+        with pytest.raises(ConfigError, match="overlap"):
+            parse_config({
+                "mcpServers": {
+                    "a": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/foo", "upstream": "http://a:1"},
+                    },
+                    "b": {
+                        "command": "echo",
+                        "reverseProxy": {"mount": "/foo/bar", "upstream": "http://b:1"},
+                    },
+                }
+            })
+
+    def test_sibling_mounts_allowed(self):
+        # `/foo` and `/foobar` look prefix-y but split on segment boundaries.
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "a": {
+                    "command": "echo",
+                    "reverseProxy": {"mount": "/foo", "upstream": "http://a:1"},
+                },
+                "b": {
+                    "command": "echo",
+                    "reverseProxy": {"mount": "/foobar", "upstream": "http://b:1"},
+                },
+            }
+        })
+        assert {s.name for s in specs} == {"a", "b"}
+
+    def test_to_status_round_trip(self):
+        rp = ReverseProxySpec(
+            mount="/alpha",
+            upstream="http://x:8080",
+            strip_prefix=True,
+            headers={"X-Custom": "v"},
+            auth_bearer="s3cret",
+        )
+        out = rp.to_status()
+        assert out["mount"] == "/alpha"
+        assert out["upstream"] == "http://x:8080"
+        assert out["stripPrefix"] is True
+        assert out["headers"] == {"X-Custom": "v"}
+        # Bearer is masked so /api/status doesn't leak the secret.
+        assert out["auth"] == {"bearer": "***"}
+
+    def test_to_status_omits_optional_fields_when_default(self):
+        rp = ReverseProxySpec(mount="/alpha", upstream="http://x:8080")
+        out = rp.to_status()
+        assert "stripPrefix" not in out
+        assert "headers" not in out
+        assert "auth" not in out
+
+    def test_server_spec_to_status_includes_proxy(self):
+        s = ServerSpec(
+            name="alpha",
+            transport="stdio",
+            command="echo",
+            reverse_proxy=ReverseProxySpec(
+                mount="/alpha",
+                upstream="http://x:8080",
+            ),
+        )
+        d = s.to_status()
+        assert d["reverseProxy"] == {
+            "mount": "/alpha",
+            "upstream": "http://x:8080",
+        }
+
+
+_OMITTED = object()  # sentinel: do not set the key at all
+
+
+def _stdio_with_compress(rp) -> dict:
+    """Build a single-server config wrapping ``rp`` as the compress block.
+
+    Pass the ``_OMITTED`` sentinel to omit the key entirely (exercises
+    the default-on path); pass ``None`` / ``False`` / a dict to set it
+    explicitly.
+    """
+    entry: dict = {"command": "echo", "args": ["a"]}
+    if rp is not _OMITTED:
+        entry["compress"] = rp
+    return {"mcpServers": {"alpha": entry}}
+
+
+class TestCompressSpec:
+    def test_block_absent_defaults_to_medium_aggregator(self):
+        # Omitting the block is the recommended path: every backend
+        # gets `medium` compression at the aggregator unless it opts
+        # out explicitly.
+        specs, _, _ = parse_config(_stdio_with_compress(_OMITTED))
+        c = specs[0].compress
+        assert c is not None
+        assert c.level == "medium"
+        assert c.scope == "aggregator"
+
+    def test_explicit_null_disables_compress(self):
+        # `compress: null` is the documented opt-out form.
+        specs, _, _ = parse_config(_stdio_with_compress(None))
+        assert specs[0].compress is None
+
+    def test_explicit_false_disables_compress(self):
+        # JSON booleans are accepted as a convenience opt-out form.
+        specs, _, _ = parse_config(_stdio_with_compress(False))
+        assert specs[0].compress is None
+
+    def test_empty_block_uses_defaults(self):
+        # `compress: {}` is equivalent to omitting the block.
+        specs, _, _ = parse_config(_stdio_with_compress({}))
+        c = specs[0].compress
+        assert c is not None
+        assert c.level == "medium"
+        assert c.scope == "aggregator"
+
+    @pytest.mark.parametrize("level", sorted(COMPRESS_LEVELS))
+    def test_each_level_accepted(self, level):
+        specs, _, _ = parse_config(_stdio_with_compress({"level": level}))
+        assert specs[0].compress.level == level
+
+    @pytest.mark.parametrize("scope", sorted(COMPRESS_SCOPES))
+    def test_each_scope_accepted(self, scope):
+        specs, _, _ = parse_config(_stdio_with_compress({"scope": scope}))
+        assert specs[0].compress.scope == scope
+
+    def test_full_block_round_trips(self):
+        specs, _, _ = parse_config(
+            _stdio_with_compress({"level": "high", "scope": "global"})
+        )
+        c = specs[0].compress
+        assert c.level == "high"
+        assert c.scope == "global"
+        assert c.to_status() == {"level": "high", "scope": "global"}
+
+    def test_unknown_level_rejected(self):
+        with pytest.raises(ConfigError, match="compress.level"):
+            parse_config(_stdio_with_compress({"level": "ultra"}))
+
+    def test_unknown_scope_rejected(self):
+        with pytest.raises(ConfigError, match="compress.scope"):
+            parse_config(_stdio_with_compress({"scope": "everything"}))
+
+    def test_non_object_block_rejected(self):
+        with pytest.raises(ConfigError, match="must be an object"):
+            parse_config(_stdio_with_compress("medium"))  # type: ignore[arg-type]
+
+    def test_remote_backend_can_have_compress(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "alpha": {
+                    "type": "streamable-http",
+                    "url": "http://x/mcp",
+                    "compress": {"level": "max", "scope": "catalog"},
+                },
+            }
+        })
+        c = specs[0].compress
+        assert c.level == "max"
+        assert c.scope == "catalog"
+
+    def test_server_spec_to_status_includes_compress(self):
+        s = ServerSpec(
+            name="alpha",
+            transport="stdio",
+            command="echo",
+            compress=CompressSpec(level="high", scope="global"),
+        )
+        d = s.to_status()
+        assert d["compress"] == {"level": "high", "scope": "global"}
+
+
+class TestPassthrough:
+    """Validation surface for the new ``passthrough`` flag and its
+    companion fields (top-level ``auth.bearer``, ``passthroughPool``).
+    """
+
+    def test_basic_passthrough_http(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                },
+            }
+        })
+        s = specs[0]
+        assert s.passthrough is True
+        assert s.url == "https://api.example.com/mcp"
+        assert s.auth_bearer is None
+        assert s.passthrough_pool is None
+        # Passthrough backends now auto-apply compression at the
+        # aggregator (scope=aggregator, level=medium). The aggregator's
+        # tools/list emits compressed wrappers regardless of inbound auth;
+        # the first wrapper invocation drives the OAuth dance via the
+        # existing PassthroughChallengeError path.
+        assert s.compress is not None
+        assert s.compress.level == "medium"
+        assert s.compress.scope == "aggregator"
+
+    def test_passthrough_with_static_bearer(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "ghp_static"},
+                },
+            }
+        })
+        assert specs[0].auth_bearer == "ghp_static"
+
+    def test_passthrough_pool_block(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "passthroughPool": {
+                        "maxSessions": 8,
+                        "idleTtlSeconds": 60,
+                    },
+                },
+            }
+        })
+        pool = specs[0].passthrough_pool
+        assert pool is not None
+        assert pool.max_sessions == 8
+        assert pool.idle_ttl_seconds == 60
+
+    def test_passthrough_pool_defaults(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "passthroughPool": {},
+                },
+            }
+        })
+        pool = specs[0].passthrough_pool
+        assert isinstance(pool, PassthroughPoolSpec)
+        assert pool.max_sessions == 64
+        assert pool.idle_ttl_seconds == 1800
+
+    def test_passthrough_with_explicit_compress_catalog_allowed(self):
+        # `scope=catalog` is allowed but degrades to a no-op (no live
+        # session means no tools to render in the static catalog).
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": {"scope": "catalog"},
+                },
+            }
+        })
+        assert specs[0].compress is not None
+        assert specs[0].compress.scope == "catalog"
+
+    def test_passthrough_with_explicit_compress_aggregator_allowed(self):
+        # `scope=aggregator` is the new default for passthrough — explicitly
+        # setting it should round-trip cleanly without raising. The
+        # aggregator's tools/list emits wrappers; first invocation drives
+        # OAuth via the PassthroughChallengeError path.
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": {"scope": "aggregator"},
+                },
+            }
+        })
+        assert specs[0].compress is not None
+        assert specs[0].compress.scope == "aggregator"
+
+    def test_passthrough_with_explicit_compress_global_rejected(self):
+        # /<name>/mcp for passthrough is a streaming reverse proxy that
+        # doesn't terminate MCP, so wrappers can't be served at the
+        # per-backend mount. Reject `scope=global` so misconfigs surface
+        # at parse time.
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "compress": {"scope": "global"},
+                    },
+                }
+            })
+
+    def test_passthrough_with_explicit_compress_null_allowed(self):
+        # `compress: null` is the documented opt-out form; explicit
+        # disabling combined with passthrough should round-trip cleanly.
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "compress": None,
+                },
+            }
+        })
+        assert specs[0].compress is None
+
+    def test_passthrough_on_stdio_rejected(self):
+        with pytest.raises(ConfigError, match="HTTP"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["@m/github"],
+                        "passthrough": True,
+                    },
+                }
+            })
+
+    def test_passthrough_on_sse_rejected(self):
+        # The legacy SSE transport isn't supported for passthrough. Only
+        # streamable-http is.
+        with pytest.raises(ConfigError, match="streamable-http"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "sse",
+                        "url": "https://api.example.com/sse",
+                        "passthrough": True,
+                    },
+                }
+            })
+
+    def test_top_level_auth_without_passthrough_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "auth": {"bearer": "x"},
+                    },
+                }
+            })
+
+    def test_top_level_auth_on_stdio_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["@m/github"],
+                        "auth": {"bearer": "x"},
+                    },
+                }
+            })
+
+    def test_pool_without_passthrough_rejected(self):
+        with pytest.raises(ConfigError, match="passthrough"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthroughPool": {"maxSessions": 8},
+                    },
+                }
+            })
+
+    def test_pool_max_sessions_must_be_positive(self):
+        with pytest.raises(ConfigError, match="maxSessions"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "passthroughPool": {"maxSessions": 0},
+                    },
+                }
+            })
+
+    def test_pool_idle_ttl_must_be_positive(self):
+        with pytest.raises(ConfigError, match="idleTtlSeconds"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "passthroughPool": {"idleTtlSeconds": -10},
+                    },
+                }
+            })
+
+    def test_passthrough_must_be_boolean(self):
+        with pytest.raises(ConfigError, match="boolean"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": "yes",
+                    },
+                }
+            })
+
+    def test_top_level_auth_bearer_must_be_string(self):
+        with pytest.raises(ConfigError, match="auth.bearer"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "auth": {"bearer": 123},
+                    },
+                }
+            })
+
+    def test_top_level_auth_envvar_interpolation(self, monkeypatch):
+        monkeypatch.setenv("MY_TEST_TOKEN", "secret-xyz")
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "github": {
+                    "type": "streamable-http",
+                    "url": "https://api.example.com/mcp",
+                    "passthrough": True,
+                    "auth": {"bearer": "${MY_TEST_TOKEN}"},
+                },
+            }
+        })
+        assert specs[0].auth_bearer == "secret-xyz"
+
+    def test_top_level_auth_unset_envvar_rejected(self, monkeypatch):
+        monkeypatch.delenv("ZELOSMCP_TEST_UNSET_TOKEN", raising=False)
+        with pytest.raises(ConfigError, match="ZELOSMCP_TEST_UNSET_TOKEN"):
+            parse_config({
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.example.com/mcp",
+                        "passthrough": True,
+                        "auth": {"bearer": "${ZELOSMCP_TEST_UNSET_TOKEN}"},
+                    },
+                }
+            })
+
+    def test_to_status_redacts_bearer(self):
+        s = ServerSpec(
+            name="github",
+            transport="http",
+            url="https://api.example.com/mcp",
+            passthrough=True,
+            auth_bearer="ghp_secret",
+            passthrough_pool=PassthroughPoolSpec(max_sessions=8, idle_ttl_seconds=60),
+        )
+        d = s.to_status()
+        assert d["passthrough"] is True
+        assert d["auth"] == {"bearer": "***"}
+        assert d["passthroughPool"] == {"maxSessions": 8, "idleTtlSeconds": 60}
+        # Make sure the raw bearer never escapes — protects against
+        # accidental dataclass-as-dict serialisation regressions.
+        assert "ghp_secret" not in repr(d)
+
+    def test_to_status_omits_passthrough_when_disabled(self):
+        s = ServerSpec(name="alpha", transport="stdio", command="echo")
+        d = s.to_status()
+        assert "passthrough" not in d
+        assert "auth" not in d
+        assert "passthroughPool" not in d
+
+
+# ── BuiltinConfig ──────────────────────────────────────────────────
+
+
+class TestBuiltinConfig:
+    """Tests for the optional top-level ``"builtin"`` config key."""
+
+    def test_absent_key_defaults_to_raw(self):
+        """No ``builtin`` key → response_format='raw', no compress."""
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert bc.response_format == "raw"
+        assert bc.compress is None
+
+    def test_empty_object_defaults_to_raw(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {},
+        })
+        assert bc.response_format == "raw"
+        assert bc.compress is None
+
+    def test_response_format_toon(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "toon"},
+        })
+        assert bc.response_format == "toon"
+
+    def test_response_format_compact_json(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "compact_json"},
+        })
+        assert bc.response_format == "compact_json"
+
+    def test_invalid_response_format_rejected(self):
+        with pytest.raises(ConfigError, match="response_format"):
+            parse_config({
+                "mcpServers": {"x": {"command": "echo"}},
+                "builtin": {"response_format": "xml"},
+            })
+
+    def test_builtin_not_dict_rejected(self):
+        with pytest.raises(ConfigError, match="builtin"):
+            parse_config({
+                "mcpServers": {"x": {"command": "echo"}},
+                "builtin": "toon",
+            })
+
+    def test_compress_block(self):
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {
+                "compress": {"level": "high", "scope": "global"},
+            },
+        })
+        assert bc.compress is not None
+        assert bc.compress.level == "high"
+        assert bc.compress.scope == "global"
+
+    def test_to_status_empty_when_defaults(self):
+        from zelosmcp.config import BuiltinConfig
+        bc = BuiltinConfig()
+        assert bc.to_status() == {}
+
+    def test_to_status_shows_non_defaults(self):
+        from zelosmcp.config import BuiltinConfig, CompressSpec
+        bc = BuiltinConfig(
+            response_format="toon",
+            compress=CompressSpec(level="high"),
+        )
+        s = bc.to_status()
+        assert s["response_format"] == "toon"
+        assert "compress" in s
+
+    def test_env_var_override(self, monkeypatch):
+        monkeypatch.setenv(
+            "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "compact_json"
+        )
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert bc.response_format == "compact_json"
+
+    def test_explicit_config_beats_env_var(self, monkeypatch):
+        monkeypatch.setenv(
+            "ZELOSMCP_BUILTIN_RESPONSE_FORMAT", "compact_json"
+        )
+        _, _, bc = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+            "builtin": {"response_format": "toon"},
+        })
+        assert bc.response_format == "toon"
+
+
+# ── Started flag ───────────────────────────────────────────────────
+
+
+class TestStartedFlag:
+    """Tests for the ``started`` config field on ServerSpec."""
+
+    def test_default_is_true(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo"}},
+        })
+        assert specs[0].started is True
+
+    def test_explicit_true(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo", "started": True}},
+        })
+        assert specs[0].started is True
+
+    def test_explicit_false(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {"x": {"command": "echo", "started": False}},
+        })
+        assert specs[0].started is False
+
+    def test_non_bool_rejected(self):
+        with pytest.raises(ConfigError, match="started"):
+            parse_config({
+                "mcpServers": {
+                    "x": {"command": "echo", "started": "yes"},
+                },
+            })
+
+    def test_http_backend_started_false(self):
+        specs, _, _ = parse_config({
+            "mcpServers": {
+                "x": {
+                    "type": "streamable-http",
+                    "url": "http://localhost:8080",
+                    "started": False,
+                },
+            },
+        })
+        assert specs[0].started is False
+
+    def test_to_status_omits_when_true(self):
+        s = ServerSpec(
+            name="a", transport="stdio", command="echo",
+        )
+        assert "started" not in s.to_status()
+
+    def test_to_status_shows_when_false(self):
+        s = ServerSpec(
+            name="a", transport="stdio", command="echo",
+            started=False,
+        )
+        d = s.to_status()
+        assert d["started"] is False

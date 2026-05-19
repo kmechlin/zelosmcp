@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "targets": [
+    "cursor"
+  ],
+  "tool_use": "priority",
+  "access": "read-write",
+  "style": "always-apply",
+  "globs": "",
+  "last_pushed": {
+    "rule": "2026-05-17T05:22:58Z",
+    "agent": "2026-05-17T05:22:58Z",
+    "hook": null
+  }
+}

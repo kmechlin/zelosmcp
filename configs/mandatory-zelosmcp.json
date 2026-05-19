@@ -1,0 +1,41 @@
+{
+  "builtin": {
+    "response_format": "compact_json",
+    "compress": {
+      "level": "low"
+    }
+  },
+  "mcpServers": {
+    "pincher": {
+      "command": "pincher",
+      "args": [
+        "--data-dir",
+        "/tmp/pincher",
+        "--http",
+        "127.0.0.1:8080",
+        "--trust-proxy"
+      ],
+      "reverseProxy": {
+        "mount": "/pincher",
+        "upstream": "http://127.0.0.1:8080",
+        "openapi": {
+          "path": "/v1/openapi.json"
+        }
+      },
+      "compress": {
+        "level": "medium"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/user_data_rw"
+      ],
+      "compress": {
+        "level": "medium"
+      }
+    }
+  }
+}
