@@ -130,9 +130,11 @@ def _coerce_float(v: Any) -> float | None:
         return None
 
 
-_PINCHER_META_KEYS_USED = ("tokens_used", "tokensUsed", "input_tokens")
-_PINCHER_META_KEYS_SAVED = ("tokens_saved", "tokensSaved", "saved_tokens")
-_PINCHER_META_KEYS_COST = ("cost_avoided", "costAvoided", "cost_avoided_usd")
+from zelosmcp.constants import (
+    PINCHER_META_KEYS_COST as _PINCHER_META_KEYS_COST,
+    PINCHER_META_KEYS_SAVED as _PINCHER_META_KEYS_SAVED,
+    PINCHER_META_KEYS_USED as _PINCHER_META_KEYS_USED,
+)
 
 
 def _pluck(d: Any, keys: tuple[str, ...]) -> Any:

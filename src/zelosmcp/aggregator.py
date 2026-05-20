@@ -47,9 +47,9 @@ if TYPE_CHECKING:
     from zelosmcp.manager import ProxyManager
     from zelosmcp.proxy import ProxyState
 
-logger = logging.getLogger("zelosmcp")
+from zelosmcp.constants import SEP
 
-SEP = "__"
+logger = logging.getLogger("zelosmcp")
 
 
 class Aggregator:
