@@ -31,10 +31,10 @@ import httpx
 import pytest
 
 from zelosmcp import repos as repos_mod
-from zelosmcp.app import (
-    _extract_pincher_indexed_paths,
-    _flatten_call_result,
-    create_app,
+from zelosmcp.app import create_app
+from zelosmcp.openapi import (
+    extract_pincher_indexed_paths as _extract_pincher_indexed_paths,
+    flatten_call_result as _flatten_call_result,
 )
 from zelosmcp.manager import ProxyManager
 
