@@ -27,7 +27,7 @@ tokenizer = ["tiktoken>=0.7"]
 zelosmcp = "zelosmcp.app:main"
 
 [project.urls]
-Repository = "https://github.com/nike-qre/zelosmcp"
+Repository = "https://github.com/ZelosAI/zelosmcp"
 
 [build-system]
 requires = ["hatchling"]
