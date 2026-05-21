@@ -29,15 +29,30 @@
 ## Layout
 
 See [README.md "Project structure"](./README.md#project-structure) for the
-authoritative tree. Key entry points:
+authoritative tree. Key entry points (post-`feature/refactor-code` reshape):
 
-- `src/zelosmcp/app.py` — Starlette ASGI app + dispatcher.
+- `src/zelosmcp/app.py` — Starlette ASGI app + dispatcher; `create_app()`
+  wires per-feature route modules from `routes/`.
+- `src/zelosmcp/routes/<feature>.py` — one module per route group
+  (`assets`, `auth`, `docs_view`, `pages`, `repos`, `servers`, `streaming`).
+  Each exposes a `register(...)` callable consumed by `app.create_app()`.
 - `src/zelosmcp/aggregator.py` — `/mcp` aggregator (union of tools across backends).
 - `src/zelosmcp/builtin.py` — `/zelosmcp/mcp` built-in MCP + rule generator.
 - `src/zelosmcp/compression.py` — `get_tool_schema` / `invoke_tool` compression wrappers.
+- `src/zelosmcp/openapi.py` — extracted OpenAPI / CallResult helpers.
+- `src/zelosmcp/constants.py` — shared constants (separator, reserved names,
+  table names, well-known HTTP paths).
+- `src/zelosmcp/util.py` — shared helpers.
+- `src/zelosmcp/ui.py` — loader + template-variable substitution; HTML/CSS/JS
+  lives in `src/zelosmcp/static/` (`index.{html,css,js}`, `catalog.{html,css,js}`).
+- `src/zelosmcp/framework/{assetstore,authstore,savingsstore}/sqlite.py` —
+  persistent stores (SQLite-backed).
 - `Dockerfile` (upstream community) and `docker-tools/Dockerfile` (corp-cert-aware).
-- `Makefile` — `init-env`, `up`, `down`, `restart`, `load`, `index`, `rule`, `clean`, `nuke`.
+- `Makefile` — `init-env`, `up`, `down`, `restart`, `load`, `index`, `rule`, `clean`, `nuke`,
+  plus `make test` / `make lint` / `make typecheck` for the dev loop.
 - `deploy/kubernetes/zelosmcp.yaml` — production Kubernetes manifest.
+
+When modules move, update this section.
 
 ## How to run it / How to build it
 

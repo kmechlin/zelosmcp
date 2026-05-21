@@ -115,6 +115,7 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 	kubeconfig clean-kubeconfig \
 	up down restart load status logs shell ui tools rule index index-full \
 	cursor-mcp-allowlist \
+	test lint typecheck check \
 	clean nuke
 
 # ============================================================================
@@ -125,7 +126,7 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 # you add a new public target; the help output is generated from them.
 HELP_CONTROL := up down restart clean nuke
 HELP_SERVICE := load status tools rule index index-full ui kubeconfig clean-kubeconfig
-HELP_DEV     := init-env setup build rebuild cert logs shell vars cursor-mcp-allowlist
+HELP_DEV     := init-env setup build rebuild cert logs shell vars cursor-mcp-allowlist test lint typecheck check
 
 help: ## Print every public verb grouped by section
 	@printf '\nzelosMCP — Docker container lifecycle for the MCP proxy + aggregator.\n\n'
@@ -562,6 +563,28 @@ cursor-mcp-allowlist: ## Print Cursor's team-admin MCP allowlist from $(CURSOR_S
 		echo "(install jq for pretty-printed/filtered output; raw JSON follows)"; \
 		echo "$$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("allowedMcpConfiguration",{}),indent=2))'; \
 	fi
+
+# ============================================================================
+# Local Python checks (run on the host, no container required)
+# ============================================================================
+# `uv` is the preferred runner; falls back to `python -m` if uv is absent.
+# Tests live in tests/; ruff + mypy configs live in pyproject.toml. The
+# tools are pinned under [dependency-groups].dev — `uv sync` installs them
+# into .venv/.
+
+UV ?= $(shell command -v uv 2>/dev/null)
+PYRUN := $(if $(UV),uv run --,PYTHONPATH=src .venv/bin/python -m)
+
+test: ## Run the pytest suite (PYTHONPATH=src tests/)
+	@PYTHONPATH=src $(PYRUN) pytest tests/ -q
+
+lint: ## Lint with ruff
+	@$(PYRUN) ruff check src tests
+
+typecheck: ## Type-check with mypy
+	@$(PYRUN) mypy
+
+check: lint typecheck test ## Run lint + typecheck + tests in order
 
 # ============================================================================
 # Teardown
