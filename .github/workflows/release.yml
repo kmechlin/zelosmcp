@@ -1,0 +1,86 @@
+---
+name: release
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU (for arm64 cross-build)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version
+        id: version
+        run: |
+          if [ -f galaxy.yml ]; then
+            # Ansible collection: galaxy.yml is authoritative (e.g. zelos.dgx).
+            VERSION=$(grep -E '^version:' galaxy.yml | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")
+            SOURCE="galaxy.yml"
+          elif [ -f pyproject.toml ]; then
+            VERSION=$(grep -E '^version[[:space:]]*=' pyproject.toml | head -1 | sed -E 's/version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+            SOURCE="pyproject.toml"
+          else
+            echo "::error::No version source (looked for galaxy.yml then pyproject.toml)"
+            exit 1
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not parse version from $SOURCE"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "source=${SOURCE}" >> "$GITHUB_OUTPUT"
+          echo "Detected version=${VERSION} from ${SOURCE}"
+
+      - name: Compute tags
+        id: tags
+        run: |
+          IMAGE="ghcr.io/zelosai/${{ github.event.repository.name }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA_SHORT="${GITHUB_SHA::7}"
+          TAGS="${IMAGE}:sha-${SHA_SHORT}"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "::error::Git tag v${TAG_VERSION} does not match repo version v${VERSION} (${{ steps.version.outputs.source }})"
+              exit 1
+            fi
+            TAGS="${TAGS},${IMAGE}:v${VERSION},${IMAGE}:latest,${IMAGE}:stable"
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            TAGS="${TAGS},${IMAGE}:v${VERSION},${IMAGE}:latest,${IMAGE}:stable"
+          elif [[ "$GITHUB_REF" == refs/heads/develop ]]; then
+            TAGS="${TAGS},${IMAGE}:v${VERSION}-dev,${IMAGE}:latest"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Computed tags: ${TAGS}"
+
+      - name: Build + push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
