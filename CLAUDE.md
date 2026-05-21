@@ -72,12 +72,20 @@ Container-side mount conventions documented in
   first feature PR.
 - **Commits:** clear, descriptive messages. Co-author with Claude where applicable.
 - **Tagging:** semver — `v0.1.0`, `v0.2.0`, … Tag from `main` only.
-- **Container builds:** triggered by tag push (`v*`) via `.github/workflows/release.yml`;
-  images publish to `ghcr.io/zelosai/zelosmcp:<tag>` plus `:latest` on `main`
-  pushes and `:sha-<short>` on every build. Build context is the repo root and
-  the default `Dockerfile` is used (the upstream community variant; the corp
-  cert-aware `docker-tools/Dockerfile` is for local builds behind a TLS-intercepting
-  proxy and not used in CI).
+- **Container builds:** `.github/workflows/release.yml` builds and pushes
+  multi-arch images (`linux/amd64` + `linux/arm64`) to
+  `ghcr.io/zelosai/zelosmcp` on every push to `develop`, every push to `main`,
+  and every `v*` tag push. The version is read from `pyproject.toml`.
+  Tags applied:
+  - **develop push** → `:v<X.Y.Z>-dev` · `:latest` · `:sha-<short>`
+  - **main push** → `:v<X.Y.Z>` · `:latest` · `:stable` · `:sha-<short>`
+  - **`v<X.Y.Z>` git tag push** → same as main push, plus validates that the
+    tag name matches the in-repo version.
+
+  `:latest` follows the most recent build of any kind; `:stable` tracks `main` only.
+  Build context is the repo root and the default `Dockerfile` is used (the
+  upstream community variant; the corp cert-aware `docker-tools/Dockerfile`
+  is for local builds behind a TLS-intercepting proxy and not used in CI).
 - **PRs:** do not create unless explicitly asked.
 
 ## Relation to the Zelos suite
