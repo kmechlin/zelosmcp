@@ -21,6 +21,11 @@ jobs:
           node-version: '20'
       - name: Install mermaid-cli
         run: npm i -g @mermaid-js/mermaid-cli@^11
+      - name: Create puppeteer config (disable sandbox for GHA runners)
+        # Ubuntu 24+ runners restrict unprivileged user namespaces, so the
+        # Chromium that puppeteer/mermaid-cli ships needs --no-sandbox.
+        run: |
+          echo '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > /tmp/puppeteer.json
       - name: Extract and validate mermaid blocks
         run: |
           python3 - <<'PY'
@@ -42,7 +47,10 @@ jobs:
                           f.write(block)
                           tmp = f.name
                       out = tmp.replace(".mmd", ".svg")
-                      r = subprocess.run(["mmdc", "-i", tmp, "-o", out, "-q"], capture_output=True, text=True)
+                      r = subprocess.run(
+                          ["mmdc", "-i", tmp, "-o", out, "-q", "-p", "/tmp/puppeteer.json"],
+                          capture_output=True, text=True,
+                      )
                       if r.returncode != 0:
                           print(f"::error file={p}::mermaid block #{i+1} invalid:\n{r.stderr}")
                           rc = 1
