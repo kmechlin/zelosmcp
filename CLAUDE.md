@@ -103,6 +103,39 @@ Container-side mount conventions documented in
   is for local builds behind a TLS-intercepting proxy and not used in CI).
 - **PRs:** do not create unless explicitly asked.
 
+## Issue tracking & releases
+
+All features, bugs, and chores in the Zelos suite are tracked in the org-level
+GitHub Project [**Zelos Platform Tracker**](https://github.com/orgs/ZelosAI/projects/2).
+Every issue opened in any ZelosAI repo auto-adds to the project via
+`.github/workflows/add-to-project.yml` (uses the `ADD_TO_PROJECT_PAT` org secret).
+
+**File issues in the repo they belong to**, not in `zelosai`, unless the work
+genuinely spans multiple repos.
+
+**Project fields to set on each item:**
+
+- **Work type** — `Feature` / `Bug` / `Chore`.
+- **Priority** — `P0` (drop everything) / `P1` (this sprint) / `P2` (this
+  release) / `P3` (someday).
+- **Status** — `Todo` / `In Progress` / `Blocked` / `Done`. Move as work
+  progresses; use `Blocked` when you can't make forward progress and note the
+  blocker in the issue.
+- **Release** — cross-repo target: `v0.1`, `v0.2`, `v0.3`, `v1.0`, or
+  `Backlog`.
+- **Milestone** — matching repo-level milestone (same names exist in every
+  repo). Keep Milestone and Release in sync so repo-native views match the
+  project.
+
+**When to file vs just fix:** if it's a self-contained change you're about to
+ship this session, the PR is the record — no issue needed. File an issue for
+work that won't ship this session, anything cross-repo, anything the user
+asks to track, or follow-ups you discover but won't do now.
+
+**Linking PRs:** PRs that resolve an issue must include `Closes #N` (or
+`Fixes #N`) in the description so GitHub auto-closes the issue on merge and
+the project's "Item closed" workflow moves it to `Done`.
+
 ## Relation to the Zelos suite
 
 zelosmcp is the MCP-side of the async path: the IDE connects to it via
