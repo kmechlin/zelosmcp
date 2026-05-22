@@ -118,9 +118,16 @@ genuinely spans multiple repos.
 - **Work type** — `Feature` / `Bug` / `Chore`.
 - **Priority** — `P0` (drop everything) / `P1` (this sprint) / `P2` (this
   release) / `P3` (someday).
-- **Status** — `Todo` / `In Progress` / `Blocked` / `Done`. Move as work
-  progresses; use `Blocked` when you can't make forward progress and note the
-  blocker in the issue.
+- **Status** — `Todo` / `In Progress` / `Ready for QA` / `Done` / `Blocked`.
+  Transitions: `Todo` → `In Progress` is set manually when you start work.
+  `In Progress` → `Ready for QA` fires **automatically** when the feature →
+  develop PR merges and the `release` workflow's dev container build
+  succeeds (see `.github/workflows/tracker-ready-for-qa.yml`).
+  `Ready for QA` → `Done` fires **automatically** via the project's
+  "Item closed" workflow when the linked issue is auto-closed on the
+  develop → main promotion (per `Closes #N` in the feature PR body).
+  Use `Blocked` (side-state, any phase) when you can't make forward
+  progress; note the blocker in the issue.
 - **Release** — cross-repo target: `v0.1`, `v0.2`, `v0.3`, `v1.0`, or
   `Backlog`.
 - **Milestone** — matching repo-level milestone (same names exist in every
@@ -196,13 +203,17 @@ If the user references an issue by number or URL, Claude:
 4. **Implement** per the issue body's "Files to change" and "Verification"
    sections. Surface deviations to the user before pushing.
 5. **PR feature → develop** with `Closes #<N>` in the body. Merge with
-   `gh pr merge <PR> --squash --delete-branch --admin`.
+   `gh pr merge <PR> --squash --delete-branch --admin`. After merge: the
+   `release` workflow builds and pushes the dev container; the
+   `tracker-ready-for-qa` workflow then auto-moves the project item to
+   `Status=Ready for QA`. Manually move the `ROADMAP.md` entry from
+   `In flight` to `Ready for QA`.
 6. **Promote develop → main** via a separate PR (`gh pr merge <PR> --merge
    --admin` to preserve commits). Every repo in the org defaults to `main`,
    so this is the merge that fires GitHub's `Closes #N` auto-close.
 7. **Back-merge `main → develop`** to absorb the promotion's merge commit.
-8. **Move the ROADMAP entries.** `In flight` → `Recently shipped` in this
-   repo's `ROADMAP.md` (and in `zelosai/ROADMAP.md` if it's there too).
+8. **Move the ROADMAP entries.** `Ready for QA` → `Recently shipped` in
+   this repo's `ROADMAP.md` (and in `zelosai/ROADMAP.md` if it's there too).
    This can be folded into the back-merge PR or a tiny follow-up commit.
 9. **Confirm.** The project's "Item closed" workflow moves Status to `Done`
    automatically; verify with `gh issue view <N>` and the project view.
