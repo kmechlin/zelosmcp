@@ -2,9 +2,11 @@
 
 > **Note for Claude sessions:** this file follows the Zelos suite-wide template
 > at [zelosai/docs/template/CLAUDE.md.tmpl](https://github.com/ZelosAI/zelosai/blob/main/docs/template/CLAUDE.md.tmpl).
+> The canonical gitflow rules every Zelos repo follows live in
+> [zelosai/docs/architecture/05-gitflow.md](https://github.com/ZelosAI/zelosai/blob/main/docs/architecture/05-gitflow.md).
 > The deep internal-mechanics docs for zelosmcp live in
 > [README.md](./README.md), [deploy/README.md](./deploy/README.md), the
-> [docs/](./docs/) directory, and [`.github/copilot-instructions.md`](./.github/copilot-instructions.md).
+> [docs/](./docs/) tree, and [`.github/copilot-instructions.md`](./.github/copilot-instructions.md).
 > This file deliberately stays thin and points there for component-internal detail.
 
 ## Repository
@@ -18,63 +20,171 @@
   assets (Cursor `.mdc` rules, Copilot `copilot-instructions.md`, skills,
   agents, hooks). Architecture context:
   [zelosai/docs/architecture/04-components/zelosmcp.md](https://github.com/ZelosAI/zelosai/blob/main/docs/architecture/04-components/zelosmcp.md).
-- **State:** Mature. Production-shape Kubernetes manifest in
+- **State:** v0.1.0 in `pyproject.toml`; v0.2.0 suite-container-contract work
+  is landed in `CHANGELOG.md` under the `[0.2.0]` section but the version
+  bump has not yet been cut. Treat as **pre-0.2.0 on `develop`**, version-
+  bump-pending. Production-shape Kubernetes manifest in
   [deploy/kubernetes/zelosmcp.yaml](./deploy/kubernetes/zelosmcp.yaml).
-  Multi-stage Docker build. Full Makefile lifecycle.
+  Multi-stage Docker build, full Makefile lifecycle.
 
 ## Active Branch
 
-- Work on: `claude/<session-slug>` (or whatever the harness sets).
+- Work on: `claude/claude-md-docs-0wYXt`
 
 ## Layout
 
-See [README.md "Project structure"](./README.md#project-structure) for the
-authoritative tree. Key entry points (post-`feature/refactor-code` reshape):
-
-- `src/zelosmcp/app.py` — Starlette ASGI app + dispatcher; `create_app()`
-  wires per-feature route modules from `routes/`.
-- `src/zelosmcp/routes/<feature>.py` — one module per route group
-  (`assets`, `auth`, `docs_view`, `pages`, `repos`, `servers`, `streaming`).
-  Each exposes a `register(...)` callable consumed by `app.create_app()`.
-- `src/zelosmcp/aggregator.py` — `/mcp` aggregator (union of tools across backends).
-- `src/zelosmcp/builtin.py` — `/zelosmcp/mcp` built-in MCP + rule generator.
-- `src/zelosmcp/compression.py` — `get_tool_schema` / `invoke_tool` compression wrappers.
-- `src/zelosmcp/openapi.py` — extracted OpenAPI / CallResult helpers.
-- `src/zelosmcp/constants.py` — shared constants (separator, reserved names,
-  table names, well-known HTTP paths).
-- `src/zelosmcp/util.py` — shared helpers.
-- `src/zelosmcp/ui.py` — loader + template-variable substitution; HTML/CSS/JS
-  lives in `src/zelosmcp/static/` (`index.{html,css,js}`, `catalog.{html,css,js}`).
-- `src/zelosmcp/framework/{assetstore,authstore,savingsstore}/sqlite.py` —
-  persistent stores (SQLite-backed).
-- `Dockerfile` (upstream community) and `docker-tools/Dockerfile` (corp-cert-aware).
-- `Makefile` — `init-env`, `up`, `down`, `restart`, `load`, `index`, `rule`, `clean`, `nuke`,
-  plus `make test` / `make lint` / `make typecheck` for the dev loop.
-- `deploy/kubernetes/zelosmcp.yaml` — production Kubernetes manifest.
+```
+zelosmcp/
+├── CLAUDE.md  README.md  CHANGELOG.md  ROADMAP.md  LICENSE
+├── pyproject.toml  uv.lock                        # Python project + lockfile
+├── Dockerfile                                     # upstream community build (CI default)
+├── Makefile                                       # full local lifecycle (build/up/down/load/test/lint…)
+├── mcpdoc-implementation-plan.md                  # design doc: MCPDoc backend + dep auto-discovery
+├── .env.example  .editorconfig  .dockerignore
+├── .github/
+│   ├── workflows/
+│   │   ├── release.yml                            # multi-arch GHCR build on develop/main/v* tags
+│   │   ├── docs.yml                               # mermaid block validation
+│   │   ├── add-to-project.yml                     # auto-add issues to Zelos Platform Tracker
+│   │   └── tracker-ready-for-qa.yml               # In Progress → Ready for QA on dev build success
+│   ├── copilot-instructions.md                    # canonical Copilot guidance
+│   ├── agents/  skills/  hooks/  prompts/         # IDE-asset templates (also pushed at runtime)
+│   ├── hooks.json  mcp.json  settings.json  zelosmcp.json
+│   ├── CODEOWNERS  pull_request_template.md
+├── benchmarks/                                    # Node/TS subscription-token-savings harness
+│   ├── package.json  vitest.config.ts  tsconfig*.json
+│   ├── src/{cli,configs,report,runner,secrets,static-analyzer,tokens,types,usage-api}.ts
+│   ├── src/{adapters,core}/  prompts/  tests/
+├── configs/
+│   ├── default-zelosmcp.json                      # minimum useful catalog (k8s+docker+github)
+│   ├── mandatory-zelosmcp.json                    # baseline always-loaded entries
+│   ├── example-passthrough-zelosmcp.json          # broader Nike/atlassian/etc. example
+│   ├── auth-providers.json  example-auth-providers.json
+│   ├── default-volumes.conf
+│   └── assets/{filesystem,global,mcpdoc,pincher}.yaml
+├── deploy/
+│   ├── kubernetes/zelosmcp.yaml                   # suite-aligned manifest (PVC, secrets, probes)
+│   ├── kubernetes/cr-sample.yaml                  # operator-driven install via ZelosMCP CR
+│   ├── kubernetes/ghcr-pull-secret.example.yaml
+│   └── swarm/docker-compose.yml
+├── docker-tools/
+│   ├── Dockerfile                                 # corp-cert-aware variant (TLS-intercepting proxy)
+│   ├── buildx.Dockerfile  README.md
+├── docs/
+│   ├── architecture.md  quickstart.md  quickstart-no-docker.md
+│   ├── configuration.md  makefile.md  http-api.md  reverse-proxy.md
+│   ├── compression.md  benchmarks.md  built-in-mcp.md  default-mcps.md
+│   ├── repositories.md  dashboard.md
+│   ├── assets.md  assets-api.md  assets-editor.md  assets-yaml.md  asset-kinds.md
+│   ├── oauth-passthrough.md  cursor-integration.md  vscode-integration.md
+│   ├── setup-rancher-desktop.md
+├── scripts/
+│   ├── init_env.py                                # `make init-env` wizard
+│   └── compare_aggregator_mcp.py
+├── src/zelosmcp/
+│   ├── __init__.py  __main__.py
+│   ├── app.py                                     # Starlette ASGI app + create_app dispatcher
+│   ├── aggregator.py                              # /mcp aggregator (union of backend tools)
+│   ├── builtin.py                                 # /zelosmcp/mcp built-in MCP + rule generator
+│   ├── compression.py                             # get_tool_schema / invoke_tool wrappers
+│   ├── config.py                                  # config load + secret/env interpolation
+│   ├── constants.py                               # separator, reserved names, well-known paths
+│   ├── docs.py  llms_txt_registry.py              # docs surface + llms.txt registry (mcpdoc plan)
+│   ├── manager.py                                 # backend lifecycle manager
+│   ├── openapi.py                                 # OpenAPI / CallResult helpers
+│   ├── passthrough_pool.py  proxy.py              # /<name>/mcp reverse-proxy + connection pool
+│   ├── repos.py                                   # repository-aware tooling
+│   ├── response.py                                # response formatting (compact_json etc.)
+│   ├── savings.py  savings_db.py                  # token-savings tracking
+│   ├── ui.py                                      # HTML template loader + var substitution
+│   ├── util.py
+│   ├── auth/                                      # auth providers (github, okta, passthrough, static)
+│   │   └── {factory,github,okta,okta_authorization_code,passthrough,protocol,registry,static,store}.py
+│   ├── framework/                                 # SQLite-backed stores + asset framework
+│   │   ├── state_dir.py                           # resolve /var/lib/zelos/zelosmcp vs ~/.zelosmcp
+│   │   ├── assetstore/{sqlite,defaults,kinds/,prefs,push,registry,row,runner,schema,seeder,…}.py
+│   │   ├── authstore/{sqlite,protocol}.py
+│   │   └── savingsstore/{sqlite,protocol}.py
+│   ├── routes/                                    # one module per route group; each exposes register()
+│   │   └── {assets,auth,docs_view,health,pages,repos,servers,streaming}.py
+│   └── static/                                    # bundled UI assets
+│       └── {index,catalog}.{html,css,js}
+└── tests/                                         # pytest suite (PYTHONPATH=src)
+    ├── conftest.py
+    ├── test_*.py                                  # aggregator/builtin/compression/auth/manager/…
+    └── framework/                                 # asset-framework unit/integration tests
+        └── test_*.py
+```
 
 When modules move, update this section.
 
 ## How to run it / How to build it
 
-See the [README quickstart](./README.md#quickstart) for the canonical path. Short:
-
 ```bash
-make init-env   # one-time .env wizard
-make up         # build (if missing) + run + load default backends
+# Local Docker lifecycle (canonical path)
+make init-env       # one-time .env wizard
+make up             # build (if missing) + start container + load default backends
+make down           # stop + remove the container
+make restart        # bounce (down + up)
+make load           # POST $(ZELOSMCP_CONFIG); auto-chains index + rule
+make logs           # tail container logs
+make shell          # bash inside the container
+make status         # container + HTTP probe state
+make ui             # open the web UI
+
+# Dev loop
+make test           # pytest (PYTHONPATH=src tests/)
+make lint           # ruff
+make typecheck      # mypy
+make check          # lint + typecheck + test
+
+# Teardown
+make clean          # down + remove image, builder, registry helper
+make nuke           # clean + remove every persistent zelosmcp-* Docker volume
 ```
 
-For Kubernetes deployment see [deploy/README.md](./deploy/README.md).
+The `zelosmcp` console script (`pyproject.toml [project.scripts]`) launches
+`zelosmcp.app:main` directly for non-Docker installs — see
+[docs/quickstart-no-docker.md](./docs/quickstart-no-docker.md).
+
+For Kubernetes deployment see [deploy/kubernetes/zelosmcp.yaml](./deploy/kubernetes/zelosmcp.yaml)
+(direct apply) or [deploy/kubernetes/cr-sample.yaml](./deploy/kubernetes/cr-sample.yaml)
+(operator-driven install via the `ZelosMCP` CR provisioned by `zelosai`).
 
 ## What has been verified / What has NOT been verified
 
-See [README.md](./README.md) and the in-repo `docs/` tree — zelosmcp's
-verification state is documented there in component-specific detail.
+- **Verified:** test suite under `tests/` (and `tests/framework/`) runs via
+  `make test`; ruff lint and mypy typecheck pass via `make lint` /
+  `make typecheck`; full Docker lifecycle (`make up` / `make load` /
+  `make down`) is the everyday developer path. The release workflow
+  pins version from `pyproject.toml`, validates `v*` tag against in-repo
+  version, and publishes multi-arch (`linux/amd64` + `linux/arm64`)
+  images using the root `Dockerfile`.
+- **Not verified end-to-end here:** operator-driven Kubernetes install
+  (the `cr-sample.yaml` path requires `zelosai`'s operator to be running
+  in-cluster); `mcpdoc-implementation-plan.md` MVP/moonshot phases are
+  not yet implemented; the version bump from `0.1.0` → `0.2.0` in
+  `pyproject.toml` has not been cut even though the `[0.2.0]` CHANGELOG
+  block is populated.
+- Component-specific verification state is also documented in
+  [README.md](./README.md) and the in-repo [docs/](./docs/) tree.
 
 ## Configuration surface
 
-See [.env.example](./.env.example) and [configs/default-zelosmcp.json](./configs/default-zelosmcp.json).
-Container-side mount conventions documented in
-[docs/configuration.md](./docs/configuration.md) and [docs/makefile.md](./docs/makefile.md).
+See [.env.example](./.env.example) (Makefile / Docker runtime knobs) and
+[configs/default-zelosmcp.json](./configs/default-zelosmcp.json) (the MCP
+catalog itself). The mandatory baseline and broader Nike/atlassian example
+live alongside as `configs/mandatory-zelosmcp.json` and
+`configs/example-passthrough-zelosmcp.json`. Auth providers are configured
+via `configs/auth-providers.json` (see `configs/example-auth-providers.json`
+for templates).
+
+Container-side mount conventions and the suite container contract
+(`/var/lib/zelos/zelosmcp` PVC, `/etc/zelos/secrets/*` Secret mounts,
+`/etc/zelos/tls`, `*_FILE` env-var fallback) are documented in
+[docs/configuration.md](./docs/configuration.md) and
+[docs/makefile.md](./docs/makefile.md). State dir resolution lives in
+`src/zelosmcp/framework/state_dir.py`.
 
 ## Git / Workflow
 
@@ -95,7 +205,7 @@ Container-side mount conventions documented in
   - **develop push** → `:v<X.Y.Z>-dev` · `:latest` · `:sha-<short>`
   - **main push** → `:v<X.Y.Z>` · `:latest` · `:stable` · `:sha-<short>`
   - **`v<X.Y.Z>` git tag push** → same as main push, plus validates that the
-    tag name matches the in-repo version.
+    tag name matches the in-repo version (build fails if they diverge).
 
   `:latest` follows the most recent build of any kind; `:stable` tracks `main` only.
   Build context is the repo root and the default `Dockerfile` is used (the
@@ -233,11 +343,19 @@ and [zelosai/docs/architecture/00-overview.md](https://github.com/ZelosAI/zelosa
 
 ## Notes / Blockers
 
-- The repo's existing internal documentation (README, copilot-instructions.md,
-  deploy/README, docs/) is the source of truth for component mechanics —
-  this CLAUDE.md should remain a thin pointer to keep duplication out of the
-  way as zelosmcp evolves.
-- The `Repository` URL in `pyproject.toml` previously pointed at a prior
-  organization; suite alignment moved zelosmcp under `ZelosAI/*`. Image
-  publishing should target `ghcr.io/zelosai/zelosmcp` (suite-standard);
-  any prior image-publish target should be retired.
+- **Version bump pending.** `pyproject.toml` still reads `version = "0.1.0"`
+  even though the `[0.2.0] — suite container contract alignment` block in
+  `CHANGELOG.md` is complete. The bump (and `v0.2.0` git tag from `main`)
+  is the next release-mechanics action; the `release` workflow will fail
+  the build if a `v0.2.0` tag is pushed without bumping `pyproject.toml`
+  first.
+- **`mcpdoc-implementation-plan.md`** at the repo root is a design document
+  for adding the LangChain `mcpdoc` MCP backend (MVP) and project-dependency
+  `llms.txt` auto-discovery (moonshot). The scaffolding files
+  (`llms_txt_registry.py`, `configs/assets/mcpdoc.yaml`,
+  `tests/test_mcpdoc_integration.py`, `tests/test_llms_txt_registry.py`)
+  exist; the full plan is not yet executed.
+- The repo's existing internal documentation (`README.md`,
+  `.github/copilot-instructions.md`, `deploy/`, `docs/`) is the source of
+  truth for component mechanics — this CLAUDE.md should remain a thin
+  pointer so duplication doesn't drift as zelosmcp evolves.
