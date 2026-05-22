@@ -470,16 +470,41 @@ def _parse_reverse_proxy_openapi(
     return OpenApiContractSpec(path=path)
 
 
-def _interpolate_env(value: str, server_name: str, field_name: str) -> str:
-    """Replace ``${VAR}`` substrings with values from ``os.environ``.
+def load_secret_env(var: str) -> str | None:
+    """Standard suite secret lookup honoring the container contract.
 
-    Raises :class:`ConfigError` when a referenced variable is not set, so
-    misconfigured deployments fail loudly at parse time instead of silently
-    forwarding ``Authorization: Bearer ${PINCHER_HTTP_KEY}`` literally.
+    Order of resolution (see zelosai/docs/architecture/07):
+      1. ``$VAR``        — direct env (allowed for local dev).
+      2. ``$VAR_FILE``   — path to a Secret-mounted file at
+         ``/etc/zelos/secrets/<key>`` (the only allowed form in-cluster).
+
+    Returns ``None`` when neither is set so callers can distinguish "unset"
+    from "set but empty".
+    """
+    direct = os.environ.get(var)
+    if direct is not None:
+        return direct
+    path = os.environ.get(var + "_FILE")
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().rstrip("\n")
+        except OSError:
+            return None
+    return None
+
+
+def _interpolate_env(value: str, server_name: str, field_name: str) -> str:
+    """Replace ``${VAR}`` substrings with values from the environment.
+
+    Honors the standard secret lookup (``$VAR`` → ``$VAR_FILE``). Raises
+    :class:`ConfigError` when a referenced variable is unset, so misconfigured
+    deployments fail loudly at parse time instead of silently forwarding
+    ``Authorization: Bearer ${PINCHER_HTTP_KEY}`` literally.
     """
     def _replace(match: re.Match[str]) -> str:
         var = match.group(1)
-        env_val = os.environ.get(var)
+        env_val = load_secret_env(var)
         if env_val is None:
             raise ConfigError(
                 f"Server '{server_name}': {field_name} references "

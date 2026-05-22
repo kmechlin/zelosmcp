@@ -70,39 +70,46 @@ _NULL_AUDIENCE = ""
 
 
 def resolve_db_path(explicit: str | None = None) -> str:
-    """Pick the SQLite path: explicit > env var > ``~/.zelosmcp/auth.sqlite``.
+    """Pick the SQLite path.
 
-    Returns ``":memory:"`` unchanged for tests. Falls back to
-    ``":memory:"`` when the home directory can't be created
-    (sandboxed environments, read-only filesystems) so the proxy
-    still boots — auth state just doesn't survive restarts in that
-    mode and the user has to re-auth on every restart.
+    Order: explicit > ``$ZELOSMCP_AUTH_DB`` > ``<state-dir>/auth.sqlite``,
+    where ``<state-dir>`` follows the suite container contract (see
+    ``zelosmcp.framework.state_dir``).
+
+    Returns ``":memory:"`` unchanged for tests; falls back to ``":memory:"``
+    when the state directory can't be created so the proxy still boots.
     """
+    from zelosmcp.framework.state_dir import resolve_state_dir
+
     candidate = explicit or os.environ.get("ZELOSMCP_AUTH_DB")
     if candidate:
         return candidate
-    home = Path.home() / ".zelosmcp"
+    state = resolve_state_dir()
     try:
-        home.mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as exc:
         logger.warning(
-            "auth: cannot create %s (%s); using in-memory store", home, exc
+            "auth: cannot create %s (%s); using in-memory store", state, exc
         )
         return ":memory:"
-    return str(home / "auth.sqlite")
+    return str(state / "auth.sqlite")
 
 
 def resolve_key_path(explicit: str | None = None) -> Path:
-    """Pick the Fernet key path: explicit > env var > ``~/.zelosmcp/auth.key``.
+    """Pick the Fernet key path.
 
-    Always returns a :class:`Path` even when the parent directory
-    doesn't exist; :func:`load_or_generate_key` handles the
-    ``mkdir`` + permissions setup before writing.
+    Order: explicit > ``$ZELOSMCP_AUTH_KEY_FILE`` > ``<state-dir>/auth.key``,
+    where ``<state-dir>`` follows the suite container contract.
+
+    Always returns a :class:`Path` even when the parent directory doesn't
+    exist; :func:`load_or_generate_key` handles ``mkdir`` + permissions.
     """
+    from zelosmcp.framework.state_dir import resolve_state_dir
+
     candidate = explicit or os.environ.get("ZELOSMCP_AUTH_KEY_FILE")
     if candidate:
         return Path(candidate)
-    return Path.home() / ".zelosmcp" / "auth.key"
+    return resolve_state_dir() / "auth.key"
 
 
 def load_or_generate_key(path: Path) -> bytes:

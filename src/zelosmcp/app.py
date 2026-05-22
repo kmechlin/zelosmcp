@@ -14,6 +14,7 @@ from zelosmcp.routes import (
     assets as asset_routes,
     auth as auth_routes,
     docs_view as docs_view_routes,
+    health as health_routes,
     pages as pages_routes,
     repos as repos_routes,
     servers as servers_routes,
@@ -208,6 +209,7 @@ def create_app(manager: ProxyManager | None = None):
     _starlette = Starlette(
         lifespan=lifespan,
         routes=[
+            *health_routes.make_routes(manager),
             *pages_routes.make_routes(manager, SCHEMA, _SWAGGER_HTML, _REDOC_HTML),
             *servers_routes.make_routes(manager),
             *docs_view_routes.make_routes(manager),
