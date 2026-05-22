@@ -1,0 +1,94 @@
+---
+# Moves linked project items to Status=Ready for QA after a successful
+# develop-branch container build. Wire-up:
+#
+# - Listens for the `release` workflow (release.yml.tmpl) completing on develop.
+# - Finds the PR(s) that brought the build SHA.
+# - Parses Closes / Fixes / Resolves refs from each PR body.
+# - Re-fetches Status field + Ready for QA option IDs at runtime so future
+#   schema edits don't break this workflow.
+# - Updates each linked project item via `gh project item-edit`.
+#
+# Requires the `ADD_TO_PROJECT_PAT` org secret (Projects: read+write).
+name: tracker-ready-for-qa
+
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  update-status:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
+    steps:
+      - name: Lookup project + Status field option IDs
+        id: ids
+        run: |
+          set -euo pipefail
+          PROJECT_ID=$(gh project view 2 --owner zelosai --format json --jq '.id')
+          STATUS_FIELD=$(gh project field-list 2 --owner zelosai --format json \
+            --jq '.fields[] | select(.name=="Status") | .id')
+          RFQ_OPT=$(gh project field-list 2 --owner zelosai --format json \
+            --jq '.fields[] | select(.name=="Status") | .options[] | select(.name=="Ready for QA") | .id')
+          if [ -z "$RFQ_OPT" ]; then
+            echo "::error::'Ready for QA' option not found in project Status field"
+            exit 1
+          fi
+          echo "project=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "field=$STATUS_FIELD" >> "$GITHUB_OUTPUT"
+          echo "option=$RFQ_OPT" >> "$GITHUB_OUTPUT"
+
+      - name: Transition linked issues to Ready for QA
+        run: |
+          set -euo pipefail
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          OWNER_REPO="${{ github.repository }}"
+          OWNER=$(echo "$OWNER_REPO" | cut -d/ -f1)
+          REPO=$(echo  "$OWNER_REPO" | cut -d/ -f2)
+          echo "Checking PRs for SHA $SHA in $OWNER_REPO"
+
+          PR_NUMS=$(gh api "repos/${OWNER_REPO}/commits/${SHA}/pulls" \
+                      --jq '.[] | select(.base.ref=="develop" and .merged_at!=null) | .number')
+
+          if [ -z "$PR_NUMS" ]; then
+            echo "No merged develop PRs found for $SHA — nothing to transition."
+            exit 0
+          fi
+
+          for pr in $PR_NUMS; do
+            echo "PR #$pr"
+            BODY=$(gh api "repos/${OWNER_REPO}/pulls/${pr}" --jq '.body // ""')
+            ISSUES=$(printf '%s\n' "$BODY" | grep -ioP '(?:closes|fixes|resolves)\s+#\K\d+' | sort -u || true)
+            if [ -z "$ISSUES" ]; then
+              echo "  (no Closes/Fixes/Resolves refs)"
+              continue
+            fi
+            for n in $ISSUES; do
+              ITEM_ID=$(gh api graphql -f query='
+                query($o:String!,$r:String!,$n:Int!) {
+                  repository(owner:$o, name:$r) {
+                    issue(number:$n) {
+                      projectItems(first:10){ nodes{ id project{ number } } }
+                    }
+                  }
+                }' -f o="$OWNER" -f r="$REPO" -F n="$n" \
+                --jq '.data.repository.issue.projectItems.nodes[]? | select(.project.number==2) | .id')
+              if [ -n "$ITEM_ID" ]; then
+                gh project item-edit \
+                  --project-id "${{ steps.ids.outputs.project }}" \
+                  --id "$ITEM_ID" \
+                  --field-id "${{ steps.ids.outputs.field }}" \
+                  --single-select-option-id "${{ steps.ids.outputs.option }}"
+                echo "  issue #$n (item $ITEM_ID) -> Status=Ready for QA"
+              else
+                echo "  issue #$n not in project #2; skipped"
+              fi
+            done
+          done
