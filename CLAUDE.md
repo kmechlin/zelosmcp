@@ -136,6 +136,80 @@ asks to track, or follow-ups you discover but won't do now.
 `Fixes #N`) in the description so GitHub auto-closes the issue on merge and
 the project's "Item closed" workflow moves it to `Done`.
 
+## Planning and execution loop
+
+This repo follows a structured planning ↔ execution flow with Claude. Three
+artifacts stay in lockstep: the [Zelos Platform Tracker](https://github.com/orgs/ZelosAI/projects/2)
+(structured state), this repo's `ROADMAP.md` (human-readable view of THIS
+component), and the suite-wide [`zelosai/ROADMAP.md`](https://github.com/ZelosAI/zelosai/blob/main/ROADMAP.md)
+(cross-component view).
+
+### When a plan is accepted (planning → backlog)
+
+The moment `ExitPlanMode` returns user approval, Claude must convert the
+accepted plan into trackable work BEFORE starting any implementation:
+
+1. **Identify feature boundaries.** Each implementable slice from the plan
+   becomes one issue in the canonical repo for that work. Cross-repo slices
+   get one canonical issue plus follow-up references in companion repos.
+2. **File one issue per slice.** Title `Feature: <slice headline>` (or
+   `Bug:` / `Chore:` if more accurate). Body carries the slice's **Why**,
+   **Files to change**, **Verification**, and any decisions made during
+   planning. Don't summarize — paste the slice content so future sessions
+   can execute from the issue alone without re-reading the plan file.
+3. **Apply project fields.** `Work type`, `Priority` (P0–P3),
+   `Status=Todo`, `Release` (v0.x or `Backlog`). Field + option IDs change
+   when the project schema is edited; re-fetch them with
+   `gh project field-list 2 --owner zelosai --format json` instead of
+   hardcoding.
+4. **Apply the repo milestone.** Match `Release`.
+   `gh issue create … --milestone v0.x`.
+5. **Update this repo's `ROADMAP.md`.** Every filed feature lands in a lane:
+   `In flight` (Status=In Progress), `Next` (Status=Todo with a v0.x
+   release), `Backlog` (Release=Backlog), or `Recently shipped` (Status=Done,
+   closed in the last release). Link by issue URL with the title + priority
+   + release tags.
+6. **Update `zelosai/ROADMAP.md`** as well if the feature matters at the
+   suite level — anything in a v0.x release lane (in-flight / next /
+   following) always goes in the suite roadmap; pure component-local backlog
+   items can stay component-only.
+7. **Update suite-architecture memory** if the plan introduces a new
+   component or reshapes how existing ones interact.
+
+This applies to plans of any size. Trivial single-file fixes the user asked
+to be done in-session still skip the issue step (per "When to file vs just
+fix" above) — but anything that came through `ExitPlanMode` is, by
+definition, planned work and gets tracked.
+
+### When given an issue to execute (backlog → implementation)
+
+If the user references an issue by number or URL, Claude:
+
+1. **Fetch the issue.** `gh issue view <N> -R zelosai/<repo> --json
+   title,body,labels,milestone,assignees,projectItems`. Read end-to-end
+   before touching code.
+2. **Move the project item to `Status=In Progress`** and **move the entry
+   in `ROADMAP.md` from `Next` (or `Backlog`) to `In flight`**. Same for
+   the suite roadmap if the item lives there. Both happen in a single
+   commit on the feature branch, before any implementation commits.
+3. **Branch off `develop`.** Name: `claude/<short-slug-from-title>`.
+4. **Implement** per the issue body's "Files to change" and "Verification"
+   sections. Surface deviations to the user before pushing.
+5. **PR feature → develop** with `Closes #<N>` in the body. Merge with
+   `gh pr merge <PR> --squash --delete-branch --admin`.
+6. **Promote develop → main** via a separate PR (`gh pr merge <PR> --merge
+   --admin` to preserve commits). Every repo in the org defaults to `main`,
+   so this is the merge that fires GitHub's `Closes #N` auto-close.
+7. **Back-merge `main → develop`** to absorb the promotion's merge commit.
+8. **Move the ROADMAP entries.** `In flight` → `Recently shipped` in this
+   repo's `ROADMAP.md` (and in `zelosai/ROADMAP.md` if it's there too).
+   This can be folded into the back-merge PR or a tiny follow-up commit.
+9. **Confirm.** The project's "Item closed" workflow moves Status to `Done`
+   automatically; verify with `gh issue view <N>` and the project view.
+
+If an issue turns out to be too coarse to execute as a single PR, propose
+splitting it (in plan mode) before starting any code.
+
 ## Relation to the Zelos suite
 
 zelosmcp is the MCP-side of the async path: the IDE connects to it via
