@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZELOSMCP</title>
+<style>
+__CSS_GOES_HERE__
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="app-topbar">
+  <div class="header">
+    <span class="wordmark">ZELOSMCP</span>
+    <span class="header-spacer"></span>
+    <a class="docs-link" href="/docs" target="_blank" rel="noopener">API Docs</a>
+  </div>
+</div>
+
+<div class="app-shell">
+
+  <!-- Left nav -->
+  <aside class="left-col">
+    <div class="nav-group">
+      <div class="nav-group-label">Configuration</div>
+      <button type="button" class="nav-item active" data-view="configuration">Servers config</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Rules generation</div>
+      <button type="button" class="nav-item" data-view="rules">Rules</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Dashboards</div>
+      <button type="button" class="nav-item" data-view="savings">Savings</button>
+      <button type="button" class="nav-item" data-view="events">Events</button>
+      <button type="button" class="nav-item" data-view="pincher-dashboard">Pincher</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Authentication</div>
+      <button type="button" class="nav-item" data-view="connections">Connections</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Event logging</div>
+      <button type="button" class="nav-item" data-view="logs">Activity</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">Help</div>
+      <button type="button" class="nav-item" data-view="docs">Documentation</button>
+    </div>
+
+  </aside>
+
+  <!-- Middle content (only one .view is .active at a time) -->
+  <main class="mid-col">
+
+    <!-- Configuration view -->
+    <section class="view active" data-view="configuration">
+      <p class="intro">Paste a Cursor <code>mcp.json</code>-style config below. Each server is mounted at <code>localhost:8000/&lt;name&gt;/mcp</code> (raw passthrough), and the aggregate endpoint at <code>localhost:8000/mcp</code> exposes every running server's tools, prompts, and resources under the <code>&lt;server&gt;__&lt;name&gt;</code> namespace (resource URIs keep their original form). The aggregate is the recommended way to wire Cursor &mdash; one entry, every backend.</p>
+
+      <div class="section">
+        <div class="section-label">Configuration</div>
+        <div class="card">
+          <textarea
+            class="config-textarea"
+            id="config-input"
+            spellcheck="false"
+          >{
+  "mcpServers": {
+    "pincher": {
+      "command": "pincher",
+      "args": ["--data-dir", "/tmp/pincher"]
+    }
+  }
+}</textarea>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">
+          <span>Cursor mcp.json (aggregated)</span>
+          <span class="recommended-pill">Recommended</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One Cursor entry, every running backend's tools and prompts. Names are
+            namespaced as <code>&lt;server&gt;__&lt;tool&gt;</code> so they don't collide.
+            Use this unless you have a specific reason to talk to a single backend
+            directly.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-aggregate-btn" onclick="copyAggregateSnippet()">Copy</button>
+            <pre id="mcp-snippet-aggregate">{
+  "mcpServers": {
+    "zelosmcp-aggregate": {
+      "type": "streamable-http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Cursor full mcp.json</div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            One entry per running backend at <code>/&lt;name&gt;/mcp</code> (raw
+            passthrough, original tool names) plus the aggregate. Use when you need
+            a backend's tools to keep their unprefixed names, or to wire a single
+            backend into a separate Cursor profile.
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-btn" onclick="copySnippet()">Copy</button>
+            <pre id="mcp-snippet">{
+  "mcpServers": {
+    "zelosmcp-aggregate": {
+      "type": "streamable-http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Rules generation view -->
+    <section class="view" data-view="rules">
+      <div class="section">
+        <div class="section-label">
+          <span>Rules</span>
+          <span class="rule-access-control">
+            <label for="rule-tool-use">Tool use:</label>
+            <select id="rule-tool-use" onchange="onRuleToolUseChange()">
+              <option value="priority" selected>Priority (encourage MCP tools)</option>
+              <option value="available">Available (neutral catalog)</option>
+            </select>
+            <label for="rule-access">Access:</label>
+            <select id="rule-access" onchange="onRuleAccessChange()">
+              <option value="read-only" selected>Read-only (safe)</option>
+              <option value="read-write">Read-write (allows mutation)</option>
+            </select>
+          </span>
+        </div>
+        <div class="card">
+          <div class="rule-ide-tabs">
+            <button type="button" class="rule-ide-tab active" data-fmt="cursor-mdc"
+              onclick="onGlobalRuleTabClick(this)">Cursor (.mdc)</button>
+            <button type="button" class="rule-ide-tab" data-fmt="copilot-instructions"
+              onclick="onGlobalRuleTabClick(this)">VS Code (copilot-instructions.md)</button>
+          </div>
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Comprehensive rule listing every tool from every currently-loaded backend, with descriptions, arg summaries,
+            and a <code>[readonly]</code>/<code>[mutates]</code>/<code>[destructive]</code>/<code>[?]</code> mutability marker.
+            <strong>Tool use</strong> &mdash; <em>Priority</em> (default) tells the agent to prefer MCP tools over shell commands and
+            includes a curated playbook for the mandatory backends; <em>Available</em> emits a neutral catalog with no prioritization.
+            <strong>Read-only</strong> mode forbids the agent from calling mutating tools &mdash; safe default for
+            inspection-style projects (code review, demos). Switch to <strong>Read-write</strong> when the agent needs
+            to make changes through the MCPs.
+            <span id="rule-tab-hint-cursor">Save as <code>.cursor/rules/zelosmcp.mdc</code> in any workspace (or <code>~/.cursor/rules/</code> for global).</span>
+            <span id="rule-tab-hint-vscode" style="display:none">Save as <code>.github/copilot-instructions.md</code> (picked up by VS Code Copilot).</span>
+          </p>
+          <div class="snippet">
+            <button class="snippet-copy" id="copy-rule-btn" onclick="copyRule()">Copy</button>
+            <pre id="cursor-rule">Loading...</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Savings dashboard view -->
+    <section class="view" data-view="savings">
+      <div class="section">
+        <div class="section-label">
+          <span>Token savings</span>
+          <span class="dashboard-meta" id="savings-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <p class="intro" style="margin: 0 0 12px 0;">
+            Aggregated savings across three sources: <strong>tool-list compression</strong>
+            (raw vs. compressed-wrapper tokens served on every <code>tools/list</code>),
+            <strong>proxy transaction events</strong> (input tokens plus raw upstream
+            output tokens versus the transformed tokens returned to the IDE for
+            every routed MCP transaction), and <strong>pincher self-reported BPE
+            savings</strong> (parsed from each pincher response's <code>_meta</code>
+            envelope plus periodic <code>pincher__stats</code> snapshots). Token
+            counts use <code>tiktoken</code>'s <code>cl100k_base</code> encoding when
+            available; otherwise a <code>len/4</code> heuristic.
+          </p>
+
+          <div class="kpi-grid" id="savings-kpis">
+            <div class="kpi"><div class="kpi-label">Tokens saved (compression)</div><div class="kpi-value" id="kpi-compression-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (proxy transforms)</div><div class="kpi-value" id="kpi-transform-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Tokens saved (pincher)</div><div class="kpi-value" id="kpi-pincher-saved">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Transactions recorded</div><div class="kpi-value" id="kpi-transactions">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Upstream output tokens</div><div class="kpi-value" id="kpi-upstream-output">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Returned output tokens</div><div class="kpi-value" id="kpi-returned-output">&mdash;</div></div>
+            <div class="kpi"><div class="kpi-label">Cost avoided (pincher)</div><div class="kpi-value" id="kpi-cost">&mdash;</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Compression by backend</div>
+        <div class="card">
+          <table class="savings-table" id="savings-compression-table">
+            <thead>
+              <tr>
+                <th>Backend</th>
+                <th>Level</th>
+                <th class="num">Raw tokens</th>
+                <th class="num">Compressed</th>
+                <th class="num">Saved</th>
+                <th class="num">% saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-compression-body">
+              <tr><td colspan="6" class="empty-cell">No compression snapshots yet. Run a <code>tools/list</code> against <code>/mcp</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Top tools by token volume</div>
+        <div class="card">
+          <table class="savings-table" id="savings-top-tools">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th class="num">Events</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+                <th class="num">Avg latency</th>
+              </tr>
+            </thead>
+            <tbody id="savings-top-tools-body">
+              <tr><td colspan="7" class="empty-cell">No proxy events recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Response transform breakdown</div>
+        <div class="card">
+          <table class="savings-table" id="savings-transform-table">
+            <thead>
+              <tr>
+                <th>Transform</th>
+                <th class="num">Events</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+              </tr>
+            </thead>
+            <tbody id="savings-transform-body">
+              <tr><td colspan="5" class="empty-cell">No transformed responses recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Per-backend transactions</div>
+        <div class="card">
+          <div id="savings-backend-bars" class="backend-bars">
+            <div class="empty-cell">No proxy events yet.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Pincher session stats</div>
+        <div class="card">
+          <pre id="savings-pincher-stats" class="savings-pre">No pincher__stats snapshot yet. Pincher must be running and the poller (<code>ZELOSMCP_PINCHER_POLL_SECS</code>, default 60s) must have run at least once.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Proxy events view -->
+    <section class="view" data-view="events">
+      <div class="section">
+        <div class="section-label">
+          <span>Proxy events</span>
+          <span class="dashboard-meta" id="events-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="events-controls">
+            <input
+              id="events-backend-filter"
+              placeholder="Backend (exact, e.g. docker)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-method-filter"
+              placeholder="Method (exact, e.g. tools/call)"
+              oninput="onEventsFilterChange()">
+            <input
+              id="events-tool-filter"
+              placeholder="Tool substring"
+              oninput="onEventsFilterChange()">
+            <div class="events-actions">
+              <label class="events-toggle">
+                <input type="checkbox" id="events-errors-only" onchange="onEventsFilterChange()">
+                Errors only
+              </label>
+              <button type="button" class="btn btn-outline btn-mini" onclick="loadEventHistory(0)">Refresh</button>
+            </div>
+          </div>
+          <div class="events-status-row">
+            <div class="events-status" id="events-status">Loading event history…</div>
+            <div class="events-actions">
+              <button type="button" class="btn btn-outline btn-mini" id="events-prev" onclick="changeEventsPage(-1)" disabled>Previous</button>
+              <button type="button" class="btn btn-outline btn-mini" id="events-next" onclick="changeEventsPage(1)" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Recent transactions</div>
+        <div class="card events-table-scroll">
+          <table class="savings-table events-table" id="events-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Backend</th>
+                <th>Method</th>
+                <th>Qualified</th>
+                <th class="num">Input</th>
+                <th class="num">Upstream</th>
+                <th class="num">Returned</th>
+                <th class="num">Saved</th>
+                <th class="num">Latency</th>
+              </tr>
+            </thead>
+            <tbody id="events-body">
+              <tr><td colspan="9" class="empty-cell">No proxy events yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Selected event</div>
+        <div class="card">
+          <pre id="events-detail" class="savings-pre">Select an event row to inspect its details.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pincher dashboard view -->
+    <section class="view" data-view="pincher-dashboard">
+      <div class="section">
+        <div class="section-label">
+          <span>Pincher dashboard</span>
+          <span class="dashboard-meta" id="pincher-dashboard-meta">&mdash;</span>
+        </div>
+        <div class="card dashboard-empty hidden" id="pincher-dashboard-empty">
+          Pincher isn't running. Start the <code>pincher</code> backend from the
+          Servers panel on the right to load its dashboard. The dashboard URL is
+          read from the live <code>reverseProxy.mount</code> (defaults to
+          <code>/pincher/v1/dashboard</code>).
+        </div>
+        <iframe
+          id="pincher-dashboard-frame"
+          class="dashboard-frame hidden"
+          title="Pincher dashboard"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </div>
+    </section>
+
+    <!-- Event logging view -->
+    <section class="view" data-view="logs">
+      <div class="section">
+        <div class="section-label">Activity</div>
+        <div class="card">
+          <input
+            type="text"
+            id="log-filter"
+            class="log-filter"
+            placeholder="Filter (substring, e.g. pincher_)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="log-viewer" id="log-viewer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Assets: Rules view -->
+    <section class="view" data-view="assets-rules">
+      <p class="intro">Cursor <code>.mdc</code> and VS Code <code>copilot-instructions.md</code> rule content — playbooks, per-tool guidance, and access-mode directives. Seed rows come from <code>configs/assets/rules/</code>; your edits are preserved across restarts.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Rules</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('rule')">Refresh</button>
+        </div>
+        <div id="assets-rules-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Extensions view -->
+    <section class="view" data-view="assets-extensions">
+      <p class="intro">UI action buttons that call MCP tools. The "Index in pincher" button in the Repos panel is powered by the <code>pincher/index_project</code> extension below. Edit <code>args_template</code> or add new extensions.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Extensions</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('extension')">Refresh</button>
+        </div>
+        <div id="assets-extensions-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Agents view -->
+    <section class="view" data-view="assets-agents">
+      <p class="intro">Cursor Subagent / Skill definitions. Each agent can be pushed to <code>.cursor/skills/&lt;name&gt;/SKILL.md</code> in any indexed repo.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Agents</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('agent')">Refresh</button>
+        </div>
+        <div id="assets-agents-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Assets: Hooks view -->
+    <section class="view" data-view="assets-hooks">
+      <p class="intro">Cursor hook entries (event → command). Pushed to <code>.cursor/hooks.json</code> — only zelosMCP-owned entries are updated; your manually-added hooks are preserved.</p>
+      <div class="section">
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Hooks</span>
+          <button type="button" class="btn btn-outline btn-mini" onclick="loadAssets('hook')">Refresh</button>
+        </div>
+        <div id="assets-hooks-list" class="assets-list"></div>
+      </div>
+    </section>
+
+    <!-- Connections view: per-provider auth cards + device-flow modal -->
+    <section class="view" data-view="connections">
+      <p class="intro">Per-user authentication for OAuth-protected MCP backends. Connecting a provider here unlocks the corresponding wrappers in <code>tools/list</code> at <code>localhost:8000/mcp</code> &mdash; until a backend's provider is connected, its wrappers are hidden from Cursor entirely.</p>
+
+      <div class="section">
+        <div class="section-label">
+          <span>Connections</span>
+          <span class="dashboard-meta" id="connections-meta">&mdash;</span>
+        </div>
+        <div id="connections-list" class="connections-list">
+          <span class="docs-empty">Loading providers...</span>
+        </div>
+      </div>
+
+
+      <!-- Device-flow modal. Hidden by default; shown via showConnectModal() -->
+      <div class="connect-modal-backdrop hidden" id="connect-modal-backdrop">
+        <div class="connect-modal" role="dialog" aria-modal="true" aria-labelledby="connect-modal-title">
+          <button type="button" class="connect-modal-close" onclick="closeConnectModal()" aria-label="Close">&times;</button>
+          <h3 id="connect-modal-title">Connect</h3>
+          <p class="connect-modal-hint hidden" id="connect-modal-hint"></p>
+          <p id="connect-modal-instructions">One-time browser authorization. We will open the upstream provider's authorize page in a new tab.</p>
+          <div class="connect-modal-code-row hidden" id="connect-modal-code-row">
+            <span class="connect-modal-code-label">Code:</span>
+            <code id="connect-modal-code">&mdash;</code>
+            <button type="button" class="btn-mini btn-outline" onclick="copyConnectCode()">Copy</button>
+          </div>
+          <a id="connect-modal-authorize-link" class="btn btn-primary" target="_blank" rel="noopener" style="display:none; text-decoration:none; margin-top: 16px;">Authorize on Upstream</a>
+          <p class="connect-modal-status" id="connect-modal-status">Starting...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Documentation view -->
+    <section class="view" data-view="docs">
+      <div class="section">
+        <div class="section-label">
+          <span id="docs-section-title">Documentation</span>
+          <span class="dashboard-meta" id="docs-meta">&mdash;</span>
+        </div>
+        <div class="docs-toolbar hidden" id="docs-toolbar">
+          <button type="button" class="btn btn-outline btn-back" onclick="showDocsIndex()">&larr; All docs</button>
+          <span class="docs-current" id="docs-current">&mdash;</span>
+        </div>
+        <div id="docs-index" class="docs-index">
+          <span class="docs-empty">Loading...</span>
+        </div>
+        <article class="docs-content hidden" id="docs-content"></article>
+      </div>
+    </section>
+
+    <!-- Backend Assets view: per-backend tabbed asset manager -->
+    <section class="view" data-view="assets-backend">
+      <div class="section">
+        <div class="section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span id="assets-backend-title">Backend assets</span>
+          <span class="dashboard-meta" id="assets-backend-meta"></span>
+          <span style="flex:1;"></span>
+          <!-- YAML editor action group -->
+          <button type="button" class="btn btn-outline btn-mini" id="assets-yaml-edit-btn"
+            onclick="openYamlEditor()" style="display:none;" title="Edit the full YAML for this backend">
+            Edit YAML
+          </button>
+          <a id="assets-yaml-export-a" style="display:none;" download="">
+            <button type="button" class="btn btn-outline btn-mini" id="assets-yaml-export-btn"
+              onclick="exportYaml()" title="Download YAML file">Export</button>
+          </a>
+          <label class="btn btn-outline btn-mini" id="assets-yaml-import-label"
+            style="display:none;cursor:pointer;margin:0;" title="Import YAML file to overwrite">
+            Import
+            <input type="file" id="assets-yaml-import-input" accept=".yaml,.yml"
+              style="display:none;" onchange="importYaml(this)">
+          </label>
+          <button type="button" class="btn btn-mini btn-outline"
+            id="assets-backend-refresh-btn" onclick="refreshBackendAssets()" style="display:none;">
+            Refresh
+          </button>
+        </div>
+
+        <!-- Tab bar -->
+        <div id="assets-backend-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;">
+          <button type="button" class="assets-tab active" data-tab="rule"
+            onclick="switchBackendAssetsTab('rule')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Rules
+          </button>
+          <button type="button" class="assets-tab" data-tab="extension"
+            onclick="switchBackendAssetsTab('extension')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Extensions
+          </button>
+          <button type="button" class="assets-tab" data-tab="agent"
+            onclick="switchBackendAssetsTab('agent')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Agents
+          </button>
+          <button type="button" class="assets-tab" data-tab="hook"
+            onclick="switchBackendAssetsTab('hook')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Hooks
+          </button>
+          <button type="button" class="assets-tab" data-tab="skill"
+            onclick="switchBackendAssetsTab('skill')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            Skills
+          </button>
+          <button type="button" class="assets-tab" data-tab="all"
+            onclick="switchBackendAssetsTab('all')"
+            style="padding:7px 18px;border:none;border-bottom:2px solid transparent;background:none;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:color .15s,border-color .15s;">
+            All
+          </button>
+          <!-- Add stub button injected per-tab by JS -->
+          <span style="flex:1;"></span>
+          <button type="button" class="btn btn-mini btn-outline" id="assets-add-stub-btn"
+            onclick="addStubRow()" style="display:none;margin:4px 0;">
+            + Add
+          </button>
+        </div>
+
+        <!-- YAML editor (hidden until Edit YAML is clicked) -->
+        <div id="assets-yaml-editor-panel" style="display:none;margin-top:8px;">
+          <textarea id="assets-yaml-textarea"
+            style="width:100%;height:380px;font-family:monospace;font-size:12px;resize:vertical;
+                   padding:8px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box;"
+            spellcheck="false" oninput="onYamlEditorInput(this)"></textarea>
+          <!-- Live lint status panel -->
+          <div id="assets-yaml-lint-status"
+            style="margin-top:4px;font-size:11px;min-height:20px;"></div>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+            <button type="button" class="btn btn-primary" id="assets-yaml-save-btn"
+              onclick="saveYamlEditor()" disabled>Save</button>
+            <button type="button" class="btn btn-outline"
+              onclick="closeYamlEditor()">Cancel</button>
+            <span id="assets-yaml-save-status" style="font-size:12px;color:var(--muted);"></span>
+          </div>
+        </div>
+
+        <div id="assets-backend-content" class="assets-list" style="min-height:80px;margin-top:8px;">
+          <span class="docs-empty">Select a backend from the right column.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Server details view (catalog rendered in the center pane) -->
+    <section class="view" data-view="server-details">
+      <div class="section">
+        <div class="section-label">
+          <span id="server-details-title">Server details</span>
+          <span class="dashboard-meta" id="server-details-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <div class="details-body" id="server-details-body">
+            <p class="details-empty">Click <strong>Details</strong> on any server in the right column to inspect its tools, prompts, and resources here.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Repo details view: rule editor, comprehensive push, extensions -->
+    <section class="view" data-view="repo-details">
+      <div class="section">
+        <div class="section-label">
+          <span id="repo-details-title">Repository</span>
+          <span class="dashboard-meta" id="repo-details-meta">&mdash;</span>
+        </div>
+        <div class="card">
+          <p class="repo-paths" id="repo-details-paths">&mdash;</p>
+
+          <!-- Two-column grid: controls (left) + action buttons (right) -->
+          <div class="repo-details-grid">
+
+            <!-- Left: IDE tabs + dropdowns + path hint -->
+            <div class="repo-details-controls">
+              <!-- IDE target tab strip -->
+              <div class="rule-ide-tabs" style="margin-bottom:12px;">
+                <button type="button" class="rule-ide-tab active" data-ide="cursor"
+                  onclick="onRepoIdeTabClick(this)">Cursor</button>
+                <button type="button" class="rule-ide-tab" data-ide="vscode"
+                  onclick="onRepoIdeTabClick(this)">VS Code</button>
+              </div>
+
+              <!-- Rule format controls (controls that depend on the selected IDE tab) -->
+              <div class="rule-write-form">
+                <label for="repo-rule-tool-use">Tool use</label>
+                <select id="repo-rule-tool-use" onchange="onRepoControlChange()">
+                  <option value="priority" selected>Priority (encourage MCP tools)</option>
+                  <option value="available">Available (neutral catalog)</option>
+                </select>
+                <label for="repo-rule-access">Access</label>
+                <select id="repo-rule-access" onchange="onRepoControlChange()">
+                  <option value="read-only" selected>Read-only (safe)</option>
+                  <option value="read-write">Read-write (allows mutation)</option>
+                </select>
+                <!-- Style / globs only relevant for Cursor (.mdc frontmatter) -->
+                <span id="repo-cursor-only-controls" style="display:contents;">
+                  <label for="repo-rule-style">Style</label>
+                  <select id="repo-rule-style" onchange="onRepoStyleChange()">
+                    <option value="always-apply" selected>Always apply</option>
+                    <option value="scoped">Scoped (uses globs)</option>
+                  </select>
+                  <label for="repo-rule-globs">Globs</label>
+                  <input type="text" id="repo-rule-globs" placeholder="**/*.py" disabled
+                         oninput="onRepoGlobsInput()">
+                </span>
+              </div>
+              <!-- Output path hint -->
+              <p id="repo-rule-path-hint" style="font-size:12px;color:var(--mid);margin:6px 0 0 0;"></p>
+            </div>
+
+            <!-- Right: push buttons + execute extensions -->
+            <div class="repo-details-actions">
+              <div class="repo-details-actions-label">Push assets</div>
+              <div id="repo-push-running-hint" style="font-size:11px;color:var(--muted);"></div>
+              <button type="button" class="btn btn-primary"
+                onclick="pushAllAssets()" title="Push rules + agents + hooks + skills to selected IDE target">
+                Push all
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushBothTargets()" title="Push rules + agents + hooks + skills to both Cursor and VS Code">
+                Push to both
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('rule')" title="Write rule file for selected IDE target">
+                Push rules
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('agent')" title="Write SKILL.md for selected IDE target">
+                Push agents
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('hook')" title="Merge hook file for selected IDE target">
+                Push hooks
+              </button>
+              <button type="button" class="btn btn-outline"
+                onclick="pushComprehensive('skill')" title="Write skill SKILL.md files for selected IDE target">
+                Push skills
+              </button>
+              <button type="button" class="btn btn-outline" style="margin-top:8px;color:var(--danger,#c33);"
+                onclick="removeAllAssets()" title="Remove all zelosmcp-managed files from this repo">
+                Remove all
+              </button>
+
+              <!-- Execute extensions — populated dynamically -->
+              <div id="repo-asset-actions"></div>
+            </div>
+
+          </div><!-- /.repo-details-grid -->
+
+          <div class="rule-write-status" id="repo-rule-status"></div>
+
+          <div class="snippet" style="margin-top: 12px;">
+            <button class="snippet-copy" onclick="copyRepoRulePreview()">Copy</button>
+            <pre id="repo-rule-preview">Loading preview…</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Global asset edit modal — outside all .view sections so it
+       renders regardless of which view is currently active -->
+  <div id="assets-edit-backdrop" class="connect-modal-backdrop hidden" style="z-index:200;">
+    <div class="connect-modal" style="max-width:720px;width:95%;">
+      <button type="button" class="connect-modal-close" onclick="closeAssetsEdit()">&times;</button>
+      <h3 id="assets-edit-title">Edit asset</h3>
+      <div id="assets-edit-meta" style="font-size:11px;color:var(--muted);margin-bottom:8px;"></div>
+      <textarea id="assets-edit-body" style="width:100%;height:360px;font-family:monospace;font-size:12px;resize:vertical;padding:8px;border:1px solid var(--border);border-radius:4px;" placeholder="Markdown body..."></textarea>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn btn-primary" onclick="saveAssetsEdit()">Save</button>
+        <button type="button" class="btn btn-outline" onclick="revertAssetsEdit()">Revert to seed</button>
+        <span style="flex:1;"></span>
+        <span id="assets-edit-status" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: status badge, global action, servers list -->
+  <aside class="right-col">
+    <div class="card" style="display: flex; align-items: center; gap: 12px; padding: 16px;">
+      <span class="badge stopped" id="badge">STOPPED</span>
+      <span style="flex: 1;"></span>
+    </div>
+    <button class="btn btn-primary" id="action-btn" onclick="handleAction()">
+      START
+    </button>
+
+    <!-- Repositories panel: discovered git repos under /user_data_ro -->
+    <div class="section" id="repos-section" style="margin: 0;">
+      <div class="repos-header">
+        <button type="button"
+                class="section-label-toggle"
+                id="repos-toggle"
+                aria-expanded="false"
+                aria-controls="repos-collapse"
+                onclick="toggleReposPanel()">
+          <span class="caret" id="repos-caret">&#9656;</span>
+          <span>Repositories</span>
+          <span class="repos-count" id="repos-count">&mdash;</span>
+        </button>
+        <button type="button" class="repos-refresh-btn"
+                id="repos-refresh-btn"
+                title="Rescan /user_data_ro"
+                onclick="refreshRepos()">&#x21bb;</button>
+        <button type="button" class="repos-bulk-push-btn"
+                id="repos-bulk-push-btn"
+                title="Push rules + agents + hooks to every repo that already has zelosmcp rules"
+                onclick="confirmBulkPush()">&#x2912; All</button>
+      </div>
+      <div class="card" id="repos-collapse" hidden>
+        <p class="intro" style="margin: 0 0 8px 0; font-size: 12px;">
+          Git repos under <code>/user_data_ro</code>. Click a row to open the rule editor for that repo.
+        </p>
+        <input type="text"
+               id="repos-filter"
+               class="repos-filter"
+               placeholder="Filter (substring of name or path)"
+               autocomplete="off"
+               spellcheck="false"
+               oninput="onReposFilter()">
+        <div class="repos-list" id="repos-list">
+          <div class="repos-empty">Loading...</div>
+        </div>
+        <div id="bulk-push-results" style="display:none;margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <div class="section" id="servers-section" style="margin: 0;">
+      <div class="servers-header">
+        <div class="section-label" style="margin: 0;">Servers</div>
+        <a class="snippet-link" href="/catalog" target="_blank" rel="noopener">Full catalog</a>
+      </div>
+      <div class="card">
+        <p class="intro" style="margin: 0 0 12px 0; font-size: 13px;">
+          Click any row to inspect that backend's tools, prompts, and resources inline.
+        </p>
+        <div class="server-list" id="server-list"></div>
+      </div>
+    </div>
+
+  </aside>
+
+</div>
+
+<!-- Mermaid: rendered for fenced ```mermaid blocks inside loaded docs.
+     Loaded from a CDN so the page stays a single self-contained file
+     (no static asset pipeline). securityLevel:'loose' lets links inside
+     diagrams render normally; we never feed agent-supplied markdown
+     through this path, only repo-controlled docs/*.md. -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  if (window.mermaid && typeof mermaid.initialize === "function") {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
+  }
+</script>
+
+<script>
+__JS_GOES_HERE__
+</script>
+</body>
+</html>

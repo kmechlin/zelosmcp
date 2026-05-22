@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from zelosmcp.app import create_app, _prefix_openapi_path
+from zelosmcp.app import create_app
+from zelosmcp.openapi import prefix_openapi_path as _prefix_openapi_path
 from zelosmcp.manager import ProxyManager
 from tests.conftest import (
     fake_stdio_client,

@@ -7,8 +7,8 @@ in the shared SQLite database.
 
 On-disk mirror
 --------------
-The same information is written to ``zelosmcp.json`` inside ``.cursor/``,
-``.github/``, and ``.vscode/`` in every repo whenever a push completes.  On
+The same information is written to ``zelosmcp.json`` inside ``.cursor/``
+and ``.vscode/`` in every repo whenever a push completes.  On
 first discovery of a repo with no DB row, ``read_prefs_json_from_disk`` is
 called to seed the DB from whichever copy exists on disk — enabling a fresh
 container to pick up settings committed to the repo.
@@ -28,7 +28,6 @@ logger = logging.getLogger("zelosmcp.prefs")
 # Filenames checked in priority order when seeding from disk.
 _PREFS_JSON_LOCATIONS = [
     ".cursor/zelosmcp.json",
-    ".github/zelosmcp.json",
     ".vscode/zelosmcp.json",
 ]
 
@@ -147,7 +146,7 @@ def json_to_prefs(text: str, path_ro: str) -> ProjectPrefs | None:
 def read_prefs_json_from_disk(path_ro: str) -> ProjectPrefs | None:
     """Try to load ``zelosmcp.json`` from the repo's IDE directories.
 
-    Checks ``.cursor/``, ``.github/``, and ``.vscode/`` in that order and
+    Checks ``.cursor/`` and ``.vscode/`` in that order and
     returns the first successfully parsed result.  Returns ``None`` when none
     of the files exist or can be parsed.
     """

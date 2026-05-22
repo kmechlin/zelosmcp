@@ -16,9 +16,9 @@ flowchart LR
   rulerenderer["render_comprehensive_rule()\n(GET /api/cursor-rule)"]
   pushwriter["push_kind_for_all_running()\n(POST /api/assets/push/*)"]
   target1[".cursor/rules/zelosmcp.mdc\nor copilot-instructions.md"]
-  target2[".cursor/agents/<name>.md\n.github/agents/<name>.md"]
+  target2[".cursor/agents/<name>.md\n.github/agents/<name>.agent.md"]
   target3[".cursor/hooks.json"]
-  target4[".cursor/skills/<slug>/SKILL.md\n.github/skills/<slug>/SKILL.md\n.vscode/skills/<slug>/SKILL.md"]
+  target4[".cursor/skills/<slug>/SKILL.md\n.github/skills/<slug>/SKILL.md"]
 
   yaml -->|"seed rows (source='seed')"| seeder
   seeder --> db
@@ -37,9 +37,9 @@ flowchart LR
 |---|---|---|---|---|
 | `rule` | `rules:` | Rules | Yes | `.cursor/rules/zelosmcp.mdc` and/or `.github/copilot-instructions.md` |
 | `extension` | `extensions:` | Extensions | No (runs in UI) | — invokes an MCP tool or opens a link |
-| `agent` | `agents:` | Agents | Yes | `.cursor/agents/<name>.md`, `.github/agents/<name>.md` |
+| `agent` | `agents:` | Agents | Yes | `.cursor/agents/<name>.md`, `.github/agents/<name>.agent.md` |
 | `hook` | `hooks:` | Hooks | Yes (merge) | `.cursor/hooks.json` |
-| `skill` | `skills:` | Skills | Yes | `.cursor/skills/<slug>/SKILL.md`, `.github/skills/<slug>/SKILL.md`, `.vscode/skills/<slug>/SKILL.md` |
+| `skill` | `skills:` | Skills | Yes | `.cursor/skills/<slug>/SKILL.md`, `.github/skills/<slug>/SKILL.md` |
 
 Extensions are the only non-pushable kind — they render as UI buttons and trigger live MCP tool calls or open links rather than writing files.
 

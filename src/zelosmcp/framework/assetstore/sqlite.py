@@ -63,25 +63,30 @@ _SCHEMA = [
 
 
 def resolve_db_path(explicit: str | None = None) -> str:
-    """Pick the SQLite path: explicit > ``ZELOSMCP_ASSETS_DB`` > ``~/.zelosmcp/assets.sqlite``.
+    """Pick the SQLite path.
 
-    Returns ``":memory:"`` unchanged for tests.  Falls back to
-    ``":memory:"`` when the home directory can't be created
-    (sandboxed / read-only environments) so the proxy still boots —
-    assets just won't persist across restarts in that mode.
+    Order: explicit > ``$ZELOSMCP_ASSETS_DB`` > ``<state-dir>/assets.sqlite``,
+    where ``<state-dir>`` follows the Zelos suite container contract — see
+    ``zelosmcp.framework.state_dir``.
+
+    Returns ``":memory:"`` unchanged for tests; falls back to ``":memory:"``
+    when the state directory can't be created (sandboxed / read-only
+    environments) so the proxy still boots.
     """
+    from zelosmcp.framework.state_dir import resolve_state_dir
+
     candidate = explicit or os.environ.get("ZELOSMCP_ASSETS_DB")
     if candidate:
         return candidate
-    home = Path.home() / ".zelosmcp"
+    state = resolve_state_dir()
     try:
-        home.mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as exc:
         logger.warning(
-            "assets: cannot create %s (%s); using in-memory store", home, exc
+            "assets: cannot create %s (%s); using in-memory store", state, exc
         )
         return ":memory:"
-    return str(home / "assets.sqlite")
+    return str(state / "assets.sqlite")
 
 
 class SQLiteAssetStore:

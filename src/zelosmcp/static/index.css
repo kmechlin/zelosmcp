@@ -1,0 +1,1441 @@
+  :root {
+    --black: #111111;
+    --white: #FFFFFF;
+    --surface: #F5F5F5;
+    --border: #E5E5E5;
+    --mid: #757575;
+    --accent: #FF6600;
+    --error: #D13B3B;
+    --success: #2BA44E;
+    --font: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+  }
+
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--black);
+    background: var(--white);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── App shell (three-column landscape grid) ──
+     Designed for wide displays. Uses the full viewport up to 2000px so
+     the activity log and pincher dashboard get the room they need. The
+     right column is sized to fit a fully-formed MCP URL on one line
+     (`http://localhost:8000/<name>/mcp`) plus pills + a STOP button. */
+  .app-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 2000px;
+    margin: 0 auto;
+    padding: 24px 32px 0;
+  }
+
+  .app-shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr) 480px;
+    gap: 32px;
+    max-width: 2000px;
+    margin: 0 auto;
+    padding: 24px 32px 32px;
+    align-items: start;
+  }
+
+  .left-col, .mid-col, .right-col { min-width: 0; }
+
+  .right-col {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ── Left nav ── */
+  .nav-group { margin-bottom: 24px; }
+
+  .nav-group-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 8px;
+  }
+
+  .nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--black);
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+  }
+  .nav-item:hover { background: var(--surface); }
+  .nav-item.active {
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+  }
+
+  /* ── Views (only one visible at a time) ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── Pincher dashboard iframe ── */
+  .dashboard-frame {
+    display: block;
+    width: 100%;
+    height: calc(100vh - 200px);
+    min-height: 480px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--white);
+  }
+  .dashboard-empty {
+    color: var(--mid);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .dashboard-empty code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--white);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .dashboard-meta {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mid);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* ── Savings dashboard ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .kpi {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--white);
+  }
+  .kpi-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--mid);
+    margin-bottom: 6px;
+  }
+  .kpi-value {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  .savings-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .savings-table th,
+  .savings-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .savings-table th {
+    font-weight: 600;
+    color: var(--mid);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+  .savings-table td.num,
+  .savings-table th.num { text-align: right; font-family: var(--mono); }
+  .savings-table .empty-cell {
+    color: var(--mid);
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+  }
+  .backend-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .backend-bar {
+    display: grid;
+    grid-template-columns: 140px 1fr 90px;
+    gap: 12px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .backend-bar-name { font-family: var(--mono); }
+  .backend-bar-track {
+    height: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .backend-bar-fill {
+    height: 100%;
+    background: var(--accent);
+  }
+  .backend-bar-count {
+    text-align: right;
+    font-family: var(--mono);
+    color: var(--mid);
+  }
+  .savings-pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow: auto;
+    color: var(--black);
+  }
+  .events-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .events-controls input,
+  .events-controls select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-size: 13px;
+    outline: none;
+  }
+  .events-controls input:focus,
+  .events-controls select:focus {
+    border-color: var(--accent);
+  }
+  .events-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--black);
+  }
+  .events-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .events-status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .events-status {
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .events-table tbody tr {
+    cursor: pointer;
+  }
+  .events-table-scroll {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .events-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .events-table th, .events-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+  }
+  /* Column widths: Time Backend Method Qualified Input Upstream Returned Saved Latency */
+  .events-table th:nth-child(1), .events-table td:nth-child(1) { width: 72px; }
+  .events-table th:nth-child(2), .events-table td:nth-child(2) { width: 80px; }
+  .events-table th:nth-child(3), .events-table td:nth-child(3) { width: 100px; }
+  .events-table th:nth-child(4), .events-table td:nth-child(4) { width: auto; word-break: break-all; white-space: normal; }
+  .events-table td:nth-child(4) code { word-break: break-all; white-space: normal; }
+  .events-table th:nth-child(5), .events-table td:nth-child(5) { width: 56px; }
+  .events-table th:nth-child(6), .events-table td:nth-child(6) { width: 64px; }
+  .events-table th:nth-child(7), .events-table td:nth-child(7) { width: 64px; }
+  .events-table th:nth-child(8), .events-table td:nth-child(8) { width: 56px; }
+  .events-table th:nth-child(9), .events-table td:nth-child(9) { width: 64px; }
+  .events-table tbody tr.is-selected {
+    background: var(--surface);
+  }
+  .events-table tbody tr.is-error td {
+    color: #9f2b2b;
+  }
+
+  /* Below ~1240px the 220 + 480 columns leave the middle column too
+     narrow (the activity log starts wrapping awkwardly). Collapse to a
+     single column with the system actions floated up below the nav. */
+  @media (max-width: 1240px) {
+    .app-shell { grid-template-columns: 1fr; gap: 24px; padding: 24px; }
+    .app-topbar { padding: 24px 24px 0; }
+    .left-col { order: 1; }
+    .right-col { order: 2; position: static; top: auto; }
+    .mid-col { order: 3; }
+  }
+
+  /* ── Top bar ── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+  }
+
+  .wordmark {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--black);
+  }
+
+  .header-spacer { flex: 1; }
+
+  .header a.docs-link {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .header a.docs-link:hover { color: var(--black); border-color: var(--black); }
+
+  .badge {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 4px 12px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+
+  .badge.stopped {
+    background: var(--border);
+    color: var(--mid);
+  }
+
+  .badge.running {
+    background: var(--accent);
+    color: var(--white);
+  }
+
+  .badge.error {
+    background: var(--error);
+    color: var(--white);
+  }
+
+  /* ── Intro ── */
+  .intro {
+    font-size: 15px;
+    color: var(--mid);
+    margin-bottom: 32px;
+    line-height: 1.6;
+  }
+
+  .intro code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  /* ── Sections ── */
+  .section {
+    margin-bottom: 32px;
+  }
+
+  .section-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* "Recommended" pill rendered inline with a section label. */
+  .recommended-pill {
+    background: var(--accent);
+    color: var(--white);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+
+  /* Inline `Access: [select]` control next to the rule section label. */
+  .rule-access-control {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mid);
+  }
+  .rule-access-control select {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--white);
+    color: var(--black);
+    cursor: pointer;
+  }
+  .rule-access-control select:focus {
+    outline: none;
+    border-color: var(--black);
+  }
+
+  /* ── Rule IDE tabs (Cursor / VS Code) ── */
+  .rule-ide-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .rule-ide-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-family: var(--font);
+    color: var(--mid);
+    cursor: pointer;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .rule-ide-tab.active {
+    color: var(--black);
+    border-bottom-color: var(--black);
+    font-weight: 600;
+  }
+  .rule-ide-tab:hover:not(.active) { color: var(--black); }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 24px;
+  }
+
+  /* ── Textarea ── */
+  .config-textarea {
+    width: 100%;
+    min-height: 240px;
+    background: var(--white);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 13px;
+    font-family: var(--mono);
+    line-height: 1.6;
+    color: var(--black);
+    resize: vertical;
+    transition: border-color 0.2s ease;
+    margin-bottom: 20px;
+    tab-size: 2;
+  }
+
+  .config-textarea:focus {
+    border-color: var(--black);
+    outline: none;
+  }
+
+  .config-textarea::placeholder {
+    color: var(--mid);
+  }
+
+  /* ── Button ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 14px 32px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: var(--font);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+    width: 100%;
+  }
+
+  .btn-primary {
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+  }
+
+  .btn-primary:hover {
+    background: #333333;
+    border-color: #333333;
+  }
+
+  .btn-outline {
+    background: var(--white);
+    color: var(--black);
+    border-color: var(--black);
+  }
+
+  .btn-outline:hover {
+    background: var(--black);
+    color: var(--white);
+  }
+
+  .btn:disabled {
+    background: var(--border);
+    color: var(--mid);
+    border-color: var(--border);
+    cursor: not-allowed;
+  }
+
+  .btn-mini {
+    padding: 6px 14px;
+    font-size: 11px;
+    width: auto;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+
+  /* ── Connections (auth providers) ── */
+  .connections-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .connection-card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border: 1px solid var(--border);
+  }
+  .connection-card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .connection-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--black);
+  }
+  .connection-card-status {
+    font-size: 12px;
+    color: var(--mid);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .connection-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mid);
+    flex-shrink: 0;
+  }
+  .connection-status-dot.connected {
+    background: #15803d;
+  }
+  .connection-status-dot.gated {
+    background: #c2410c;
+  }
+  .connection-card-hint {
+    font-size: 11px;
+    color: var(--mid);
+    font-style: italic;
+  }
+  .connection-card-identity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--black);
+  }
+  .connection-card-identity img {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+  }
+  .connection-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  /* Device-flow modal */
+  .connect-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .connect-modal-backdrop.hidden {
+    display: none;
+  }
+  .connect-modal {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 28px;
+    min-width: 360px;
+    max-width: 480px;
+    position: relative;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  }
+  .connect-modal h3 {
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .connect-modal-hint {
+    background: #fef3c7;
+    border-left: 3px solid #d97706;
+    padding: 8px 12px;
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: #92400e;
+  }
+  .connect-modal-status {
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .connect-modal-status.complete {
+    color: #15803d;
+    font-weight: 700;
+  }
+  .connect-modal-status.error {
+    color: #b91c1c;
+    font-weight: 700;
+  }
+  .connect-modal-code-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 0;
+    background: #f3f4f6;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-family: var(--mono);
+  }
+  .connect-modal-code-row code {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--black);
+  }
+  .connect-modal-code-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--mid);
+    letter-spacing: 0.05em;
+  }
+  .connect-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: transparent;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--mid);
+    line-height: 1;
+  }
+  .connect-modal-close:hover {
+    color: var(--black);
+  }
+
+  /* ── Server list ── */
+  /* No height cap so the inline catalog (expanded server details) can grow
+     freely when the user clicks a row. Repos panel above is independently
+     scrollable. */
+  .server-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .server-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .server-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    background: var(--white);
+    border-radius: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s ease;
+    user-select: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .server-row > * { min-width: 0; }
+  .server-row:hover {
+    background: var(--surface);
+  }
+
+  .server-name {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--black);
+  }
+
+  .server-row .grow { flex: 1; min-width: 0; }
+
+  /* Specificity override: the meta also carries the `.grow` class
+     (legacy from the old single-row layout), and `.server-row .grow`
+     would otherwise collapse it to `flex: 1 1 0%` and force a
+     character-per-line break-all when it lands on its own wrap line.
+     We pin it to a full-width line of its own with a real basis. */
+  .server-row .server-meta {
+    flex: 0 0 100%;
+    min-width: 0;
+    width: 100%;
+    margin-left: 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--mid);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  /* Caret indicating click-to-expand. Rotates 90deg when the row is open. */
+  .caret {
+    display: inline-block;
+    width: 12px;
+    text-align: center;
+    color: var(--mid);
+    font-size: 10px;
+    transition: transform 0.15s ease;
+  }
+  .caret.open { transform: rotate(90deg); }
+
+  /* Inline catalog block under an expanded server row. */
+  .server-catalog {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+    margin: -8px 0 0 0;
+    padding: 16px 20px 16px 36px;
+  }
+  .server-catalog .cat-group { margin-bottom: 14px; }
+  .server-catalog .cat-group:last-child { margin-bottom: 0; }
+  .server-catalog .cat-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 8px;
+  }
+  .server-catalog ul { list-style: none; }
+  .server-catalog li {
+    padding: 4px 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+    margin-bottom: 6px;
+  }
+  .server-catalog li code { font-weight: 700; }
+  .server-catalog li .desc {
+    font-family: var(--font);
+    color: var(--mid);
+    font-size: 12px;
+    margin-top: 2px;
+    white-space: pre-wrap;
+  }
+  .server-catalog li details { margin-top: 4px; }
+  .server-catalog li details summary {
+    cursor: pointer;
+    color: var(--mid);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .server-catalog li pre {
+    background: var(--white);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    margin-top: 6px;
+    overflow-x: auto;
+  }
+  .server-catalog .empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 12px;
+  }
+
+  /* "Full catalog" link in the Servers card header. */
+  .servers-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .snippet-link {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--black);
+    text-decoration: none;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--white);
+  }
+  .snippet-link:hover { background: var(--surface); }
+
+  /* ── Repositories panel (right column, collapsible) ── */
+  .repos-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .section-label-toggle {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--black);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    text-align: left;
+  }
+  .section-label-toggle .caret {
+    font-size: 12px;
+    color: var(--mid);
+    width: 10px;
+    display: inline-block;
+    text-align: center;
+  }
+  .repos-count {
+    color: var(--mid);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+    margin-left: 4px;
+  }
+  .repos-refresh-btn,
+  .repos-bulk-push-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    line-height: 1;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .repos-refresh-btn:hover,
+  .repos-bulk-push-btn:hover { background: var(--surface); }
+  .repos-bulk-push-btn {
+    color: var(--black);
+    font-weight: 600;
+  }
+  .repos-filter {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-bottom: 8px;
+    background: var(--white);
+  }
+  .repos-bucket-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--mid);
+    padding: 4px 4px 2px;
+    margin-top: 4px;
+  }
+  /* Capped at ~10 repo rows visible; scrolls beyond that. Each .repo-row is
+     ~28px including the 4px gap, so 10 rows fit in ~290px. */
+  .repos-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 290px;
+    overflow-y: auto;
+  }
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    background: none;
+    border: 1px solid transparent;
+    text-align: left;
+    width: 100%;
+    font: inherit;
+    color: var(--black);
+    min-width: 0;
+  }
+  .repo-row:hover {
+    background: var(--surface);
+    border-color: var(--border);
+  }
+  .repo-row.active {
+    background: var(--surface);
+    border-color: var(--black);
+  }
+  .repo-row .repo-name {
+    font-weight: 700;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+  .repo-row .repo-path {
+    color: var(--mid);
+    font-family: var(--mono);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .repo-pill {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--mid);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .repo-pill.on {
+    color: var(--success);
+    border-color: var(--success);
+  }
+  .repos-empty {
+    color: var(--mid);
+    font-size: 12px;
+    font-style: italic;
+    padding: 8px 4px;
+  }
+
+  /* ── Repo details (middle pane) ── */
+  .rule-write-form {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 8px 16px;
+    align-items: center;
+    margin: 12px 0;
+  }
+  .rule-write-form label {
+    display: contents;
+    font-size: 13px;
+    color: var(--black);
+  }
+  .rule-write-form select,
+  .rule-write-form input {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--font);
+    font-size: 13px;
+    background: var(--white);
+  }
+  .rule-write-form input[disabled] {
+    background: var(--surface);
+    color: var(--mid);
+  }
+  .assets-tab.active {
+    color: var(--black);
+    border-bottom-color: var(--black) !important;
+  }
+  .assets-tab:hover:not(.active) { color: var(--black); }
+
+  /* ── Repo details two-column grid ── */
+  .repo-details-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 280px);
+    gap: 24px;
+    align-items: start;
+  }
+  .repo-details-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .repo-details-actions .btn { width: 100%; text-align: left; }
+  .repo-details-actions-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  @media (max-width: 1240px) {
+    .repo-details-grid { grid-template-columns: 1fr; }
+  }
+  .rule-write-actions {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+  }
+  .rule-write-status {
+    font-size: 13px;
+    color: var(--mid);
+    min-height: 1.2em;
+    margin-top: 8px;
+  }
+  .rule-write-status.ok { color: var(--success); }
+  .rule-write-status.err { color: var(--error); }
+  .repo-paths {
+    font-size: 12px;
+    color: var(--mid);
+    font-family: var(--mono);
+    margin: 0 0 12px 0;
+  }
+  .repo-paths code {
+    color: var(--black);
+  }
+
+  .pill {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .pill.transport { background: var(--surface); color: var(--mid); }
+  .pill.primary { background: var(--accent); color: var(--white); }
+  .pill.state-running { background: var(--success); color: var(--white); }
+  .pill.state-error { background: var(--error); color: var(--white); }
+  .pill.state-stopped { background: var(--border); color: var(--mid); }
+  /* Auth provider pills — show whether the backend is wired to an auth
+     provider and whether the current user has connected it. Connected =
+     green, disconnected = warning yellow, missing config = error red. */
+  .pill.auth-connected {
+    background: var(--success);
+    color: var(--white);
+  }
+  .pill.auth-disconnected {
+    background: #f3a300;
+    color: var(--white);
+  }
+  .pill.auth-missing {
+    background: var(--error);
+    color: var(--white);
+  }
+
+  /* ── Log Viewer ── */
+  .log-viewer {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 16px;
+    height: calc(100vh - 240px);
+    min-height: 480px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--black);
+  }
+
+  .log-viewer:empty::before {
+    content: "Waiting for events...";
+    color: var(--mid);
+  }
+
+  .log-filter {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--black);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.4;
+    outline: none;
+  }
+  .log-filter:focus {
+    border-color: var(--accent);
+  }
+
+  .log-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .log-line.error {
+    color: var(--error);
+  }
+
+  .log-line.hidden {
+    display: none;
+  }
+
+  /* ── Snippet block ── */
+  .snippet {
+    position: relative;
+    background: var(--white);
+    border-radius: 12px;
+    padding: 16px;
+    padding-right: 80px;
+  }
+
+  .snippet pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--black);
+    margin: 0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .snippet-copy {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--mid);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .snippet-copy:hover {
+    background: var(--border);
+    color: var(--black);
+  }
+
+  .snippet-copy.copied {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* ── Documentation view ── */
+  /* Two modes share the same view: index (list of cards) and content
+     (rendered HTML). Switched by toggling .hidden on each container. */
+  .docs-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .docs-toolbar .btn-back {
+    width: auto;
+    padding: 8px 18px;
+    font-size: 12px;
+    border-radius: 999px;
+  }
+  .docs-toolbar .docs-current {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--mid);
+  }
+  .docs-index {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .docs-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    cursor: pointer;
+    font-family: var(--font);
+    color: var(--black);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  }
+  .docs-card:hover {
+    border-color: var(--black);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  }
+  .docs-card:active { transform: translateY(1px); }
+  .docs-card-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--black);
+  }
+  .docs-card-slug {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--mid);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .docs-content {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--black);
+    overflow-x: auto;
+    min-height: 240px;
+  }
+  .docs-content h1, .docs-content h2, .docs-content h3,
+  .docs-content h4, .docs-content h5, .docs-content h6 {
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1.4em 0 0.5em;
+  }
+  .docs-content h1 { font-size: 26px; margin-top: 0; }
+  .docs-content h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .docs-content h3 { font-size: 17px; }
+  .docs-content h4 { font-size: 15px; color: var(--mid); text-transform: uppercase; letter-spacing: 0.05em; }
+  .docs-content p { margin: 0 0 1em; }
+  .docs-content a { color: var(--accent); text-decoration: none; }
+  .docs-content a:hover { text-decoration: underline; }
+  .docs-content ul, .docs-content ol { margin: 0 0 1em 1.4em; }
+  .docs-content li { margin-bottom: 0.25em; }
+  .docs-content code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .docs-content pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 1em;
+  }
+  .docs-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .docs-content blockquote {
+    border-left: 3px solid var(--border);
+    color: var(--mid);
+    padding-left: 14px;
+    margin: 0 0 1em;
+  }
+  .docs-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 1em;
+    font-size: 14px;
+  }
+  .docs-content th, .docs-content td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .docs-content th {
+    background: var(--surface);
+    font-weight: 700;
+  }
+  .docs-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5em 0;
+  }
+  .docs-content img { max-width: 100%; height: auto; }
+  /* Mermaid blocks: rendered SVGs from mermaid.js. The library injects
+     SVGs directly into the .mermaid container; we just give them a
+     light frame consistent with the other code blocks. */
+  .docs-content .mermaid {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin: 0 0 1em;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .docs-content .mermaid svg { max-width: 100%; height: auto; }
+  .docs-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+
+  /* Stack the docs index on narrow viewports — single column, full
+     width in the middle pane. */
+  @media (max-width: 1240px) {
+    .docs-index { grid-template-columns: 1fr; }
+  }
+
+  /* ── Server details view (catalog rendered in the center pane) ── */
+  .details-empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 14px;
+  }
+  .details-body .cat-group { margin-bottom: 20px; }
+  .details-body .cat-group:last-child { margin-bottom: 0; }
+  .details-body .cat-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mid);
+    margin-bottom: 10px;
+  }
+  .details-body ul { list-style: none; }
+  .details-body li {
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    border-left: 2px solid var(--border);
+    padding-left: 12px;
+    margin-bottom: 8px;
+  }
+  .details-body li code { font-weight: 700; }
+  .details-body li .desc {
+    font-family: var(--font);
+    color: var(--mid);
+    font-size: 13px;
+    margin-top: 3px;
+    white-space: pre-wrap;
+  }
+  .details-body li details { margin-top: 6px; }
+  .details-body li details summary {
+    cursor: pointer;
+    color: var(--mid);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .details-body li pre {
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-top: 6px;
+    overflow-x: auto;
+  }
+  .details-body .empty {
+    color: var(--mid);
+    font-style: italic;
+    font-size: 13px;
+  }
+
+  /* ── Utilities ── */
+  .hidden { display: none !important; }

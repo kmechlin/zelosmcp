@@ -75,6 +75,13 @@ COPY configs/assets /app/configs/assets
 
 RUN pip install --no-cache-dir -e .
 
+# Suite container contract directories (zelosai/docs/architecture/07):
+#   /var/lib/zelos/zelosmcp  — PVC mount root for SQLite DBs + auth.key
+#   /etc/zelos/secrets       — Secret-file mount root (auth.key, providers.json, ...)
+#   /etc/zelos/tls           — TLS material mount root
+RUN mkdir -p /var/lib/zelos/zelosmcp /etc/zelos/secrets /etc/zelos/tls \
+ && chmod 0755 /var/lib/zelos/zelosmcp
+
 # Pincher (kmechlin fork) auto-indexes its CWD shortly after spawn. Point
 # CWD at /user_data_ro so the mounted user source tree gets indexed in
 # the background — no manual `make index-full` needed. zelosmcp itself

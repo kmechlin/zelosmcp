@@ -125,7 +125,7 @@ Push includes: zelosmcp + pincher, filesystem
 | **Push rules** | Calls `POST /api/assets/push/rule` — renders a comprehensive `.cursor/rules/zelosmcp.mdc` (or `copilot-instructions.md`) aggregating assets from `zelosmcp` + all running backends. |
 | **Push agents** | Calls `POST /api/assets/push/agent` — writes each agent’s definition file for every running backend. |
 | **Push hooks** | Calls `POST /api/assets/push/hook` — merges each hook entry into `.cursor/hooks.json`, preserving non-zelosMCP entries. |
-| **Push skills** | Calls `POST /api/assets/push/skill` — writes each skill’s `SKILL.md` to `.cursor/skills/`, `.github/skills/`, and `.vscode/skills/` for every running backend. |
+| **Push skills** | Calls `POST /api/assets/push/skill` — writes each skill's `SKILL.md` to `.cursor/skills/` and `.github/skills/` for every running backend. |
 | **Preview rule** | Fetches the rule body from `GET /api/cursor-rule?...` with the current format/access/tool_use settings and shows it in a code block below the buttons — no write. |
 
 **Running-backends hint** — the line above the push buttons lists which backends are included: always `zelosmcp` (global) plus every currently-running user backend. Backends that are stopped are excluded from the push.

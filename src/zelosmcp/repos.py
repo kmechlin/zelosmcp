@@ -77,7 +77,6 @@ RULE_TARGET_PATHS: dict[str, list[str]] = {
     ],
     "vscode": [
         ".github/copilot-instructions.md",
-        ".vscode/copilot-instructions.md",
     ],
 }
 

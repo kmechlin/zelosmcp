@@ -1,0 +1,62 @@
+---
+name: docs
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  mermaid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install mermaid-cli
+        run: npm i -g @mermaid-js/mermaid-cli@^11
+      - name: Create puppeteer config (disable sandbox for GHA runners)
+        # Ubuntu 24+ runners restrict unprivileged user namespaces, so the
+        # Chromium that puppeteer/mermaid-cli ships needs --no-sandbox.
+        run: |
+          echo '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > /tmp/puppeteer.json
+      - name: Extract and validate mermaid blocks
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, sys, tempfile, re, pathlib
+          rc = 0
+          for root, _, files in os.walk("."):
+              if "/.git/" in root or root.startswith("./.git"):
+                  continue
+              if "/node_modules" in root:
+                  continue
+              for fn in files:
+                  if not fn.endswith(".md"):
+                      continue
+                  p = pathlib.Path(root) / fn
+                  text = p.read_text(encoding="utf-8", errors="ignore")
+                  blocks = re.findall(r"```mermaid\n(.*?)```", text, re.DOTALL)
+                  for i, block in enumerate(blocks):
+                      with tempfile.NamedTemporaryFile("w", suffix=".mmd", delete=False) as f:
+                          f.write(block)
+                          tmp = f.name
+                      out = tmp.replace(".mmd", ".svg")
+                      r = subprocess.run(
+                          ["mmdc", "-i", tmp, "-o", out, "-q", "-p", "/tmp/puppeteer.json"],
+                          capture_output=True, text=True,
+                      )
+                      if r.returncode != 0:
+                          print(f"::error file={p}::mermaid block #{i+1} invalid:\n{r.stderr}")
+                          rc = 1
+                      os.unlink(tmp)
+                      if os.path.exists(out):
+                          os.unlink(out)
+          sys.exit(rc)
+          PY

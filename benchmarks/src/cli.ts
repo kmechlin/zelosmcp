@@ -82,12 +82,13 @@ program
   .requiredOption("--url <url>", "zelosMCP base URL", "http://localhost:8000")
   .option(
     "--ide <ide>",
-    `IDE adapter(s) to benchmark. Valid: cursor, copilot, all (default: cursor)`,
+    `IDE adapter(s) to benchmark. Valid: cursor, copilot, zelos, all (default: cursor)`,
     "cursor",
   )
-  .option("--model <model>", "Model ID applied to all adapters; overridden by --cursor-model / --copilot-model")
+  .option("--model <model>", "Model ID applied to all adapters; overridden by --cursor-model / --copilot-model / --zelos-model")
   .option("--cursor-model <model>", "Model ID for Cursor (default: composer-2)")
   .option("--copilot-model <model>", "Model ID for Copilot (default: claude-sonnet-4.5)")
+  .option("--zelos-model <model>", "Model ID for Zelos (default: claude-sonnet-4.5)")
   .option("--rules-dir <path>", "Custom rules directory (relative to project root or absolute)")
   .option(
     "--secrets-file <path>",
@@ -132,6 +133,10 @@ program
   )
   .option("--rules", "Load project IDE rules into each agent run")
   .option(
+    "--agent <name>",
+    "Agent name to activate (e.g. zelos-agent). Passed as --agent to the Copilot CLI.",
+  )
+  .option(
     "--log-transcripts",
     "Save per-prompt transcript JSON files (tool calls, thoughts, dialog) to results/transcripts/",
   )
@@ -142,6 +147,7 @@ program
       model?: string;
       cursorModel?: string;
       copilotModel?: string;
+      zelosModel?: string;
       rulesDir?: string;
       secretsFile?: string;
       delay: string;
@@ -153,6 +159,7 @@ program
       cleanAssets?: boolean;
       refreshAssets?: boolean;
       rules?: boolean;
+      agent?: string;
       logTranscripts?: boolean;
     }) => {
       // ── Load secrets file (before adapter env validation) ────────────────
@@ -181,11 +188,11 @@ program
       let ideIds: IdeId[];
       if (ideArg === "all") {
         ideIds = listAdapterIds();
-      } else if (ideArg === "cursor" || ideArg === "copilot") {
+      } else if (ideArg === "cursor" || ideArg === "copilot" || ideArg === "zelos") {
         ideIds = [ideArg];
       } else {
         console.error(
-          `Error: invalid --ide value: ${ideArg}. Valid: cursor, copilot, all`,
+          `Error: invalid --ide value: ${ideArg}. Valid: cursor, copilot, zelos, all`,
         );
         process.exit(1);
       }
@@ -206,7 +213,9 @@ program
             ? (opts.cursorModel ?? opts.model ?? adapter.defaultModel)
             : id === "copilot"
               ? (opts.copilotModel ?? opts.model ?? adapter.defaultModel)
-              : (opts.model ?? adapter.defaultModel);
+              : id === "zelos"
+                ? (opts.zelosModel ?? opts.model ?? adapter.defaultModel)
+                : (opts.model ?? adapter.defaultModel);
         adapterConfigs.push({ adapter, model: modelForIde });
       }
 
@@ -271,6 +280,7 @@ program
       if (pinStripMeta !== undefined) console.log(`Pin:      strip_meta=${pinStripMeta}`);
       console.log(`Assets:   clean=${opts.cleanAssets !== false}, refresh=${opts.refreshAssets ?? Boolean(opts.rules)}`);
       if (opts.logTranscripts) console.log(`Transcripts: enabled (results/transcripts/)`);
+      if (opts.agent) console.log(`Agent:    ${opts.agent}`);
       if (opts.rulesDir) console.log(`Rules dir: ${opts.rulesDir}`);
       console.log(`Root:     ${projectRoot}`);
       console.log(`Output:   ${opts.output}\n`);
@@ -300,6 +310,7 @@ program
           outputPath: runLogPath,
           enableRules: opts.rules,
           rulesDir: opts.rulesDir,
+          agent: opts.agent,
           pinResponseFormat,
           pinStripMeta,
           cleanAssets: opts.cleanAssets,

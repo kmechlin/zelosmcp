@@ -48,17 +48,7 @@ export class CopilotAdapter implements IdeAdapter {
       // Make sure zelosmcp is registered in the CLI's MCP config
       await ensureMcpConfig(opts.mcpServerUrl);
 
-      const args = [
-        "-p", opts.prompt.text,
-        "--allow-all-tools",
-        "--model", opts.model,
-        "-s",
-      ];
-
-      // Use JSONL output when transcripts are requested for structured parsing
-      if (opts.logTranscripts) {
-        args.push("--output-format", "json");
-      }
+      const args = buildCopilotArgs(opts);
 
       const { stdout, stderr } = await execFile("copilot", args, {
         cwd: opts.projectRoot,
@@ -69,6 +59,9 @@ export class CopilotAdapter implements IdeAdapter {
 
       if (stderr) {
         console.error(`    [copilot stderr] ${stderr.trim()}`);
+        if (stderr.includes("No such agent")) {
+          throw new Error(`Agent not found: ${stderr.trim()}`);
+        }
       }
       if (!stdout.trim()) {
         console.warn("    [copilot] empty response");
@@ -130,10 +123,38 @@ export class CopilotAdapter implements IdeAdapter {
   // No refetchTokenUsage — the CLI doesn't expose per-token metrics.
 }
 
+export function buildCopilotArgs(
+  opts: Pick<AdapterRunOpts, "prompt" | "model" | "agent" | "logTranscripts">,
+): string[] {
+  const args = [
+    "-p", opts.prompt.text,
+    // Keep the benchmark focused on the zelosmcp MCP surface instead of
+    // falling back to generic CLI tools such as bash/edit/create.
+    "--allow-tool=zelosmcp",
+    "--allow-tool=skill",
+    "--deny-tool=bash",
+    "--deny-tool=create",
+    "--deny-tool=edit",
+    "--deny-tool=glob",
+    "--model", opts.model,
+    "-s",
+  ];
+
+  if (opts.agent) {
+    args.push("--agent", opts.agent);
+  }
+
+  if (opts.logTranscripts) {
+    args.push("--output-format", "json");
+  }
+
+  return args;
+}
+
 // ── JSONL transcript parser ───────────────────────────────────────────────────
 
 interface JsonlSeed {
-  ide: "copilot";
+  ide: IdeId;
   mode: string;
   promptId: string;
   model: string;

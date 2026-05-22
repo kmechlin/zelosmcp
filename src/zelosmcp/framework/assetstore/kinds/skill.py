@@ -10,8 +10,7 @@ personas with tool restrictions and model preferences).
 Push paths:
 
 * **Cursor** — ``.cursor/skills/<name>/SKILL.md``
-* **VS Code / GitHub** — ``.github/skills/<slug>/SKILL.md``
-* **VS Code / .vscode** — ``.vscode/skills/<slug>/SKILL.md``
+* **VS Code** — ``.github/skills/<slug>/SKILL.md``
 
 Unified YAML section format (top-level ``skills:`` key):
 
@@ -153,7 +152,10 @@ def _vscode_skill_body(row: AssetRow, meta: dict) -> str:
 
     argument_hint = meta.get("argument_hint")
     if argument_hint:
-        fm_lines.append(f"argument-hint: {argument_hint}")
+        # Strip surrounding brackets so the value is never mistaken for
+        # a YAML array in the rendered frontmatter.
+        hint = argument_hint.strip("[]")
+        fm_lines.append(f"argument-hint: {hint}")
 
     if meta.get("user_invocable") is False:
         fm_lines.append("user-invocable: false")
@@ -198,13 +200,9 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
 
     if "vscode" in targets:
         vscode_body = _vscode_skill_body(row, meta)
-        github_path: str = (
-            push.get("vscode_github") or f".github/skills/{slug}/SKILL.md"
-        )
         vscode_path: str = (
-            push.get("vscode_vscode") or f".vscode/skills/{slug}/SKILL.md"
+            push.get("vscode_vscode") or f".github/skills/{slug}/SKILL.md"
         )
-        files.append(ProjectFile(rel_path=github_path, body=vscode_body, mode="overwrite"))
         files.append(ProjectFile(rel_path=vscode_path, body=vscode_body, mode="overwrite"))
 
     return files
@@ -232,8 +230,7 @@ def _parse_section(section: dict, backend: str, seed_version: int) -> list[Asset
             "targets": skill_data.get("targets") or ["cursor", "vscode"],
             "push": skill_data.get("push") or {
                 "cursor": f".cursor/skills/{slug}/SKILL.md",
-                "vscode_github": f".github/skills/{slug}/SKILL.md",
-                "vscode_vscode": f".vscode/skills/{slug}/SKILL.md",
+                "vscode_vscode": f".github/skills/{slug}/SKILL.md",
             },
         }
 
@@ -286,8 +283,7 @@ SKILL_KIND = AssetKind(
     description=(
         "Agent Skill definitions — on-demand knowledge modules that auto-load "
         "by task relevance. Pushed to `.cursor/skills/<name>/SKILL.md` (Cursor) "
-        "and `.github/skills/<slug>/SKILL.md` + `.vscode/skills/<slug>/SKILL.md` "
-        "(VS Code)."
+        "and `.github/skills/<slug>/SKILL.md` (VS Code)."
     ),
     parse_section=_parse_section,
     validate=_validate,

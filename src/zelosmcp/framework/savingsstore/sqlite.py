@@ -117,25 +117,28 @@ _SCHEMA = [
 def resolve_db_path(explicit: str | None = None) -> str:
     """Pick the SQLite path.
 
-    Order is explicit > env var > ``~/.zelosmcp/savings.sqlite``.
+    Order: explicit > ``$ZELOSMCP_SAVINGS_DB`` > ``<state-dir>/savings.sqlite``,
+    where ``<state-dir>`` follows the suite container contract (see
+    ``zelosmcp.framework.state_dir``).
 
-    Returns the literal string ``":memory:"`` unchanged for tests. Falls
-    back to ``":memory:"`` when the home directory can't be created
-    (sandboxed environments, read-only filesystems) so the proxy still
-    boots — counters just don't survive restarts in that mode.
+    Returns ``":memory:"`` unchanged for tests; falls back to ``":memory:"``
+    when the state directory can't be created (sandboxed / read-only) so the
+    proxy still boots.
     """
+    from zelosmcp.framework.state_dir import resolve_state_dir
+
     candidate = explicit or os.environ.get("ZELOSMCP_SAVINGS_DB")
     if candidate:
         return candidate
-    home = Path.home() / ".zelosmcp"
+    state = resolve_state_dir()
     try:
-        home.mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as exc:
         logger.warning(
-            "savings: cannot create %s (%s); using in-memory store", home, exc
+            "savings: cannot create %s (%s); using in-memory store", state, exc
         )
         return ":memory:"
-    return str(home / "savings.sqlite")
+    return str(state / "savings.sqlite")
 
 
 class SavingsStore:

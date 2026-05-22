@@ -7,7 +7,7 @@ readonly mode, and handoffs between roles.
 Push paths:
 
 * **Cursor** — ``.cursor/agents/<name>.md``
-* **VS Code / GitHub** — ``.github/agents/<name>.agent.md``
+* **VS Code** — ``.github/agents/<name>.agent.md``
 
 Unified YAML section format (top-level ``agents:`` key):
 
@@ -64,12 +64,12 @@ def _cursor_agent_body(row: AssetRow, meta: dict) -> str:
     Cursor agents live at ``.cursor/agents/<name>.md`` with frontmatter:
     name, description, model, readonly, is_background.
     """
-    slug = _slug(row.name)
+    display_name = meta.get("name") or row.name
     desc = (meta.get("description") or row.name)[:_DESC_MAX]
 
     fm_lines = [
         "---",
-        f"name: {slug}",
+        f"name: {display_name}",
         f"description: {desc}",
     ]
 
@@ -92,17 +92,21 @@ def _vscode_agent_body(row: AssetRow, meta: dict) -> str:
     """Build VS Code agent file with YAML frontmatter.
 
     VS Code agents live at ``.github/agents/<name>.agent.md`` with
-    frontmatter: name, description, tools, model, agents,
-    user-invocable, disable-model-invocation, handoffs.
+    frontmatter: name, description, argument-hint, tools, model,
+    agents, user-invocable, disable-model-invocation, handoffs.
     """
-    slug = _slug(row.name)
+    display_name = meta.get("name") or row.name
     desc = (meta.get("description") or row.name)[:_DESC_MAX]
 
     fm_lines = [
         "---",
-        f"name: {slug}",
+        f"name: {display_name}",
         f"description: {desc}",
     ]
+
+    argument_hint = meta.get("argument_hint")
+    if argument_hint:
+        fm_lines.append(f"argument-hint: {argument_hint}")
 
     tools = meta.get("tools")
     if tools and isinstance(tools, list):
@@ -155,10 +159,11 @@ def _validate(row: AssetRow) -> None:
         raise ValueError("agent asset must have a non-empty 'name'")
 
 
-def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
+def _render_for_project(row: AssetRow, _ctx: RepoCtx) -> list[ProjectFile]:
     meta = row.meta or {}
     push = meta.get("push") or {}
-    targets: list[str] = list(meta.get("targets") or ["cursor", "vscode"])
+    _raw = meta.get("targets")
+    targets: list[str] = list(_raw if _raw is not None else ["cursor", "vscode"])
 
     files: list[ProjectFile] = []
     slug = _slug(row.name)
@@ -173,10 +178,14 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
 
     if "vscode" in targets:
         vscode_body = _vscode_agent_body(row, meta)
-        github_path: str = (
-            push.get("vscode_github") or f".github/agents/{slug}.agent.md"
+        vscode_path: str = (
+            push.get("vscode") or f".github/agents/{slug}.agent.md"
         )
-        files.append(ProjectFile(rel_path=github_path, body=vscode_body, mode="overwrite"))
+        files.append(ProjectFile(
+            rel_path=vscode_path,
+            body=vscode_body,
+            mode="overwrite",
+        ))
 
     return files
 
@@ -184,7 +193,11 @@ def _render_for_project(row: AssetRow, ctx: RepoCtx) -> list[ProjectFile]:
 # ── Section parser ───────────────────────────────────────────────────────
 
 
-def _parse_section(section: dict, backend: str, seed_version: int) -> list[AssetRow]:
+def _parse_section(
+    section: dict,
+    backend: str,
+    seed_version: int,
+) -> list[AssetRow]:
     """Parse the ``agents:`` section dict from a unified YAML file."""
     rows: list[AssetRow] = []
 
@@ -200,17 +213,25 @@ def _parse_section(section: dict, backend: str, seed_version: int) -> list[Asset
         meta: dict[str, Any] = {
             "name": agent_data.get("name") or agent_name,
             "description": agent_data.get("description", ""),
-            "targets": agent_data.get("targets") or ["cursor", "vscode"],
+            "targets": agent_data.get("targets") if agent_data.get("targets") is not None else ["cursor", "vscode"],
             "push": agent_data.get("push") or {
                 "cursor": f".cursor/agents/{slug}.md",
-                "vscode_github": f".github/agents/{slug}.agent.md",
+                "vscode": f".github/agents/{slug}.agent.md",
             },
         }
 
         # Optional agent-specific fields
-        for key in ("tools", "model", "readonly", "is_background",
-                     "agents", "user_invocable", "disable_model_invocation",
-                     "handoffs"):
+        for key in (
+            "argument_hint",
+            "tools",
+            "model",
+            "readonly",
+            "is_background",
+            "agents",
+            "user_invocable",
+            "disable_model_invocation",
+            "handoffs",
+        ):
             if key in agent_data:
                 meta[key] = agent_data[key]
 
@@ -240,13 +261,21 @@ def dump_section(rows: list[AssetRow]) -> dict:
             entry["name"] = meta["name"]
         if meta.get("description"):
             entry["description"] = meta["description"]
-        if meta.get("targets"):
+        if meta.get("targets") is not None:
             entry["targets"] = meta["targets"]
         if meta.get("push"):
             entry["push"] = meta["push"]
-        for key in ("tools", "model", "readonly", "is_background",
-                     "agents", "user_invocable", "disable_model_invocation",
-                     "handoffs"):
+        for key in (
+            "argument_hint",
+            "tools",
+            "model",
+            "readonly",
+            "is_background",
+            "agents",
+            "user_invocable",
+            "disable_model_invocation",
+            "handoffs",
+        ):
             if meta.get(key) is not None:
                 entry[key] = meta[key]
         result[row.name] = entry
@@ -258,8 +287,9 @@ AGENT_KIND = AssetKind(
     section_key="agents",
     label="Agents",
     description=(
-        "Custom agent / subagent definitions — personas with tool restrictions, "
-        "model preferences, and handoffs. Pushed to `.cursor/agents/<name>.md` "
+        "Custom agent / subagent definitions — personas with tool "
+        "restrictions, model preferences, and handoffs. Pushed to "
+        "`.cursor/agents/<name>.md` "
         "(Cursor) and `.github/agents/<name>.agent.md` (VS Code)."
     ),
     parse_section=_parse_section,

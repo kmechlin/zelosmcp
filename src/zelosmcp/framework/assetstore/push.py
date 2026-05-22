@@ -70,6 +70,49 @@ def _safe_abs_path(repo_rw_path: str, rel_path: str) -> str:
     return full
 
 
+def _cleanup_stale_agent_files(
+    repo_rw_path: str,
+    written_paths: set[str],
+) -> list["PushedFile"]:
+    """Remove agent files in the standard directories that were NOT written
+    in the current push.  Returns a list of :class:`PushedFile` records for
+    each deleted file.
+
+    Only scans ``.cursor/agents/*.md`` and ``.github/agents/*.agent.md``.
+    """
+    import os
+
+    cleaned: list[PushedFile] = []
+    repo_rw_path = repo_rw_path.rstrip("/")
+
+    scan_dirs = [
+        (os.path.join(repo_rw_path, ".cursor", "agents"), ".md"),
+        (os.path.join(repo_rw_path, ".github", "agents"), ".agent.md"),
+    ]
+
+    for dirpath, suffix in scan_dirs:
+        if not os.path.isdir(dirpath):
+            continue
+        for fname in os.listdir(dirpath):
+            if not fname.endswith(suffix):
+                continue
+            abs_path = os.path.join(dirpath, fname)
+            if abs_path not in written_paths:
+                try:
+                    os.remove(abs_path)
+                    cleaned.append(PushedFile(
+                        path=abs_path, mode="cleanup", ok=True,
+                    ))
+                    logger.info("push: cleaned stale agent file %s", abs_path)
+                except Exception as exc:
+                    logger.warning("push: failed to clean %s: %s", abs_path, exc)
+                    cleaned.append(PushedFile(
+                        path=abs_path, mode="cleanup", ok=False, error=str(exc),
+                    ))
+
+    return cleaned
+
+
 async def push_asset(
     store: Any,
     *,
@@ -177,8 +220,8 @@ def _merge_file(kind: str, pf: "Any", existing: str) -> str:
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"hook push: body is not valid JSON: {exc}") from exc
             return merge_hooks_json(existing, new_entry)
-        elif rel.endswith("hooks.json") or rel.startswith(".github/hooks/"):
-            # VS Code hook files: .vscode/hooks.json and .github/hooks/zelosmcp.json
+        elif rel.endswith("hooks.json"):
+            # VS Code hook files: .github/hooks/hooks.json
             from zelosmcp.framework.assetstore.kinds.hook import merge_vscode_hooks_json
             try:
                 new_entry = json.loads(pf.body)
@@ -273,6 +316,12 @@ async def push_kind_for_all_running(
             )
             pushed.extend(p)
 
+        # For agents: remove stale files that were not written in this push.
+        if kind == "agent":
+            written_paths = {p.path for p in pushed if p.ok}
+            cleaned = _cleanup_stale_agent_files(repo_rw_path, written_paths)
+            pushed.extend(cleaned)
+
     # After any push: update the prefs DB row and write zelosmcp.json to all
     # three IDE directories so the next discovery seeds from disk correctly.
     if store is not None and any(p.ok for p in pushed):
@@ -286,6 +335,7 @@ async def push_kind_for_all_running(
             access=access,
             style=style,
             globs=globs,
+            backends=backends_to_push,
         )
 
     return pushed
@@ -302,6 +352,7 @@ async def _post_push_update_prefs(
     access: str,
     style: str,
     globs: str,
+    backends: list[str] | None = None,
 ) -> None:
     """Update the prefs DB + write zelosmcp.json to all three IDE dirs."""
     import os
@@ -347,11 +398,10 @@ async def _post_push_update_prefs(
 
     await upsert_prefs(store, prefs)
 
-    # Write zelosmcp.json to .cursor/, .github/, .vscode/.
+    # Write zelosmcp.json to .cursor/ and .vscode/.
     json_body = prefs_to_json(prefs)
     for rel in (
         ".cursor/zelosmcp.json",
-        ".github/zelosmcp.json",
         ".vscode/zelosmcp.json",
     ):
         try:
@@ -361,11 +411,11 @@ async def _post_push_update_prefs(
             logger.debug("prefs: failed to write %s: %s", rel, exc)
 
     # When the VS Code target is active, also write .vscode/mcp.json with the
-    # aggregator MCP server entry so VS Code Copilot picks up zelosMCP via
-    # the single /mcp endpoint without further setup.
+    # aggregator plus one raw entry per running backend so custom agents can
+    # target stable backend server wildcards.
     if "vscode" in targets:
         try:
-            mcp_body = _build_vscode_mcp_json()
+            mcp_body = _build_vscode_mcp_json(backends)
             abs_path = _safe_abs_path(repo_rw_path, ".vscode/mcp.json")
             existing = _local_read(abs_path)
             merged = _merge_vscode_mcp_json(existing, mcp_body)
@@ -377,8 +427,20 @@ async def _post_push_update_prefs(
 # ── VS Code mcp.json helpers ─────────────────────────────────────────────
 
 
-_DEFAULT_AGGREGATOR_URL = "http://localhost:8000/mcp"
+_DEFAULT_PUBLIC_URL = "http://localhost:8000"
+_DEFAULT_AGGREGATOR_URL = _DEFAULT_PUBLIC_URL + "/mcp"
 _AGGREGATOR_ENTRY_NAME = "zelosmcp-aggregate"
+_VSCODE_DIRECT_ENTRY_PREFIX = "zelosmcp-"
+
+
+def _public_url_base() -> str:
+    """Return the public base URL for zelosMCP without an MCP suffix."""
+    import os
+
+    base = os.environ.get("ZELOSMCP_PUBLIC_URL")
+    if base:
+        return base.rstrip("/")
+    return _DEFAULT_PUBLIC_URL
 
 
 def _aggregator_url() -> str:
@@ -389,39 +451,58 @@ def _aggregator_url() -> str:
     hardcoded ``http://localhost:8000/mcp`` default that the rest of the
     codebase already assumes.
     """
-    import os
-    base = os.environ.get("ZELOSMCP_PUBLIC_URL")
-    if base:
-        return base.rstrip("/") + "/mcp"
-    return _DEFAULT_AGGREGATOR_URL
+    return _public_url_base() + "/mcp"
 
 
-def _build_vscode_mcp_json() -> str:
-    """Render the VS Code-flavoured ``mcp.json`` body for the aggregator.
+def _backend_url(backend: str) -> str:
+    """Return the public URL of one raw backend MCP endpoint."""
+    return f"{_public_url_base()}/{backend}/mcp"
+
+
+def _backend_entry_name(backend: str) -> str:
+    """Return the VS Code MCP server name for a raw backend entry."""
+    return f"{_VSCODE_DIRECT_ENTRY_PREFIX}{backend}"
+
+
+def _is_managed_vscode_server(name: str) -> bool:
+    """Return whether a VS Code mcp.json entry is zelosmcp-managed."""
+    return name.startswith(_VSCODE_DIRECT_ENTRY_PREFIX)
+
+
+def _build_vscode_mcp_json(backends: list[str] | None = None) -> str:
+    """Render the VS Code-flavoured ``mcp.json`` body for zelosmcp servers.
 
     VS Code's MCP config uses the top-level ``servers`` key (Cursor uses
     ``mcpServers``) and ``type: "http"`` for streamable HTTP servers
     (Cursor uses ``streamable-http``).  See
     https://code.visualstudio.com/docs/copilot/customization/mcp-servers
     """
-    payload = {
-        "servers": {
-            _AGGREGATOR_ENTRY_NAME: {
-                "type": "http",
-                "url": _aggregator_url(),
-            },
+    user_backends = sorted(
+        {backend for backend in (backends or []) if backend and backend != "zelosmcp"}
+    )
+    servers = {
+        _AGGREGATOR_ENTRY_NAME: {
+            "type": "http",
+            "url": _aggregator_url(),
         },
     }
+    for backend in user_backends:
+        servers[_backend_entry_name(backend)] = {
+            "type": "http",
+            "url": _backend_url(backend),
+        }
+
+    payload = {"servers": servers}
     return json.dumps(payload, indent=2) + "\n"
 
 
 def _merge_vscode_mcp_json(existing_text: str, new_body: str) -> str:
-    """Merge our aggregator entry into a (possibly empty) VS Code mcp.json.
+    """Merge zelosmcp-managed entries into a (possibly empty) VS Code mcp.json.
 
-    Preserves any user-added entries under ``servers`` and only overwrites
-    the single ``zelosmcp-aggregate`` key.  Falls back to overwriting the
-    whole file if the existing content can't be parsed as JSON (corrupt /
-    empty / missing).
+    Preserves user-added entries under ``servers`` while replacing the full
+    zelosmcp-managed server namespace. Falls back to overwriting the whole
+    file if the existing content can't be parsed as JSON (corrupt / empty /
+    missing).
     """
     try:
         new_payload = json.loads(new_body)
@@ -442,6 +523,11 @@ def _merge_vscode_mcp_json(existing_text: str, new_body: str) -> str:
     servers = data.get("servers")
     if not isinstance(servers, dict):
         servers = {}
+
+    for name in list(servers):
+        if _is_managed_vscode_server(name):
+            del servers[name]
+
     new_servers = new_payload.get("servers", {})
     for name, spec in new_servers.items():
         servers[name] = spec
@@ -553,7 +639,7 @@ def _clean_vscode_hooks(path: str) -> str:
 
 
 def _clean_vscode_mcp_json(path: str) -> str:
-    """Remove the ``zelosmcp-aggregate`` entry from ``.vscode/mcp.json``.
+    """Remove zelosmcp-managed server entries from ``.vscode/mcp.json``.
 
     Returns ``"cleaned"``, ``"deleted"``, or ``"skipped"``.
     """
@@ -571,10 +657,12 @@ def _clean_vscode_mcp_json(path: str) -> str:
     if not isinstance(servers, dict):
         return "skipped"
 
-    if _AGGREGATOR_ENTRY_NAME not in servers:
+    managed_names = [name for name in list(servers) if _is_managed_vscode_server(name)]
+    if not managed_names:
         return "skipped"
 
-    del servers[_AGGREGATOR_ENTRY_NAME]
+    for name in managed_names:
+        del servers[name]
 
     if servers:
         data["servers"] = servers
@@ -598,8 +686,8 @@ async def remove_pushed_assets(
     merge-mode files (hooks, mcp.json), and removes the ``zelosmcp.json``
     prefs manifests.
 
-    Parent directories (``.cursor/``, ``.github/``, ``.vscode/``) are
-    preserved — only zelosmcp-specific files inside them are removed.
+    Parent directories (``.cursor/``, ``.vscode/``) are preserved —
+    only zelosmcp-specific files inside them are removed.
     Empty subdirectories (e.g. ``.cursor/skills/my_agent/``) are cleaned
     up after their files are removed.
     """
@@ -614,7 +702,6 @@ async def remove_pushed_assets(
     for rel in (
         ".cursor/rules/zelosmcp.mdc",
         ".github/copilot-instructions.md",
-        ".vscode/copilot-instructions.md",
     ):
         abs_path = os.path.join(rw, rel)
         if _remove_file(abs_path):
@@ -623,7 +710,7 @@ async def remove_pushed_assets(
     # zelosmcp.json prefs manifests
     for rel in (
         ".cursor/zelosmcp.json",
-        ".github/zelosmcp.json",
+
         ".vscode/zelosmcp.json",
     ):
         abs_path = os.path.join(rw, rel)
@@ -645,7 +732,6 @@ async def remove_pushed_assets(
     for skills_dir_rel in (
         ".cursor/skills",
         ".github/skills",
-        ".vscode/skills",
     ):
         skills_abs = os.path.join(rw, skills_dir_rel)
         if os.path.isdir(skills_abs):
@@ -668,7 +754,6 @@ async def remove_pushed_assets(
         for skills_rel, name_to_use in (
             (".cursor/skills", agent_name),
             (".github/skills", slug),
-            (".vscode/skills", slug),
         ):
             skill_file = os.path.join(rw, skills_rel, name_to_use, "SKILL.md")
             if _remove_file(skill_file):
@@ -677,7 +762,7 @@ async def remove_pushed_assets(
             _remove_dir_if_empty(os.path.join(rw, skills_rel, name_to_use))
 
         # Clean up the skills/ directory itself if empty.
-    for skills_dir_rel in (".cursor/skills", ".github/skills", ".vscode/skills"):
+    for skills_dir_rel in (".cursor/skills", ".github/skills"):
         _remove_dir_if_empty(os.path.join(rw, skills_dir_rel))
 
     # Agent files in .cursor/agents/ and .github/agents/
@@ -702,13 +787,11 @@ async def remove_pushed_assets(
         results.append(RemovedFile(path=cursor_hooks, action=action))
 
     # VS Code hooks
-    for rel in (".vscode/hooks.json", ".github/hooks/zelosmcp.json"):
+    for rel in (".github/hooks/hooks.json",):
         abs_path = os.path.join(rw, rel)
         action = _clean_vscode_hooks(abs_path)
         if action != "skipped":
             results.append(RemovedFile(path=abs_path, action=action))
-    # Clean up .github/hooks/ if empty.
-    _remove_dir_if_empty(os.path.join(rw, ".github/hooks"))
 
     # .vscode/mcp.json — remove zelosmcp-aggregate entry.
     mcp_json = os.path.join(rw, ".vscode/mcp.json")
@@ -763,8 +846,7 @@ async def _push_comprehensive_rule(
     One render pass per distinct format is performed so the catalog is
     built only once per call.  For ``"cursor"`` target the ``cursor-mdc``
     format is used; for ``"vscode"`` the ``copilot-instructions`` format is
-    used and the body is written to both ``.github/copilot-instructions.md``
-    and ``.vscode/copilot-instructions.md``.
+    used and the body is written to ``.github/copilot-instructions.md``.
     """
     from zelosmcp.builtin import (
         collect_backend_full_catalog,
@@ -808,11 +890,6 @@ async def _push_comprehensive_rule(
         )
         project_files.append(ProjectFile(
             rel_path=".github/copilot-instructions.md",
-            body=vscode_body,
-            mode="overwrite",
-        ))
-        project_files.append(ProjectFile(
-            rel_path=".vscode/copilot-instructions.md",
             body=vscode_body,
             mode="overwrite",
         ))

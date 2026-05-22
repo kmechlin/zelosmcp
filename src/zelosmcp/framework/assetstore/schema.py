@@ -104,6 +104,7 @@ _AGENT_ENTRY = {
     "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"},
+        "argument_hint": {"type": "string"},
         "tools": {
             "type": "array",
             "items": {"type": "string"},
@@ -166,6 +167,17 @@ _SKILL_ENTRY = {
     "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"},
+        "argument_hint": {"type": "string"},
+        "user_invocable": {"type": "boolean"},
+        "disable_model_invocation": {"type": "boolean"},
+        "context": {"type": "string"},
+        "metadata": {"type": "object"},
+        "paths": {
+            "oneOf": [
+                {"type": "string"},
+                {"type": "array", "items": {"type": "string"}},
+            ],
+        },
         "targets": {
             "type": "array",
             "items": {"enum": ["cursor", "vscode"]},
