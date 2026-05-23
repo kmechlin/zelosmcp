@@ -1,6 +1,6 @@
 [project]
 name = "zelosmcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wrap any MCP server and serve it on localhost:8000 via Streamable HTTP"
 readme = "README.md"
 requires-python = ">=3.10"
