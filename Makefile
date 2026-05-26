@@ -111,6 +111,7 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 .DEFAULT_GOAL := help
 
 .PHONY: help vars init-env \
+.PHONY: test-integration
 	cert build-buildx-image setup-buildx setup build rebuild \
 	kubeconfig clean-kubeconfig \
 	up down restart load status logs shell ui tools rule index index-full \
@@ -617,3 +618,18 @@ nuke: clean ## clean + remove every persistent zelosmcp-* Docker volume
 		echo "    (none)"; \
 	fi
 	@echo "==> nuke complete; next 'make up' will build a fresh image and rehydrate caches"
+
+test-integration: ## Run integration tests against the dev container ($ZELOS_DEV_IMAGE)
+	@if [ -z "$$ZELOS_DEV_IMAGE" ]; then \
+	  echo "ZELOS_DEV_IMAGE not set; running stub smoke (no container exercised)"; \
+	  echo "Real integration tests pending — fill in test-integration target."; \
+	  exit 0; \
+	fi; \
+	echo "Smoke: pulling $$ZELOS_DEV_IMAGE and pinging /healthz..."; \
+	docker run --rm -d --name zelosmcp-it -p 8080:8080 "$$ZELOS_DEV_IMAGE"; \
+	trap 'docker rm -f zelosmcp-it >/dev/null 2>&1 || true' EXIT; \
+	for i in $$(seq 1 30); do \
+	  if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then echo "healthz OK"; exit 0; fi; \
+	  sleep 1; \
+	done; \
+	echo "healthz never became ready"; exit 1
