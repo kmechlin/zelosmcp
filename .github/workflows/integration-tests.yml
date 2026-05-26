@@ -12,6 +12,10 @@ on:
     types: [completed]
     branches: [develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: read
