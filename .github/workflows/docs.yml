@@ -12,22 +12,74 @@ on:
       - '**/*.md'
       - '.github/workflows/docs.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   mermaid:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect mermaid changes
+        id: detect
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          SELF_CHANGED_MARKER: '.github/workflows/docs.yml'
+        run: |
+          set -eu
+          base="${PR_BASE:-$PUSH_BEFORE}"
+          if [ -z "${base:-}" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD~1"
+          fi
+          # If only the workflow itself changed, still run (treat as smoke check)
+          changed=$(git diff --name-only "$base"...HEAD 2>/dev/null || true)
+          if echo "$changed" | grep -qx "$SELF_CHANGED_MARKER"; then
+            echo "Workflow itself changed — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Otherwise only run if a changed .md file contains a mermaid fence
+          md_files=$(echo "$changed" | grep -E '\.md$' || true)
+          if [ -z "$md_files" ]; then
+            echo "No changed *.md files — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          has_mermaid=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            [ -f "$f" ] || continue
+            if grep -q '^```mermaid' "$f"; then
+              has_mermaid=true
+              break
+            fi
+          done <<< "$md_files"
+          if [ "$has_mermaid" = "true" ]; then
+            echo "Found mermaid block in changed *.md — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No mermaid blocks in changed *.md — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.detect.outputs.run == 'true'
         with:
           node-version: '20'
       - name: Install mermaid-cli
+        if: steps.detect.outputs.run == 'true'
         run: npm i -g @mermaid-js/mermaid-cli@^11
       - name: Create puppeteer config (disable sandbox for GHA runners)
-        # Ubuntu 24+ runners restrict unprivileged user namespaces, so the
-        # Chromium that puppeteer/mermaid-cli ships needs --no-sandbox.
+        if: steps.detect.outputs.run == 'true'
         run: |
           echo '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > /tmp/puppeteer.json
       - name: Extract and validate mermaid blocks
+        if: steps.detect.outputs.run == 'true'
         run: |
           python3 - <<'PY'
           import os, subprocess, sys, tempfile, re, pathlib
