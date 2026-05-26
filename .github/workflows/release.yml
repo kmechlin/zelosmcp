@@ -3,7 +3,17 @@ name: release
 on:
   push:
     branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'ROADMAP.md'
+      - 'CHANGELOG.md'
+      - '.github/ISSUE_TEMPLATE/**'
     tags: ['v*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   image:
@@ -13,30 +23,21 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Set up QEMU (for arm64 cross-build)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read version
         id: version
         run: |
           if [ -f galaxy.yml ]; then
-            # Ansible collection: galaxy.yml is authoritative (e.g. zelos.dgx).
             VERSION=$(grep -E '^version:' galaxy.yml | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")
             SOURCE="galaxy.yml"
           elif [ -f pyproject.toml ]; then
             VERSION=$(grep -E '^version[[:space:]]*=' pyproject.toml | head -1 | sed -E 's/version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
             SOURCE="pyproject.toml"
+          elif [ -f VERSION ]; then
+            VERSION=$(head -1 VERSION | tr -d '[:space:]')
+            SOURCE="VERSION"
           else
-            echo "::error::No version source (looked for galaxy.yml then pyproject.toml)"
+            echo "::error::No version source (looked for galaxy.yml, pyproject.toml, VERSION)"
             exit 1
           fi
           if [ -z "$VERSION" ]; then
@@ -47,13 +48,14 @@ jobs:
           echo "source=${SOURCE}" >> "$GITHUB_OUTPUT"
           echo "Detected version=${VERSION} from ${SOURCE}"
 
-      - name: Compute tags
+      - name: Compute tags + platforms
         id: tags
         run: |
           IMAGE="ghcr.io/zelosai/${{ github.event.repository.name }}"
           VERSION="${{ steps.version.outputs.version }}"
           SHA_SHORT="${GITHUB_SHA::7}"
           TAGS="${IMAGE}:sha-${SHA_SHORT}"
+          ARM64=false
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
@@ -62,20 +64,102 @@ jobs:
               exit 1
             fi
             TAGS="${TAGS},${IMAGE}:v${VERSION},${IMAGE}:latest,${IMAGE}:stable"
+            ARM64=true
           elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
             TAGS="${TAGS},${IMAGE}:v${VERSION},${IMAGE}:latest,${IMAGE}:stable"
+            ARM64=true
           elif [[ "$GITHUB_REF" == refs/heads/develop ]]; then
             TAGS="${TAGS},${IMAGE}:v${VERSION}-dev,${IMAGE}:latest"
           fi
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-          echo "Computed tags: ${TAGS}"
 
-      - name: Build + push (multi-arch)
+          if [ "$ARM64" = "true" ]; then
+            PLATFORMS="linux/amd64,linux/arm64"
+          else
+            PLATFORMS="linux/amd64"
+          fi
+
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "platforms=${PLATFORMS}" >> "$GITHUB_OUTPUT"
+          echo "sha-short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "Computed tags: ${TAGS}"
+          echo "Build platforms: ${PLATFORMS}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if SHA image already satisfies platforms
+        id: existing
+        env:
+          IMAGE: ${{ steps.tags.outputs.image }}
+          SHA_SHORT: ${{ steps.tags.outputs.sha-short }}
+          REQUIRED: ${{ steps.tags.outputs.platforms }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_FULL: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          # Candidate source images, in priority order:
+          # 1. the current commit's sha-<short> (a re-push of an already-built ref)
+          # 2. on main/tag: the develop tip that fed the merge (parent2 of HEAD)
+          CANDIDATES=("${IMAGE}:sha-${SHA_SHORT}")
+          if [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]; then
+            parents=$(gh api "/repos/${REPO_FULL}/commits/${COMMIT_SHA}" -q '.parents[].sha' 2>/dev/null || true)
+            p2=$(echo "$parents" | sed -n '2p')
+            if [ -n "$p2" ]; then
+              CANDIDATES+=("${IMAGE}:sha-${p2:0:7}")
+            fi
+          fi
+
+          found_src=""
+          for SRC in "${CANDIDATES[@]}"; do
+            if ! docker manifest inspect "$SRC" >/dev/null 2>&1; then
+              echo "No image at $SRC"
+              continue
+            fi
+            HAVE=$(docker manifest inspect "$SRC" \
+              | jq -r '(.manifests // [] | map("\(.platform.os)/\(.platform.architecture)"))[]' 2>/dev/null \
+              | sort -u | paste -sd,)
+            [ -z "$HAVE" ] && HAVE="linux/amd64"
+            echo "Candidate $SRC has platforms: $HAVE"
+            missing=false
+            IFS=',' read -ra REQ <<< "$REQUIRED"
+            for p in "${REQ[@]}"; do
+              echo "$HAVE" | tr ',' '\n' | grep -qx "$p" || missing=true
+            done
+            if [ "$missing" = "false" ]; then
+              found_src="$SRC"
+              break
+            fi
+          done
+
+          if [ -n "$found_src" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "src=$found_src" >> "$GITHUB_OUTPUT"
+            echo "Will retag from $found_src"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Will build fresh"
+          fi
+
+      - name: Set up QEMU (for arm64 cross-build)
+        if: steps.existing.outputs.exists != 'true' && contains(steps.tags.outputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build + push
+        if: steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ steps.tags.outputs.platforms }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -84,3 +168,23 @@ jobs:
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Retag existing image (skip rebuild)
+        if: steps.existing.outputs.exists == 'true'
+        env:
+          SRC: ${{ steps.existing.outputs.src }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -e
+          IFS=',' read -ra TAG_ARR <<< "$TAGS"
+          ARGS=()
+          for t in "${TAG_ARR[@]}"; do
+            [ "$t" = "$SRC" ] && continue
+            ARGS+=("--tag" "$t")
+          done
+          if [ ${#ARGS[@]} -gt 0 ]; then
+            echo "Retagging $SRC -> ${ARGS[*]}"
+            docker buildx imagetools create "${ARGS[@]}" "$SRC"
+          else
+            echo "Nothing to retag (only sha tag was requested)."
+          fi
