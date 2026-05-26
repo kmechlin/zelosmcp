@@ -573,7 +573,7 @@ cursor-mcp-allowlist: ## Print Cursor's team-admin MCP allowlist from $(CURSOR_S
 # into .venv/.
 
 UV ?= $(shell command -v uv 2>/dev/null)
-PYRUN := $(if $(UV),uv run --,PYTHONPATH=src .venv/bin/python -m)
+PYRUN := $(if $(UV),uv run --,$(if $(CI),python -m,PYTHONPATH=src .venv/bin/python -m))
 
 test: ## Run the pytest suite (PYTHONPATH=src tests/)
 	@PYTHONPATH=src $(PYRUN) pytest tests/ -q
