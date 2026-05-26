@@ -111,12 +111,11 @@ ZELOSMCP_PROJECT_PATH ?= /user_data_ro/$(ZELOSMCP_PROJECT_REL)
 .DEFAULT_GOAL := help
 
 .PHONY: help vars init-env \
-.PHONY: test-integration
 	cert build-buildx-image setup-buildx setup build rebuild \
 	kubeconfig clean-kubeconfig \
 	up down restart load status logs shell ui tools rule index index-full \
 	cursor-mcp-allowlist \
-	test lint typecheck check \
+	test test-integration lint typecheck check \
 	clean nuke
 
 # ============================================================================
