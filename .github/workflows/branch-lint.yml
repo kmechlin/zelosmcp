@@ -1,0 +1,62 @@
+---
+# Branch name lint — enforces the suite-wide branch convention.
+#
+# Canonical pattern: <type>/<issue-number>-<slug>
+#   ^(feature|fix|chore|docs)/[0-9]+-[a-z0-9-]+$
+#
+# Allowlist: develop, main (for promotion + back-merge PRs).
+#
+# See zelosai/docs/architecture/05-gitflow.md for the rationale.
+name: branch-lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-branch-name:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          # Allowlist promotion + back-merge PRs (literal branch names).
+          if [ "$HEAD_REF" = "develop" ] || [ "$HEAD_REF" = "main" ]; then
+            echo "OK: '$HEAD_REF' is an allowlisted promotion/back-merge branch."
+            exit 0
+          fi
+
+          # Slug allows lowercase alphanumerics, dots, and hyphens
+          # (e.g. `apply-v0.3-prep-strategy`). Underscores intentionally
+          # excluded — kebab-case only.
+          REGEX='^(feature|fix|chore|docs)/[0-9]+-[a-z0-9.-]+$'
+          if [[ "$HEAD_REF" =~ $REGEX ]]; then
+            echo "OK: '$HEAD_REF' matches the suite-wide branch convention."
+            exit 0
+          fi
+
+          cat >&2 <<EOF
+          ::error::Branch name '$HEAD_REF' does not match the suite-wide convention.
+
+          Required pattern: $REGEX
+
+            <type> ∈ {feature, fix, chore, docs}
+            <issue-number> = the GitHub issue this work resolves
+            <slug>         = kebab-case extract from issue title
+                             (lowercase alphanumerics, dots, hyphens — no underscores)
+
+          Examples:
+            feature/23-envelope-schema-validation
+            fix/61-docker-base-bump
+            chore/55-ci-template
+            chore/31-apply-v0.3-prep-strategy
+            docs/36-deployment-strategies-doc
+
+          See zelosai/docs/architecture/05-gitflow.md for full rules.
+          EOF
+          exit 1
