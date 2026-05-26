@@ -1,0 +1,112 @@
+---
+# Auto-flip project Status to "In Progress" when a `<type>/<N>-<slug>` branch
+# is first pushed.
+#
+# - Parses the issue number N from the branch name.
+# - Looks up the issue's project item via GraphQL.
+# - Sets the project Status field to "In Progress" (idempotent).
+#
+# Auth split (so private repos work):
+#   - Job-level GH_TOKEN = GITHUB_TOKEN  (issue lookup uses the repo's own token)
+#   - Project mutation steps override with ADD_TO_PROJECT_PAT (Projects scope)
+name: tracker-in-progress
+
+on:
+  push:
+    branches:
+      - 'feature/[0-9]+-**'
+      - 'fix/[0-9]+-**'
+      - 'chore/[0-9]+-**'
+      - 'docs/[0-9]+-**'
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  set-in-progress:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Parse issue number from branch name
+        id: parse
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          N=$(echo "$REF_NAME" | sed -nE 's|^[a-z]+/([0-9]+)-.*|\1|p')
+          if [ -z "$N" ]; then
+            echo "::warning::Could not parse issue number from '$REF_NAME'; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "issue=$N" >> "$GITHUB_OUTPUT"
+          echo "Parsed issue #$N from branch '$REF_NAME'"
+
+      - name: Lookup project + Status field option IDs
+        id: ids
+        if: steps.parse.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
+        run: |
+          set -euo pipefail
+          PROJECT_ID=$(gh project view 2 --owner zelosai --format json --jq '.id')
+          STATUS_FIELD=$(gh project field-list 2 --owner zelosai --format json \
+            --jq '.fields[] | select(.name=="Status") | .id')
+          IP_OPT=$(gh project field-list 2 --owner zelosai --format json \
+            --jq '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Progress") | .id')
+          if [ -z "$IP_OPT" ]; then
+            echo "::error::'In Progress' option not found in project Status field"
+            exit 1
+          fi
+          echo "project=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "field=$STATUS_FIELD" >> "$GITHUB_OUTPUT"
+          echo "option=$IP_OPT" >> "$GITHUB_OUTPUT"
+
+      - name: Transition linked issue to In Progress
+        if: steps.parse.outputs.skip != 'true'
+        env:
+          OWNER_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.parse.outputs.issue }}
+          PROJECT_PAT: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          PROJECT_ID: ${{ steps.ids.outputs.project }}
+          FIELD_ID: ${{ steps.ids.outputs.field }}
+          OPTION_ID: ${{ steps.ids.outputs.option }}
+        run: |
+          set -euo pipefail
+          OWNER=$(echo "$OWNER_REPO" | cut -d/ -f1)
+          REPO=$(echo "$OWNER_REPO" | cut -d/ -f2)
+
+          # Issue lookup uses GITHUB_TOKEN (job env) — has repo scope on
+          # the running repo, public or private. The Projects-scope PAT
+          # CANNOT resolve the repository.
+          ITEM_ID=$(gh api graphql -f query='
+            query($o:String!,$r:String!,$n:Int!) {
+              repository(owner:$o, name:$r) {
+                issue(number:$n) {
+                  projectItems(first:10){ nodes{ id project{ number } } }
+                }
+              }
+            }' -f o="$OWNER" -f r="$REPO" -F n="$ISSUE" \
+            --jq '.data.repository.issue.projectItems.nodes[]? | select(.project.number==2) | .id')
+
+          if [ -z "$ITEM_ID" ]; then
+            echo "issue #$ISSUE not in project #2; skipped."
+            exit 0
+          fi
+
+          # Project mutation uses the Projects-scoped PAT. Minimal return
+          # shape avoids `gh project item-edit`'s default fieldValues read,
+          # which trips on milestone fields the PAT can't see.
+          GH_TOKEN="$PROJECT_PAT" gh api graphql -f query='
+            mutation($p:ID!, $i:ID!, $f:ID!, $o:String!) {
+              updateProjectV2ItemFieldValue(input:{
+                projectId:$p, itemId:$i, fieldId:$f,
+                value:{ singleSelectOptionId:$o }
+              }) { projectV2Item { id } }
+            }' \
+            -f p="$PROJECT_ID" -f i="$ITEM_ID" \
+            -f f="$FIELD_ID" -f o="$OPTION_ID" \
+            >/dev/null
+          echo "issue #$ISSUE (item $ITEM_ID) -> Status=In Progress"

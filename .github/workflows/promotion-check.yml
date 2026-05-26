@@ -1,0 +1,73 @@
+---
+# Promotion gate — required check on `develop → main` PRs.
+#
+# Looks up the most recent `integration-tests` workflow run on `develop`.
+# Posts a `promotion-gate` status check that's required by branch protection
+# on `main`. If integration tests on develop HEAD aren't green (or don't
+# exist), the promotion PR can't merge.
+name: promotion-check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  gate:
+    # Only run on develop → main promotions.
+    if: github.head_ref == 'develop'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check most recent integration-tests on develop
+        env:
+          OWNER_REPO: ${{ github.repository }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking integration-tests status on develop HEAD for promotion PR..."
+
+          # Most recent integration-tests run on develop.
+          RESULT=$(gh run list \
+            --repo "$OWNER_REPO" \
+            --workflow integration-tests \
+            --branch develop \
+            --limit 1 \
+            --json conclusion,headSha,url \
+            --jq '.[0]')
+
+          if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
+            MSG="No integration-tests run found on develop branch yet."
+            URL=""
+            STATE=failure
+          else
+            CONCLUSION=$(echo "$RESULT" | jq -r '.conclusion')
+            URL=$(echo "$RESULT" | jq -r '.url')
+            HEAD_SHA=$(echo "$RESULT" | jq -r '.headSha')
+            if [ "$CONCLUSION" = "success" ]; then
+              STATE=success
+              MSG="integration-tests green on develop@${HEAD_SHA:0:7}"
+            else
+              STATE=failure
+              MSG="integration-tests ${CONCLUSION} on develop@${HEAD_SHA:0:7}"
+            fi
+          fi
+
+          echo "STATE=$STATE  MSG=$MSG"
+
+          gh api -X POST \
+            "repos/${OWNER_REPO}/statuses/${PR_SHA}" \
+            -f state="${STATE}" \
+            -f context="promotion-gate" \
+            -f target_url="${URL:-${GITHUB_SERVER_URL}/${OWNER_REPO}/actions/workflows/integration-tests.yml}" \
+            -f description="${MSG}"
+
+          if [ "$STATE" != "success" ]; then
+            echo "::error::Promotion blocked: ${MSG}"
+            exit 1
+          fi

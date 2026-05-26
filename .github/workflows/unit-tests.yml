@@ -1,0 +1,35 @@
+---
+# Python unit tests + lint (Workflow name: unit-tests).
+#
+# Required check on PRs into develop (branch protection).
+# Runs on PR open/sync and on direct push to develop.
+name: unit-tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" || pip install -e .
+          pip install pytest ruff
+      - name: ruff
+        run: ruff check . || true  # warn-only until cleanup chore lands
+      - name: make test
+        run: make test
